@@ -16,6 +16,7 @@
 #include "riscv_extension.h"
 #include "py_bridge.h"
 #include "riscv_csrs.h"
+#include <cstdlib>  // std::exit for SystemExit translation
 
 namespace py = pybind11;
 
@@ -87,24 +88,139 @@ void py_extension_t::set_debug(bool value, const processor_t &proc) {
                     *bridge.track<processor_t *>(py_proc));
 }
 
+// SystemExit raised inside a Python custom* handler propagates out as a
+// pybind11::error_already_set; if uncaught it triggers std::terminate at the
+// C++/Python boundary and the process exits 255. WJOIN's clean-exit semantics
+// (D-08: GTX_NO_EXIT unset -> raise SystemExit(0)) require translating that
+// to std::exit(code) so spike's process exit code matches the Python intent.
+[[noreturn]] static void exit_from_systemexit(py::error_already_set &e) {
+  int code = 0;
+  try {
+    py::object code_obj = e.value().attr("code");
+    if (!code_obj.is_none()) {
+      code = code_obj.cast<int>();
+    }
+  } catch (...) {
+    // value() inaccessible or .code missing — keep default 0
+  }
+  std::exit(code);
+}
+
 reg_t py_rocc_t::custom0(processor_t *proc, rocc_insn_t insn, reg_t xs1,
                          reg_t xs2) {
-  PYBIND11_OVERRIDE(reg_t, rocc_t, custom0, proc, insn, xs1, xs2);
+  try {
+    PYBIND11_OVERRIDE(reg_t, rocc_t, custom0, proc, insn, xs1, xs2);
+  } catch (py::error_already_set &e) {
+    if (e.matches(PyExc_SystemExit)) exit_from_systemexit(e);
+    throw;
+  }
 }
 
 reg_t py_rocc_t::custom1(processor_t *proc, rocc_insn_t insn, reg_t xs1,
                          reg_t xs2) {
-  PYBIND11_OVERRIDE(reg_t, rocc_t, custom1, proc, insn, xs1, xs2);
+  try {
+    PYBIND11_OVERRIDE(reg_t, rocc_t, custom1, proc, insn, xs1, xs2);
+  } catch (py::error_already_set &e) {
+    if (e.matches(PyExc_SystemExit)) exit_from_systemexit(e);
+    throw;
+  }
 }
 
 reg_t py_rocc_t::custom2(processor_t *proc, rocc_insn_t insn, reg_t xs1,
                          reg_t xs2) {
-  PYBIND11_OVERRIDE(reg_t, rocc_t, custom2, proc, insn, xs1, xs2);
+  try {
+    PYBIND11_OVERRIDE(reg_t, rocc_t, custom2, proc, insn, xs1, xs2);
+  } catch (py::error_already_set &e) {
+    if (e.matches(PyExc_SystemExit)) exit_from_systemexit(e);
+    throw;
+  }
 }
 
 reg_t py_rocc_t::custom3(processor_t *proc, rocc_insn_t insn, reg_t xs1,
                          reg_t xs2) {
-  PYBIND11_OVERRIDE(reg_t, rocc_t, custom3, proc, insn, xs1, xs2);
+  try {
+    PYBIND11_OVERRIDE(reg_t, rocc_t, custom3, proc, insn, xs1, xs2);
+  } catch (py::error_already_set &e) {
+    if (e.matches(PyExc_SystemExit)) exit_from_systemexit(e);
+    throw;
+  }
+}
+
+// extension_t hook trampolines for RoCC subclasses. Pattern mirrors
+// py_extension_t but routes through rocc_t for the smart-holder hierarchy.
+
+std::vector<insn_desc_t>
+py_rocc_t::get_instructions(const processor_t &proc) {
+  std::vector<insn_desc_t> instructions;
+  auto &bridge = PythonBridge::getInstance();
+  try {
+    py::function py_method = py::get_override(this, "get_instructions");
+    if (!py_method) {
+      // No Python override — return rocc_t's default c0/c1/c2/c3 dispatch
+      return rocc_t::get_instructions(proc);
+    }
+    py::object py_proc = py::cast(&proc);
+    py::sequence py_seq = py_method(*bridge.track<processor_t *>(py_proc));
+    for (const auto &py_obj : py_seq) {
+      instructions.push_back(*bridge.track<insn_desc_t *>(py_obj));
+    }
+  } catch (py::error_already_set &e) {
+    std::cerr << e.what() << std::endl;
+  }
+  return instructions;
+}
+
+std::vector<disasm_insn_t *>
+py_rocc_t::get_disasms(const processor_t *proc) {
+  std::vector<disasm_insn_t *> disasms;
+  auto &bridge = PythonBridge::getInstance();
+  try {
+    py::function py_method = py::get_override(this, "get_disasms");
+    if (!py_method) {
+      return rocc_t::get_disasms(proc);
+    }
+    py::object py_proc = py::cast(proc);
+    py::sequence py_seq = py_method(*bridge.track<processor_t *>(py_proc));
+    for (const auto &py_obj : py_seq) {
+      disasms.push_back(bridge.track<disasm_insn_t *>(py_obj));
+    }
+  } catch (py::error_already_set &e) {
+    std::cerr << e.what() << std::endl;
+  }
+  return disasms;
+}
+
+std::vector<csr_t_p> py_rocc_t::get_csrs(processor_t &proc) const {
+  std::vector<csr_t_p> csrs;
+  auto &bridge = PythonBridge::getInstance();
+  try {
+    py::function py_method = py::get_override(this, "get_csrs");
+    if (!py_method) {
+      return rocc_t::get_csrs(proc);
+    }
+    py::object py_proc = py::cast(&proc);
+    py::sequence py_seq = py_method(*bridge.track<processor_t *>(py_proc));
+    for (const auto &py_obj : py_seq) {
+      csrs.push_back(bridge.track<py_csr_t *>(py_obj)->shared_from_this());
+    }
+  } catch (py::error_already_set &e) {
+    std::cerr << e.what() << std::endl;
+  }
+  return csrs;
+}
+
+void py_rocc_t::reset(processor_t &proc) {
+  auto &bridge = PythonBridge::getInstance();
+  auto py_proc = py::cast(&proc);
+  PYBIND11_OVERRIDE(void, rocc_t, reset,
+                    *bridge.track<processor_t *>(py_proc));
+}
+
+void py_rocc_t::set_debug(bool value, const processor_t &proc) {
+  auto &bridge = PythonBridge::getInstance();
+  auto py_proc = py::cast(&proc);
+  PYBIND11_OVERRIDE(void, rocc_t, set_debug, value,
+                    *bridge.track<processor_t *>(py_proc));
 }
 
 const char *py_rocc_t::name() const {

@@ -68,6 +68,19 @@ public:
                         reg_t xs2) override;
 
 public:
+  // extension_t hooks — needed so RoCC subclasses' Python overrides reach
+  // spike's processor_t::register_extension(extension_t*) dispatch loop.
+  // Without these, spike sees rocc_t::get_disasms() == {} and disassembly
+  // shows custom opcodes as "unknown".
+  virtual std::vector<insn_desc_t>
+  get_instructions(const processor_t &proc) override;
+  virtual std::vector<disasm_insn_t *>
+  get_disasms(const processor_t *proc = nullptr) override;
+  virtual std::vector<csr_t_p> get_csrs(processor_t &proc) const override;
+  virtual void reset(processor_t &proc) override;
+  virtual void set_debug(bool value, const processor_t &proc) override;
+
+public:
   virtual const char *name() const override;
 };
 
