@@ -18,7 +18,7 @@
 - [ ] **FOUND-02**: L0(1KB×SPU) / L1(384KB×SPU) / L2(16MB×NEST) / DDR을
   `np.uint8` 단일 ndarray + halfword view(`view(np.uint16)`/`view(np.float16)`)로
   표현, 모든 FP16 접근이 little-endian 바이트 순서 유지
-- [ ] **FOUND-03**: `src/main/python/riscv/gtx/` 패키지 스켈레톤(`__init__.py`,
+- [x] **FOUND-03**: `src/main/python/riscv/gtx/` 패키지 스켈레톤(`__init__.py`,
   `params.py`, `encoding.py`, `fp.py`, `memory.py`) — wheel 동봉 가능한 import
   경로 확보
 - [ ] **FOUND-04**: 기존 C++ gtx 소스 스냅샷을 `vendor/gtx_cpp_reference/`에
@@ -183,7 +183,7 @@
 |-------------|-------|--------|
 | FOUND-01 | Phase 1 | Pending |
 | FOUND-02 | Phase 1 | Pending |
-| FOUND-03 | Phase 1 | Pending |
+| FOUND-03 | Phase 1 | Complete |
 | FOUND-04 | Phase 1 | Pending |
 | CORE-01 | Phase 2 | Pending |
 | CORE-02 | Phase 2 | Pending |

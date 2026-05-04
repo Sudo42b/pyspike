@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: executing
+last_updated: "2026-05-04T05:40:41Z"
+progress:
+  total_phases: 6
+  completed_phases: 0
+  total_plans: 5
+  completed_plans: 1
+---
+
 # State: pyspike + GTX NPU (Python RoCC Port)
 
 **Last updated:** 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot)
@@ -10,7 +23,7 @@
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Roadmap finalized; awaiting Phase 1 planning kickoff.
+**Current Focus:** Phase 01 — foundation
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -18,10 +31,13 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-- **Phase:** Phase 1 — context gathered, ready for `/gsd:plan-phase 1`
-- **Plan:** None (CONTEXT.md captured at `.planning/phases/01-foundation/01-CONTEXT.md`)
-- **Status:** Phase 1 discuss complete — 12 implementation decisions locked (D-01..D-12) + sub-decisions D-13..D-17. Includes project-level NumPy/cp pivot (D-07/D-08/D-09) propagated to PROJECT.md / REQUIREMENTS.md / ROADMAP.md.
-- **Progress:** [▱▱▱▱▱▱] 0/6 phases complete
+Phase: 01 (foundation) — EXECUTING
+Plan: 2 of 5
+
+- **Phase:** Phase 1 — Plan 01-skeleton complete; Wave 1 sibling plans 02-fp / 03-memory next
+- **Plan:** 01-skeleton committed (d55a82a, 30a50d6, 7284080); SUMMARY at `.planning/phases/01-foundation/01-skeleton-SUMMARY.md`
+- **Status:** Executing Phase 01 (1/5 plans complete in this phase)
+- **Progress:** [▰▱▱▱▱▱] 0/6 phases complete (1/5 plans within Phase 1)
 
 ## Performance Metrics
 
@@ -32,6 +48,12 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 | .elf regressions passing strict | 100% | 0% |
 | Wheel size | ≤50MB | TBD |
 | cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
+
+### Plan Execution Log
+
+| Phase | Plan | Duration | Tasks | Files | Commits |
+|-------|------|----------|-------|-------|---------|
+| 01-foundation | 01-skeleton | 4 min | 3 | 5 | d55a82a, 30a50d6, 7284080 |
 
 ## Accumulated Context
 
@@ -100,19 +122,26 @@ None. All 4 research streams converge on a HIGH-confidence approach; coverage is
 
 ### Last Action
 
-`/gsd:discuss-phase 1` complete. CONTEXT.md + DISCUSSION-LOG.md committed at `d470f2e`.
-Project-level pivot: NumPy `>=1.20,<2.0` → `>=2.0,<3`; cp38–cp312 → cp310-cp312; pure
-bit conversion → `np.float16` view. PROJECT.md/REQUIREMENTS.md/ROADMAP.md/STATE.md
-synchronized.
+`/gsd:execute-phase 1 plan 01-skeleton` complete (Wave 1, parallel worktree).
+Created `riscv.gtx` package skeleton: `__init__.py` (LE guard + 5 re-exports),
+`params.py` (HW topology + memory + SPR addresses, 17 constants), `encoding.py`
+(8 funct7 stubs), `ops/__init__.py` (P2-P5 marker), `tests/gtx/__init__.py`
+(pytest collection root). 3 atomic commits: d55a82a, 30a50d6, 7284080.
+1 auto-fix deviation (Rule 1: docstring paraphrase to satisfy GtxNpu absence
+acceptance criterion). SUMMARY at `.planning/phases/01-foundation/01-skeleton-SUMMARY.md`.
 
 ### Next Action
 
-Run `/gsd:plan-phase 1` (Phase 1: Foundation). Resume file:
-`.planning/phases/01-foundation/01-CONTEXT.md` — 17 implementation decisions captured.
+Wave 1 sibling plans `02-fp-PLAN.md` and `03-memory-PLAN.md` execute in parallel
+worktrees (consume `riscv.gtx.params.GTX_NEST_NUM/SPU/L1` + `from . import fp/memory/ddr`
+re-export wiring). After Wave 1 closes (all 3 plans merged), `python -c "import riscv.gtx"`
+will work standalone. Then Wave 2 plans `04-packaging-PLAN.md` (NumPy 2.x / cp310 pin)
+and `05-submodule-PLAN.md` (vendor/gtx_cpp_reference/ git submodule).
 
 ### Resumption Notes
 
 If resuming work in a new session:
+
 1. Read `.planning/PROJECT.md` for core value + constraints
 2. Read `.planning/ROADMAP.md` for phase structure + success criteria
 3. Read `.planning/REQUIREMENTS.md` for full v1 requirement list with phase mappings
