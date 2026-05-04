@@ -1,3 +1,6 @@
 [submodule "vendor/spike"]
 	path = vendor/spike
 	url = ../spike
+[submodule "vendor/gtx_cpp_reference"]
+	path = vendor/gtx_cpp_reference
+	url = https://github.com/Sudo42b/gtx_spike
