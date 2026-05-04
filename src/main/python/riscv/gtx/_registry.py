@@ -70,7 +70,29 @@ def collect_for_kind(kind: str) -> Dict[int, Callable]:
 def collect_disasms() -> list:
     """Build disasm_insn_t list from all entries with mnemonic != None.
 
-    Plan 01 stub: returns []. Plan 04 (disasm.py) provides the real
-    implementation that calls add_r_custom0 / add_rf3_custom0 / add_warp.
+    Walks _HANDLER_REGISTRY once, dispatching each mnemonic'd entry to the
+    appropriate helper in disasm.py:
+        - kind='custom0', mask_funct3=False -> add_r_custom0(mnemonic, funct7)
+        - kind='custom0', mask_funct3=True  -> add_rf3_custom0(mnemonic, funct7, funct3)
+        - kind='custom1'                    -> add_warp(mnemonic, funct3)
+
+    Lazy-imports add_r_custom0 / add_rf3_custom0 / add_warp from .disasm to
+    avoid load-order issues (disasm.py imports encoding.py; _registry.py is
+    imported earlier in the dependency chain via dispatch.py).
     """
-    return []   # plan 04 replaces this with the actual builder
+    from .disasm import add_r_custom0, add_rf3_custom0, add_warp
+
+    out: list = []
+    for entry in _HANDLER_REGISTRY:
+        mnemonic = entry.get("mnemonic")
+        if not mnemonic:
+            continue
+        kind = entry["kind"]
+        if kind == "custom0" and not entry.get("mask_funct3"):
+            out.append(add_r_custom0(mnemonic, entry["funct7"]))
+        elif kind == "custom0" and entry.get("mask_funct3"):
+            out.append(add_rf3_custom0(mnemonic, entry["funct7"], entry["funct3"]))
+        elif kind == "custom1":
+            out.append(add_warp(mnemonic, entry["funct3"]))
+        # else: silently skip (defensive -- handler() already validates kind)
+    return out
