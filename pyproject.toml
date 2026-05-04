@@ -14,8 +14,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.cibuildwheel]
 build = [
-  "cp38-manylinux_x86_64",
-  "cp39-manylinux_x86_64",
   "cp310-manylinux_x86_64",
   "cp311-manylinux_x86_64",
   "cp312-manylinux_x86_64"
@@ -32,7 +30,7 @@ test-sources = [
 ]
 
 [tool.cibuildwheel.linux]
-before-all = "yum install -y dtc"
+before-all = "yum install -y dtc && git submodule update --init --recursive"
 
 [project]
 name = "spike"
@@ -56,8 +54,6 @@ classifiers = [
   "Programming Language :: C++",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -70,7 +66,11 @@ classifiers = [
   "Topic :: Software Development :: Testing",
   "Typing :: Typed"
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
+
+dependencies = [
+  "numpy>=2.0,<3",
+]
 
 [project.urls]
 Homepage = "https://github.com/liuyu81/pyspike"
@@ -108,7 +108,8 @@ where = [
   "src/main/python"
 ]
 include = [
-  "riscv"
+  "riscv",
+  "riscv.*"
 ]
 
 [tool.setuptools.package-data]
