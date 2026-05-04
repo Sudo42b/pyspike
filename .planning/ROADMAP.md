@@ -69,12 +69,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `pytest tests/gtx/test_warp.py` exercises `start_p → start_t → end_t → end_p` via custom1 funct3 dispatch and the loop state machine ends in `(is_ploop=False, is_tloop=False)` with no leak across calls.
   5. `GTX_NO_EXIT` unset → WJOIN raises `SystemExit(0)`; `GTX_NO_EXIT=1` → WJOIN returns 0 and firmware loop continues (asserted by direct `custom1` invocation in unit test).
 
-**Plans:** 5 plans (4/5 complete)
+**Plans:** 5 plans (5/5 complete) -- gap-closure 02-06 attempted, build path validated, post-build regressions deferred
 - [x] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture) — completed 2026-05-04 (`2170e6d` `cd7c042` `01e9737`)
 - [x] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1) — completed 2026-05-04 (`9391242` `7eaa054` `849e840`)
 - [x] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1) — completed 2026-05-04 (`1cb2cba` `ad41713` `ef9a659`)
 - [x] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1) — completed 2026-05-04 (`e6c28bb` `3babd10` `7d4e76f`)
-- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
+- [x] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -101,7 +101,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 - [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
 - [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
 - [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
-- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
+- [x] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -128,7 +128,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 - [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
 - [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
 - [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
-- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
+- [x] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -155,7 +155,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 - [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
 - [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
 - [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
-- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
+- [x] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -180,7 +180,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 - [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
 - [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
 - [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
-- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
+- [x] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---

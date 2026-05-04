@@ -1,9 +1,45 @@
 ---
 phase: 02-skeleton-disasm
 verified: 2026-05-04T12:00:00Z
-status: human_needed
-score: 5/5 must-haves verified (4 fully automated; 1 subprocess CLI gated on _riscv.so)
-re_verification: null
+status: needs_followup
+score: 5/5 must-haves covered by automated tests offline; build-path verification revealed pre-existing post-build regressions
+re_verification:
+  verified: 2026-05-04T16:00:00Z
+  status: needs_followup
+  previous_status: human_needed
+  outcome: |
+    Build path validated (Task 1 of 02-06 succeeded: _riscv.so builds, GtxNpu
+    hydrates). However, running the 21 previously-skipif tests with _riscv.so
+    available exposed 15 pre-existing regressions in 4 distinct categories that
+    were hidden by the mock-fallback discipline. The 3 UAT items cannot be
+    flipped to passed because the underlying behavior is not yet correct in
+    _riscv.so-built mode.
+  must_haves_status:
+    - {item: "GtxNpu loads + reset() sp init", status: "blocked-by-Category-D",
+       note: "GtxNpu loads but sp init via XPR.write does not stick; spike trace shows sp=0 at first instruction"}
+    - {item: "21 skipif tests run with _riscv.so", status: "PARTIAL",
+       note: "skips eliminated 21 -> 0; but 15 of those tests now FAIL due to pre-existing test/production bugs"}
+    - {item: "trace.log contains gtx mnemonics", status: "blocked-by-Category-C+D",
+       note: "ELF LOAD-segment misalignment blocks load; once fixed, custom1 dispatch is broken"}
+  categories:
+    - {id: A, count: 8, summary: "test_reset.py super().reset(proc) C++ strict-type rejects MockProcessor",
+       owner: "src/main/python/riscv/gtx/npu.py:74", recommendation: "Remove no-op super().reset(proc) line"}
+    - {id: B, count: 6, summary: "test_disasm.py expects mnemonic _ but real disasm_insn_t normalizes to .",
+       owner: "tests/gtx/test_disasm.py", recommendation: "Update test expectations to dot-form"}
+    - {id: C, count: 1, summary: "nop_wjoin.elf LOAD segment at 0x7ffff000 (need 0x80000000)",
+       owner: "tests/gtx/data/elf/Makefile + nop_wjoin.elf", recommendation: "Use -Wl,-Ttext-segment=0x80000000"}
+    - {id: D, count: "1+", summary: "sp not initialized via XPR.write; custom1 dispatch broken",
+       owner: "src/main/python/riscv/gtx/npu.py + isa.register integration",
+       recommendation: "Phase-2 follow-up plan to investigate dispatch trampoline + sp init lifecycle"}
+  evidence:
+    - .planning/phases/02-skeleton-disasm/02-06-BUILD-LOG.md
+    - "Task 1 commit: 761b970"
+    - "Task 2 commit: afc6e56"
+    - "Task 3 commit: b81b000"
+  next_action: |
+    Create Phase-2 deferred-items.md AND a follow-up plan (02-07 or roll into
+    /gsd:phase-evolve 2 cleanup) to fix Categories A-D. After resolution, re-run
+    pytest tests/gtx/ and re-verify the 3 UAT items.
 human_verification:
   - test: "pyspike --extlib=riscv.gtx tests/gtx/data/elf/nop_wjoin.elf returns exit code 0"
     expected: "Subprocess exits 0; addi sp,sp,-16 does NOT trap; WJOIN raises SystemExit(0); spike returns clean"
@@ -258,3 +294,53 @@ grep -E "(wjoin|wrspr|rdspr)" trace.log | wc -l
 
 _Verified: 2026-05-04_
 _Verifier: Claude (gsd-verifier)_
+
+---
+
+## Re-Verification (2026-05-04T16:00:00Z) — Plan 02-06 Gap-Closure Cycle
+
+**Outcome:** Build path validated; post-build regressions discovered; UAT items NOT flipped.
+
+### Summary
+
+Plan 02-06 (Wave 3 gap-closure) attempted to close the 3 `human_needed` UAT items by:
+1. Building `_riscv.so` locally (Task 1) — **SUCCEEDED**.
+2. Running the 21 skipif-gated tests (Task 2) — **FAILED**: skips resolved (21 -> 0) but 15 pre-existing test/production bugs surfaced.
+3. Adding a trace-mnemonic regression test (Task 3) — test added but currently FAILS due to upstream bugs.
+
+### What was learned
+
+The mock-fallback discipline (D-17/D-18/D-19) was NOT a complete substitute for `_riscv.so`-built validation. Four distinct bug categories were hidden:
+
+| Category | Count | Root Cause | Owner |
+|----------|-------|-----------|-------|
+| A | 8 | `super().reset(proc)` C++ strict-type rejects MockProcessor | `npu.py:74` |
+| B | 6 | `disasm_insn_t` normalizes mnemonic `_` -> `.`; tests assert `_`-form | `test_disasm.py` |
+| C | 1 | `nop_wjoin.elf` LOAD segment at `0x7ffff000` not `0x80000000` | `Makefile` + `.elf` |
+| D | 1+ | sp not initialized; custom1 dispatch broken when running under spike | `npu.py` + integration |
+
+Full diagnosis in `.planning/phases/02-skeleton-disasm/02-06-BUILD-LOG.md`.
+
+### What was committed
+
+- `761b970` — chore(02-06): build _riscv.so + capture build log (Task 1)
+- `afc6e56` — test(02-06): run gtx suite + capture pre-existing bug surface (Task 2)
+- `b81b000` — test(02-06): add trace mnemonic regression guard (Task 3)
+
+### What was NOT changed (out of scope per plan 02-06 files_modified)
+
+- `src/main/python/riscv/gtx/npu.py` (Wave 0/1 owned)
+- `tests/gtx/test_reset.py`, `tests/gtx/test_disasm.py` (Wave 1/2 owned)
+- `tests/gtx/data/elf/Makefile`, `tests/gtx/data/elf/nop_wjoin.elf` (not in files_modified)
+
+### Status flip
+
+`status: human_needed -> needs_followup` (NOT `passed`). The 3 UAT items remain pending because the underlying behavior is not correct in `_riscv.so`-built mode.
+
+### Next action
+
+Either:
+1. **Roll into `/gsd:phase-evolve 2` cleanup** — the evolve step can prescribe a follow-up plan that fixes Categories A-D in a single pass (recommended).
+2. **Create plan 02-07** — a dedicated post-build-fix plan with `files_modified` covering `npu.py` + the test files + the ELF Makefile. Run after 02-06 lands.
+
+The doc-lag fix (ROADMAP plan-05 checkboxes [x]) is INDEPENDENT of the gap-closure outcome and has been applied: 5 occurrences flipped, Phase 2 main section now reads "5/5 complete".
