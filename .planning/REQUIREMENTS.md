@@ -12,8 +12,9 @@
 
 ### Foundation (FP/Memory/Package skeleton)
 
-- [ ] **FOUND-01**: `gtx_fp16_to_32` / `gtx_fp32_to_16` 헬퍼를 순수 Python 비트
-  매니퓰레이션으로 포팅 — 65536개 FP16 값 전수 round-trip이 C++ `gtx_npu.h:89-151`과 bit-exact 일치
+- [ ] **FOUND-01**: `fp16_to_fp32` / `fp32_to_fp16` 헬퍼를 `np.float16` view 기반으로 구현 (D-09)
+  — NumPy 2.x IEEE 754 binary16 RNE 시맨틱 사용, 65536개 FP16 값 전수 round-trip 멱등성 검증
+  (`f16 → f32 → f16 == f16`). C++ `gtx_npu.h:89-151`와의 strict 차이는 P4/P5에서 측정·대응
 - [ ] **FOUND-02**: L0(1KB×SPU) / L1(384KB×SPU) / L2(16MB×NEST) / DDR을
   `np.uint8` 단일 ndarray + halfword view(`view(np.uint16)`/`view(np.float16)`)로
   표현, 모든 FP16 접근이 little-endian 바이트 순서 유지
@@ -116,12 +117,13 @@
 
 - [ ] **PKG-01**: `pyproject.toml` `[tool.setuptools.package-data]`에 `riscv.gtx.data/`
   추가 — `.elf` / `.hex` 자산이 wheel에 포함
-- [ ] **PKG-02**: NumPy 의존성 `numpy>=1.20,<2.0` 추가 + cp38 백포트
-  `importlib_resources>=5.0; python_version < "3.9"` 추가
+- [ ] **PKG-02**: NumPy 의존성 `numpy>=2.0,<3` 추가 (D-07).
+  cp310+가 베이스라인이므로 `importlib.resources`는 stdlib 사용, 백포트 불필요.
+  `requires-python = ">=3.10"`로 변경 (D-08)
 - [ ] **PKG-03**: `pip install spike` 후 한 줄(`from riscv.gtx import GtxNpu`)로
   NPU 인스턴스 생성·실행 가능
-- [ ] **PKG-04**: cibuildwheel manylinux2014_x86_64 매트릭스 (cp38–cp312) 그대로
-  통과 — wheel 빌드 깨짐 없음
+- [ ] **PKG-04**: cibuildwheel manylinux2014_x86_64 매트릭스 (**cp310–cp312**, D-08)
+  통과 — `[tool.cibuildwheel].build`에서 cp38/cp39 라인 제거, wheel 빌드 깨짐 없음
 
 ## v2 Requirements
 
@@ -170,7 +172,7 @@
 | C++ libgtx_npu.so를 wheel에 동봉 | Python 재작성이 일차 산출물. C++ 바이너리는 `vendor/gtx_cpp_reference/` 소스 스냅샷만 (개발 시 검증용) |
 | 온라인 shadow run vs C++ libgtx_npu.so | 검증은 오프라인 golden hex diff로만 수행 — wheel 의존성 단순성 우선 |
 | numba / cython / JAX / torch / scipy | NumPy 단독으로 회귀 시간 예산 충족. 추가 시 wheel 빌드 복잡도/사이즈 폭증 |
-| `match` statement (PEP 634) | Python 3.10+ 전용. PROJECT.md 호환 베이스라인 3.8 → dict-of-handlers 사용 |
+| `match` statement (PEP 634) — 사용 검토 가능 | ~~PROJECT.md 호환 베이스라인 3.8~~ → Phase 1 D-08로 cp310+ 베이스라인 됨, `match` 사용 가능. 그러나 dict-of-handlers가 이미 디스패치 표준 — 일관성 유지를 위해 신규 코드도 dict-of-handlers 사용 권장 |
 | GELU_ERF (scipy.special.erf 의존) | scipy 의존성 회피. 회귀가 요구하면 NumPy 시리즈 근사로 대체 |
 
 ## Traceability
@@ -238,4 +240,4 @@
 ---
 *Requirements defined: 2026-05-04*
 *Phase mappings filled: 2026-05-04 by gsd-roadmapper*
-*Last updated: 2026-05-04 after roadmap creation*
+*Last updated: 2026-05-04 after Phase 1 discuss (FOUND-01/PKG-02/PKG-04 NumPy 2.x + cp310 pivot, D-07/D-08/D-09)*

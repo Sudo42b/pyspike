@@ -38,11 +38,11 @@ golden)와 ULP 허용오차 내로 일치한다.
 **Requirements**: FOUND-01, FOUND-02, FOUND-03, FOUND-04, PKG-02
 
 **Success Criteria** (what must be TRUE):
-  1. `pytest tests/gtx/test_fp_roundtrip.py` passes — all 65536 FP16 values round-trip through `gtx_fp16_to_32` / `gtx_fp32_to_16` bit-exact (including subnormals, ±0, NaN payloads from `gtx_npu.h:89-151`).
+  1. `pytest tests/gtx/test_fp_roundtrip.py` passes — all 65536 FP16 values round-trip through `riscv.gtx.fp.fp16_to_fp32` / `fp32_to_fp16` (NumPy 2.x `np.float16` view per D-09). Idempotent: `f16 → f32 → f16 == f16` for every non-NaN value; NaN inputs produce NaN with stable bit pattern. C++ `gtx_npu.h:89-151` strict comparison deferred to P4/P5 (Phase 1 risk — see STATE.md "In-flight Verification Items").
   2. `pytest tests/gtx/test_memory_layout.py` passes — writing `0x3C00` to `mem.l1_byte(0,0)[off]` produces bytes `[0x00, 0x3C]` (LE), and `mem.l1_f16(0,0)[off//2]` reads back as `np.float16(1.0)` with `arr.base is not None` (view, not copy).
-  3. `python -c "from riscv.gtx import GtxNpu, fp, memory; from riscv.gtx import _verify"` succeeds in a clean cp38 venv with `numpy>=1.20,<2.0` and `importlib_resources>=5.0; python_version<'3.9'` resolved.
-  4. `vendor/gtx_cpp_reference/` contains a snapshot of `~/NIGHTLY/gtx_spike/gtx/*.{cc,h,inc,py,md}` committed to the repo as the ground-truth baseline.
-  5. `pyproject.toml` declares `numpy>=1.20,<2.0` runtime dep + cp38 backport marker, and `pip wheel .` still produces a valid manylinux2014_x86_64 wheel.
+  3. `python -c "from riscv.gtx import fp, memory; from riscv.gtx.params import GTX_NEST_NUM"` succeeds in a clean **cp310** venv with `numpy>=2.0,<3` resolved (D-07/D-08; `GtxNpu` re-export is Phase 2 work).
+  4. `vendor/gtx_cpp_reference/` is registered as a git submodule (D-04) pointing to `https://github.com/Sudo42b/gtx_spike`, scope = `gtx/` + spike patches (D-05). `git submodule status` shows it as initialized; `MANIFEST.in` excludes it from wheel (D-06).
+  5. `pyproject.toml` declares `numpy>=2.0,<3` runtime dep, `requires-python = ">=3.10"` (D-07/D-08), and `[tool.cibuildwheel].build` lists only cp310/cp311/cp312 (cp38/cp39 lines removed). `pip wheel .` produces a valid manylinux2014_x86_64 wheel.
 
 **Plans**: TBD
 **UI hint**: no
@@ -146,8 +146,8 @@ golden)와 ULP 허용오차 내로 일치한다.
 **Success Criteria** (what must be TRUE):
   1. `python -m riscv.gtx._verify result.hex golden.hex --fp16 --ulp 1 --atol 0.001 --strict` (and `from riscv.gtx._verify import compare_hex` from a notebook) both work — verify.py logic is fully ported and importable, with `--strict` mode requiring `exact_matches == total_fp16`.
   2. **Full .elf regression passes 100% strict mode**: `pytest tests/gtx/test_regression_fw.py` with parametrize over every bundled .elf (covering both `run_tests_n1s16.sh`-style gem5-simplified encoding and `run_llext_tests.sh`-style ISS-full encoding) reports zero failures and zero `within_tolerance` matches (every byte exact).
-  3. `pip install dist/spike-*.whl` in a fresh cp38 venv (no developer tooling) succeeds, and `python -c "from riscv.gtx import GtxNpu; from riscv.gtx import _verify; import importlib.resources as r; assert any(p.name.endswith('.elf') for p in r.files('riscv.gtx').joinpath('data','firmware').iterdir())"` confirms wheel includes `.elf` + `.hex` assets via `[tool.setuptools.package-data]`.
-  4. `cibuildwheel` matrix builds green for cp38–cp312 manylinux2014_x86_64 with no regressions vs the pre-GTX baseline; wheel size is ≤50MB (or split into `spike[gtx-regression]` extra if exceeded).
+  3. `pip install dist/spike-*.whl` in a fresh **cp310** venv (no developer tooling) succeeds, and `python -c "from riscv.gtx import GtxNpu; from riscv.gtx import _verify; import importlib.resources as r; assert any(p.name.endswith('.elf') for p in r.files('riscv.gtx').joinpath('data','firmware').iterdir())"` confirms wheel includes `.elf` + `.hex` assets via `[tool.setuptools.package-data]`.
+  4. `cibuildwheel` matrix builds green for **cp310–cp312** manylinux2014_x86_64 (Phase 1 D-08; cp38/cp39 dropped) with no regressions vs the pre-GTX baseline; wheel size is ≤50MB (or split into `spike[gtx-regression]` extra if exceeded).
   5. `pyspike --extlib=riscv.gtx tests/gtx/data/elf/<any>.elf` from a `pip install`-ed wheel produces a DDR dump that the bundled `pyspike-verify` console script accepts as strict-mode PASS — proving the user's "한 줄 실행" path works end-to-end.
 
 **Plans**: TBD
@@ -192,5 +192,6 @@ golden)와 ULP 허용오차 내로 일치한다.
 ---
 
 *Roadmap created: 2026-05-04*
+*Last updated: 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot — D-07/D-08/D-09)*
 *Granularity: standard*
 *Coverage: 100%*

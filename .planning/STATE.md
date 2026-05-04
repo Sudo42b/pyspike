@@ -1,6 +1,6 @@
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-04 after roadmap creation
+**Last updated:** 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot)
 
 ## Project Reference
 
@@ -18,9 +18,9 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-- **Phase:** Pre-Phase 1 (roadmap complete, no plan started)
-- **Plan:** None
-- **Status:** Roadmap approved; ready for `/gsd:plan-phase 1` (or `/gsd:research-phase 1` skipped — Foundation is mechanical port)
+- **Phase:** Phase 1 — context gathered, ready for `/gsd:plan-phase 1`
+- **Plan:** None (CONTEXT.md captured at `.planning/phases/01-foundation/01-CONTEXT.md`)
+- **Status:** Phase 1 discuss complete — 12 implementation decisions locked (D-01..D-12) + sub-decisions D-13..D-17. Includes project-level NumPy/cp pivot (D-07/D-08/D-09) propagated to PROJECT.md / REQUIREMENTS.md / ROADMAP.md.
 - **Progress:** [▱▱▱▱▱▱] 0/6 phases complete
 
 ## Performance Metrics
@@ -31,7 +31,7 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 | Phases completed | 6 | 0 |
 | .elf regressions passing strict | 100% | 0% |
 | Wheel size | ≤50MB | TBD |
-| cp38–cp312 cibuildwheel matrix | green | green (baseline pre-GTX) |
+| cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
 
 ## Accumulated Context
 
@@ -42,7 +42,11 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 3. **MM-first.** P4 is the project's value driver; P1–P3 exist to unblock P4.
 4. **PCIe-EP / vfio-user / CUDA / GTX commitlog excluded from v1.** Wheel-distribution simplicity > those features for v1.
 5. **C++ gtx sources kept in `vendor/gtx_cpp_reference/`** as ground-truth snapshot, NOT bundled in the wheel.
-6. **NumPy version pin: `numpy>=1.20,<2.0`** to preserve cp38 support and the existing pyspike cibuildwheel matrix.
+6. **NumPy version pin: `numpy>=2.0,<3`** + `requires-python = ">=3.10"` (Phase 1 D-07/D-08; cp38/cp39 dropped from cibuildwheel matrix). Reverses earlier research recommendation.
+7. **FP16 conversion = `np.float16` view** (Phase 1 D-09; not pure-Python bit manipulation). NumPy 2.x IEEE 754 binary16 RNE assumed. Risk of edge-case divergence vs C++ `gtx_fp32_to_16` to be measured in P4/P5 strict mode.
+8. **C++ ground-truth = git submodule at `https://github.com/Sudo42b/gtx_spike`** mounted at `vendor/gtx_cpp_reference/` (Phase 1 D-04/D-05/D-06; not bundled in wheel).
+9. **DDR allocation = lazy `ensure_ddr` + `GTX_DDR_SIZE` env var** (Phase 1 D-01/D-02; default 4GB). DDR_REVERSED handled at I/O boundary only (D-03).
+10. **Memory API = layered (raw view + named accessor) + single-dict SPR + non-copying view guarantee** (Phase 1 D-10/D-11/D-12).
 
 ### Architecture Conventions (from research/ARCHITECTURE.md)
 
@@ -69,7 +73,7 @@ Each phase's success criteria explicitly defends against the following:
 
 Other tracked: WJOIN `SystemExit(0)` (P2 #5), reset sp=0x80100000 (P2 #1), DDR_REVERSED both modes (P3 #2), wheel size budget (P6 #4), strict-mode acceptance gate (P4/P5/P6).
 
-### In-flight Verification Items (from research/SUMMARY.md "Gaps")
+### In-flight Verification Items (from research/SUMMARY.md "Gaps" + Phase 1 D-09 risk)
 
 NOT roadmap blockers — to be confirmed during phase execution:
 
@@ -78,10 +82,11 @@ NOT roadmap blockers — to be confirmed during phase execution:
 - **Disasm `arg` callable acceptance** — verify in P2; fallback: pre-format mnemonic strings.
 - **mexec full microcode loop** — defer to P5+ only if a regression trips it.
 - **Wheel size budget** — P6 flag: split into `spike[gtx-regression]` extra if >50MB.
+- **★ NumPy 2.x `np.float16` vs C++ `gtx_fp32_to_16` edge cases (D-09)** — measure in P4/P5 strict mode. Differences in subnormal handling, NaN payload preservation, halfway-rounding (RNE half-to-even) may surface only at .elf regression. Fallback: port C++ bit operations as `gtx/fp_strict.py` if strict gate fails.
 
 ### Todos / Open Items
 
-- [ ] Pre-P1: copy `~/NIGHTLY/gtx_spike/gtx/*.{cc,h,inc,py,md}` into `vendor/gtx_cpp_reference/` (FOUND-04)
+- [ ] Pre-P1: `git submodule add https://github.com/Sudo42b/gtx_spike vendor/gtx_cpp_reference` (FOUND-04, D-04). Scope: gtx/ + spike patches (D-05). Wheel exclude (D-06).
 - [ ] P3: `/gsd:research-phase 3` before `/gsd:plan-phase 3` (firmware_dma_op packing + deferred-store ordering)
 - [ ] P4: `/gsd:research-phase 4` before `/gsd:plan-phase 4` (firmware_mm_op packed-rs1 + mxe_accum tuple shape + funct7=0x00 disambiguation)
 - [ ] P5: `/gsd:research-phase 5` before `/gsd:plan-phase 5` (ACT direction table + format_cvt scale/offset + FP8 codec)
@@ -95,12 +100,15 @@ None. All 4 research streams converge on a HIGH-confidence approach; coverage is
 
 ### Last Action
 
-`gsd-roadmapper` produced ROADMAP.md, STATE.md, and updated REQUIREMENTS.md traceability.
-6 phases derived from research/SUMMARY.md (verified to satisfy 42/42 v1 requirement coverage).
+`/gsd:discuss-phase 1` complete. CONTEXT.md + DISCUSSION-LOG.md committed at `d470f2e`.
+Project-level pivot: NumPy `>=1.20,<2.0` → `>=2.0,<3`; cp38–cp312 → cp310-cp312; pure
+bit conversion → `np.float16` view. PROJECT.md/REQUIREMENTS.md/ROADMAP.md/STATE.md
+synchronized.
 
 ### Next Action
 
-Run `/gsd:plan-phase 1` (Phase 1: Foundation) — P1 is mechanical port (FP helpers + memory layout + skeleton), no `/gsd:research-phase` needed per SUMMARY.md flag analysis.
+Run `/gsd:plan-phase 1` (Phase 1: Foundation). Resume file:
+`.planning/phases/01-foundation/01-CONTEXT.md` — 17 implementation decisions captured.
 
 ### Resumption Notes
 

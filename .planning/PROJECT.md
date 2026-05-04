@@ -31,7 +31,7 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 - ✓ **PYS-EXT-05**: `rocc_insn_t`(opcode 0x0b/0x2b/0x3b/0x7b) → `custom0/1/2/3()`
   Python 디스패치 경로 동작 확인 — existing
 - ✓ **PYS-EXT-06**: cibuildwheel manylinux2014_x86_64 wheel 빌드 파이프라인
-  (Python 3.8–3.12) — existing
+  (Python 3.8–3.12 baseline; **Phase 1 discuss에서 cp310–cp312로 축소 결정 — D-08**) — existing
 - ✓ **PYS-EXT-07**: `riscv.dev.MMIO` 베이스 클래스로 Python MMIO 디바이스 모델
   지원 — existing
 
@@ -121,23 +121,25 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 
 ## Constraints
 
-- **Tech stack**: Python 3.8+ / NumPy(≥1.20 권장) / pyspike의 pybind11 트램폴린.
+- **Tech stack**: Python **3.10+** / **NumPy ≥ 2.0** / pyspike의 pybind11 트램폴린.
   C++ 추가 코드 금지(순수 Python 재작성이라는 사용자 결정) — 성능 핫스팟이 발견되면
-  v2에서 cython/C 확장 검토
+  v2에서 cython/C 확장 검토.
+  **Phase 1 discuss-phase 결정 (D-07/D-08):** NumPy 2.x FP16 IEEE 754 binary16 RNE 시맨틱
+  채택 + cp38/cp39 드롭으로 research 권장 (`>=1.20,<2.0`)을 번복함
 - **Compatibility**: `riscv.isa.ROCC` 가상 메서드 시그니처(`custom0/1/2/3(proc, insn,
   xs1, xs2) -> reg_t`)를 정확히 따라야 함. processor_t/rocc_insn_t는 pybind11
   바인딩 객체 그대로 사용
 - **Performance**: NumPy 백엔드 가정. NEST(4)×SPU(16)×L1(384KB) 메모리 표현은
-  ndarray로, FP16 연산은 `np.float16` 또는 FP32 누적 후 캐스트로. 회귀가 한
-  세션 내(≤ 수십 분 수준) 끝나야 실용
+  ndarray로, FP16 연산은 `np.float16` view (D-09; FP32 내부 누적은 reduction 시에만).
+  회귀가 한 세션 내(≤ 수십 분 수준) 끝나야 실용
 - **Dependencies**: NumPy 외부 추가 런타임 의존성 신규 도입 금지(wheel 배포 단순성).
   검증 단계에서만 기존 C++ libgtx_npu.so 참조(개발 환경)
 - **Bit-exact**: ULP 허용오차 내(`verify.py --fp16 --ulp 1 --atol 0.001` 수준)
   C++ 결과와 일치 필수. 회귀 1개라도 깨지면 출하 보류
 - **Testing**: pytest 기반(이미 구축됨). 신규 op마다 verify_ref.py 대응 단위 테스트
   + 적어도 1개의 .elf 회귀 통과 묶음 추가
-- **Platform**: Linux x86_64 / glibc 2.17+ (manylinux2014). cibuildwheel
-  파이프라인을 깨지 않아야 함
+- **Platform**: Linux x86_64 / glibc 2.17+ (manylinux2014).
+  **cibuildwheel 매트릭스: cp310-cp312** (Phase 1 D-08; cp38/cp39 드롭됨)
 
 ## Key Decisions
 
@@ -145,6 +147,9 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 |----------|-----------|---------|
 | C++ libgtx_npu.so를 wheel에 동봉하지 않고 Python으로 재작성 | Python에서 ISA/op 변형 실험·해킹 용이성 우선. C++ 코드는 검증 레퍼런스로만 유지 | — Pending |
 | NumPy를 메모리/연산 백엔드로 채택 | Pure Python은 너무 느려 펌웨어 회귀가 비실용. cython/C 추가는 wheel 복잡도↑. NumPy가 균형점 | — Pending |
+| NumPy ≥ 2.0 + cp310-cp312 (cp38/cp39 드롭, D-07/D-08) | NumPy 2.x FP16 RNE 표준화·코드 단순. cibuildwheel 매트릭스 축소는 사용자 명시 결정 | — Pending |
+| `np.float16` view 채택 (D-09) — 순수 비트 변환 거부 | NumPy 2.x view가 IEEE 754 binary16 보장. P4/P5에서 strict 모드로 차이 측정 후 필요시 비트 fallback | — Pending |
+| C++ 레퍼런스 = git submodule (`https://github.com/Sudo42b/gtx_spike`, D-04) | 자동 업스트림 동기화. 공개 레포라 CI 익명 clone 가능 | — Pending |
 | Bit-exact 비교 대상은 C++ libgtx_npu.so | C++가 SystemC와 이미 일치 검증 완료(사용자 확인) → SystemC 직접 접근 없이도 유효한 golden 확보 | — Pending |
 | MM 서브시스템 우선 구현 | GEMM이 NPU 핵심 부하, 다른 op들이 간접적으로 의존(operand staging, mxe_accum). MM 동작이 가장 강한 진척 신호 | — Pending |
 | PCIe-EP / vfio-user / CUDA 경로 v1 제외 | wheel 배포 복잡도가 v1 핵심 가치(ISA/펌웨어 회귀)와 비례하지 않음. v2에서 재평가 | — Pending |
@@ -168,4 +173,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-04 after initialization*
+*Last updated: 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot)*
