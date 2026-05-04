@@ -1,6 +1,6 @@
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot)
+**Last updated:** 2026-05-04 after Phase 1 plan 02 (FP16/FP32 helpers via np.float16 view; FOUND-01 complete)
 
 ## Project Reference
 
@@ -10,7 +10,7 @@
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Roadmap finalized; awaiting Phase 1 planning kickoff.
+**Current Focus:** Phase 1 (Foundation) — plan 02 (fp) complete in parallel worktree; sibling plans 01-skeleton/03-memory/04-packaging/05-submodule concurrent.
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -18,10 +18,10 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-- **Phase:** Phase 1 — context gathered, ready for `/gsd:plan-phase 1`
-- **Plan:** None (CONTEXT.md captured at `.planning/phases/01-foundation/01-CONTEXT.md`)
-- **Status:** Phase 1 discuss complete — 12 implementation decisions locked (D-01..D-12) + sub-decisions D-13..D-17. Includes project-level NumPy/cp pivot (D-07/D-08/D-09) propagated to PROJECT.md / REQUIREMENTS.md / ROADMAP.md.
-- **Progress:** [▱▱▱▱▱▱] 0/6 phases complete
+- **Phase:** Phase 1 (Foundation) — execution in flight (parallel worktree wave)
+- **Plan:** 02-fp complete (2026-05-04). Other Phase 1 plans (01-skeleton, 03-memory, 04-packaging, 05-submodule) execute concurrently in sibling worktrees.
+- **Status:** Phase 1 discuss complete — 12 implementation decisions locked (D-01..D-12) + sub-decisions D-13..D-17. Plan 02 D-09 in code: `riscv.gtx.fp.fp16_to_fp32` / `fp32_to_fp16` via `np.float16` view (astype-only, no bit manipulation). 65536 FP16 round-trip + 2046 NaN bit patterns + subnormals + -0.0 + known values all bit-exact on NumPy 2.2.6 (5/5 pytest pass in 0.28s).
+- **Progress:** [▱▱▱▱▱▱] 0/6 phases complete (Phase 1: 1/5 plans complete in this worktree's view)
 
 ## Performance Metrics
 
@@ -100,15 +100,17 @@ None. All 4 research streams converge on a HIGH-confidence approach; coverage is
 
 ### Last Action
 
-`/gsd:discuss-phase 1` complete. CONTEXT.md + DISCUSSION-LOG.md committed at `d470f2e`.
-Project-level pivot: NumPy `>=1.20,<2.0` → `>=2.0,<3`; cp38–cp312 → cp310-cp312; pure
-bit conversion → `np.float16` view. PROJECT.md/REQUIREMENTS.md/ROADMAP.md/STATE.md
-synchronized.
+Phase 1 plan 02 (fp) executed in parallel worktree `agent-a64955efd060d29a5`. Two atomic
+commits: `0453995` (test RED, 5 acceptance tests) and `8311a46` (feat GREEN, fp.py 52 LOC).
+SUMMARY at `.planning/phases/01-foundation/02-fp-SUMMARY.md`. FOUND-01 marked complete in
+REQUIREMENTS.md. ROADMAP.md plan-progress row updated for Phase 1 (per-worktree count).
 
 ### Next Action
 
-Run `/gsd:plan-phase 1` (Phase 1: Foundation). Resume file:
-`.planning/phases/01-foundation/01-CONTEXT.md` — 17 implementation decisions captured.
+Orchestrator reconciles parallel-wave outputs (plans 01/02/03/04/05) and re-runs
+`gsd-tools state advance-plan` / `roadmap update-plan-progress` once all sibling worktrees
+merge. Resume file: `.planning/phases/01-foundation/01-CONTEXT.md`. After Phase 1 wave
+fully merges, the next planning step is `/gsd:plan-phase 2`.
 
 ### Resumption Notes
 
