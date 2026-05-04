@@ -1,3 +1,17 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: executing
+last_updated: "2026-05-04T05:42:58.802Z"
+progress:
+  total_phases: 6
+  completed_phases: 0
+  total_plans: 5
+  completed_plans: 1
+  percent: 20
+---
+
 # State: pyspike + GTX NPU (Python RoCC Port)
 
 **Last updated:** 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot)
@@ -10,7 +24,7 @@
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Roadmap finalized; awaiting Phase 1 planning kickoff.
+**Current Focus:** Phase 01 — foundation
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -18,10 +32,13 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
+Phase: 01 (foundation) — EXECUTING
+Plan: 1 of 5
+
 - **Phase:** Phase 1 — context gathered, ready for `/gsd:plan-phase 1`
 - **Plan:** None (CONTEXT.md captured at `.planning/phases/01-foundation/01-CONTEXT.md`)
-- **Status:** Phase 1 discuss complete — 12 implementation decisions locked (D-01..D-12) + sub-decisions D-13..D-17. Includes project-level NumPy/cp pivot (D-07/D-08/D-09) propagated to PROJECT.md / REQUIREMENTS.md / ROADMAP.md.
-- **Progress:** [▱▱▱▱▱▱] 0/6 phases complete
+- **Status:** Executing Phase 01
+- **Progress:** [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
@@ -32,6 +49,7 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 | .elf regressions passing strict | 100% | 0% |
 | Wheel size | ≤50MB | TBD |
 | cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
+| Phase 01-foundation P05 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -113,6 +131,7 @@ Run `/gsd:plan-phase 1` (Phase 1: Foundation). Resume file:
 ### Resumption Notes
 
 If resuming work in a new session:
+
 1. Read `.planning/PROJECT.md` for core value + constraints
 2. Read `.planning/ROADMAP.md` for phase structure + success criteria
 3. Read `.planning/REQUIREMENTS.md` for full v1 requirement list with phase mappings

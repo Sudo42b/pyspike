@@ -21,8 +21,9 @@
 - [ ] **FOUND-03**: `src/main/python/riscv/gtx/` 패키지 스켈레톤(`__init__.py`,
   `params.py`, `encoding.py`, `fp.py`, `memory.py`) — wheel 동봉 가능한 import
   경로 확보
-- [ ] **FOUND-04**: 기존 C++ gtx 소스 스냅샷을 `vendor/gtx_cpp_reference/`에
-  복사해 검증 baseline + ground-truth로 영구 보관
+- [x] **FOUND-04**: 기존 C++ gtx 소스 스냅샷을 `vendor/gtx_cpp_reference/`에
+  복사해 검증 baseline + ground-truth로 영구 보관 ✓ 2026-05-04 (Plan 01-05 완료;
+  git submodule at https://github.com/Sudo42b/gtx_spike, SHA 80d5242)
 
 ### Core (ROCC subclass / Reset / WJOIN)
 
@@ -184,7 +185,7 @@
 | FOUND-01 | Phase 1 | Pending |
 | FOUND-02 | Phase 1 | Pending |
 | FOUND-03 | Phase 1 | Pending |
-| FOUND-04 | Phase 1 | Pending |
+| FOUND-04 | Phase 1 | ✓ Complete (Plan 01-05, 2026-05-04) |
 | CORE-01 | Phase 2 | Pending |
 | CORE-02 | Phase 2 | Pending |
 | CORE-03 | Phase 2 | Pending |
