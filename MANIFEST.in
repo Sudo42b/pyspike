@@ -12,4 +12,5 @@ recursive-include examples *
 recursive-include tests/data *.py *.elf
 recursive-include vendor *
 recursive-exclude src/main/python/riscv/data *
+prune vendor/gtx_cpp_reference
 recursive-exclude . __pycache__ *.pyc *.pyo .gitignore .DS_Store .coverage .mypy_cache .tox .pytest_cache *.egg-info
