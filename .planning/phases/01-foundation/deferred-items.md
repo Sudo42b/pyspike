@@ -34,7 +34,47 @@ Once the C++ binding fix lands (separate plan), the canonical `pip wheel .` buil
 
 ---
 
-## RoCC Subclass Dispatch Lifecycle (logged 2026-05-05 by 02-06 gap-closure)
+## ~~RoCC Subclass Dispatch Lifecycle~~ — RESOLVED 2026-05-05
+
+**Status:** RESOLVED inline during Phase 2 wrap-up per user directive
+(commits `611c222`, `be91d2f`, `51dee8d`). Re-investigation surfaced the
+real two-part root cause and a missing CLI flag, all of which were
+straightforward to fix:
+
+- **Missing `--extension=gtx`** — spike's `--extlib` loads the library
+  but `--extension=<name>` is what activates the RoCC extension on the
+  core. The 02-06 plan and downstream tests were missing this flag.
+  Fixed in `tests/gtx/test_skeleton.py` (`51dee8d`).
+- **D1 — `py_rocc_t` extension_t hook trampolines missing** —
+  `py_rocc_t` inherits from `rocc_t` directly without trampolining
+  `get_instructions / get_disasms / get_csrs / reset / set_debug`.
+  Without the disasm trampoline, spike's `register_extension` saw
+  `rocc_t::get_disasms() == {}` and rendered custom opcodes as
+  `unknown` in `--log` even though dispatch was correct. Added the
+  five trampolines in `src/main/cpp/riscv_extension.{h,cc}` with
+  `if (!py_method)` fallback to the C++ base (`be91d2f`).
+- **D2 — `pybind11::error_already_set` propagating from custom* on
+  SystemExit** — Wrapped each `py_rocc_t::custom*` trampoline in
+  try/catch and added a `[[noreturn]] exit_from_systemexit(...)` helper
+  that translates SystemExit to `std::exit(code)`, matching D-08's
+  WJOIN exit semantics (`be91d2f`).
+
+After the fix:
+```
+$ scripts/pyspike --extlib=riscv.gtx --extension=gtx -l --log=t.log \
+    tests/gtx/data/elf/nop_wjoin.elf; echo $?
+0
+$ grep -c "warp\.join" t.log
+1
+```
+
+Phase 2 test suite: **87 passed / 0 failed / 0 skipped / 0 xfailed**.
+
+The original deferral note below is preserved for historical context.
+
+---
+
+### Original deferral note (logged 2026-05-05 by 02-06 gap-closure)
 
 ### Symptom
 

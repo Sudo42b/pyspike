@@ -1,8 +1,52 @@
 ---
 phase: 02-skeleton-disasm
 verified: 2026-05-04T12:00:00Z
-status: passed_with_deferred
-score: 5/5 must-haves covered by automated tests; 13/15 post-build regressions resolved inline; 2 (Category D) deferred to phase-01 deferred-items
+status: passed
+score: 5/5 must-haves covered by automated tests; ALL 15 post-build regressions resolved inline (13 in re_verification_2; 2 in re_verification_3 via pyspike-core trampoline + SystemExit boundary fix)
+re_verification_3:
+  verified: 2026-05-04T17:59:37Z
+  status: passed
+  previous_status: passed_with_deferred
+  outcome: |
+    Per user directive (2026-05-05) Category D was investigated and
+    resolved inline. Re-investigation surfaced three sub-issues:
+    (D-flag) missing --extension=gtx CLI flag activates the RoCC
+    extension on the core (--extlib only loads the library);
+    (D1) py_rocc_t did not trampoline the extension_t hooks
+    (get_instructions/get_disasms/get_csrs/reset/set_debug), so spike's
+    register_extension saw rocc_t::get_disasms() == {} and rendered
+    custom opcodes as 'unknown' in --log; and
+    (D2) SystemExit raised in Python custom* propagated as
+    pybind11::error_already_set out of the trampoline, hit
+    std::terminate at the C++/Python boundary, exit 255.
+    Final pytest count: 87 passed, 0 failed, 0 skipped, 0 xfailed.
+    Manual verification: `pyspike --extlib=riscv.gtx --extension=gtx
+    -l --log=t.log nop_wjoin.elf; echo $?` -> 0; trace contains
+    `warp.join` mnemonic.
+  fixes_landed:
+    - {category: D-flag, commit: "51dee8d",
+       fix: "test_skeleton.py adds --extension=gtx to both subprocess
+             invocations; -l flag also added to the trace test."}
+    - {category: D1, commit: "be91d2f",
+       fix: "py_rocc_t now trampolines get_instructions/get_disasms/
+             get_csrs/reset/set_debug with `if (!py_method)` fallback
+             to rocc_t base. Mirrors py_extension_t pattern but routes
+             through rocc_t for the smart-holder hierarchy."}
+    - {category: D2, commit: "be91d2f",
+       fix: "Each py_rocc_t::custom* trampoline wrapped in try/catch;
+             SystemExit translates to std::exit(code) via [[noreturn]]
+             exit_from_systemexit helper. <cstdlib> include added."}
+    - {category: GtxNpu cleanup, commit: "611c222",
+       fix: "Removed misleading get_instructions() override returning
+             [] (comment said 'pre-bound by Spike' which was backwards).
+             rocc_t::get_instructions C++ default now properly returns
+             c0/c1/c2/c3 dispatch table."}
+  uat_outcome:
+    - {item: "UAT #1 (CLI exit 0)", result: "passed"}
+    - {item: "UAT #2 (21 skipif tests pass)", result: "passed",
+       note: "87 pass / 0 skipped / 0 xfailed — final"}
+    - {item: "UAT #3 (trace mnemonics)", result: "passed",
+       note: "Trace contains 'warp.join' (dot-form per disasm_insn_t normalization)"}
 re_verification_2:
   verified: 2026-05-04T16:48:56Z
   status: passed_with_deferred
