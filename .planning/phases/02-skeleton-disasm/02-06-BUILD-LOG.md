@@ -311,7 +311,69 @@ plan; route to Phase-1 follow-up.
 
 ## Task 3 — Subprocess CLI integration + trace inspection
 
-(populated after Task 3 execution)
+**Started:** 2026-05-04T16:00:00Z
+**Outcome:** Test added; test currently FAILS upstream due to Category C/D bugs
+
+### Step 3.1 — Dry run
+
+```bash
+$ pyspike --extlib=riscv.gtx --log=/tmp/gtx-trace.log tests/gtx/data/elf/nop_wjoin.elf
+Access exception occurred while loading payload tests/gtx/data/elf/nop_wjoin.elf:
+Memory address 0x7ffff000 is invalid
+exit=255
+```
+
+ELF fails to load (Category C in Task 2 analysis). Trace is empty.
+
+### Step 3.2 — New test added
+
+`test_full_trace_mnemonics_present` added to `tests/gtx/test_skeleton.py`. The
+test:
+- Gates on `_RISCV_AVAILABLE`, `ELF_PATH.exists()`, and `pyspike` on PATH.
+- Invokes `pyspike --log=<tmp>/gtx-trace.log --extlib=riscv.gtx <elf>`.
+- Asserts subprocess exit 0 + trace file produced.
+- Greps trace for `(wjoin|wrspr|rdspr)`; threshold lowered to `>= 1` per Step 3.4
+  fallback (rationale: spike's `--log` only dumps executed instructions; the
+  committed ELF executes 1 custom instruction (WJOIN); a richer ELF fixture
+  exhibiting all 3 mnemonics is a P3+ test-fixture work item).
+
+### Step 3.3 — Test execution result
+
+```bash
+$ pytest tests/gtx/test_skeleton.py::test_full_trace_mnemonics_present -v -o "addopts="
+FAILED tests/gtx/test_skeleton.py::test_full_trace_mnemonics_present
+AssertionError: pyspike exit 255
+  stderr:
+  Access exception occurred while loading payload .../nop_wjoin.elf:
+  Memory address 0x7ffff000 is invalid
+```
+
+Test FAILS because the ELF fixture is broken (Category C). The test itself is
+structurally correct — it would pass once the ELF Makefile is fixed (use
+`-Wl,-Ttext-segment=0x80000000` instead of `-Ttext=0x80000000`) AND the
+production custom1 dispatch bug is fixed (Category D).
+
+### Step 3.4 — Threshold rationale
+
+Original UAT spec: `grep -E '(wjoin|wrspr|rdspr)' trace.log | wc -l` >= 3.
+
+Lowered to >= 1 because:
+- Spike's `--log` is per-instruction execution trace, NOT a startup banner.
+- The committed `nop_wjoin.elf` executes exactly 1 RoCC custom instruction (WJOIN).
+- Asserting >= 3 would require a richer ELF fixture (e.g.,
+  `wrspr_rdspr_wjoin.elf`) that exercises 1 each of WRSPR/RDSPR/WJOIN. This is
+  a P3+ test-fixture expansion item.
+
+The lowered floor of >= 1 is mandatory: if the executed WJOIN doesn't appear in
+the trace, the dispatch is broken (Category D).
+
+### Task 3 Summary
+
+- New regression test `test_full_trace_mnemonics_present` committed in
+  `tests/gtx/test_skeleton.py`.
+- Test currently FAILS due to upstream ELF/dispatch bugs (Categories C+D).
+- Once Phase-2 follow-up addresses Categories C+D, the test should pass.
+- Test serves as a regression guard for any future change to dispatch/disasm.
 
 ---
 
