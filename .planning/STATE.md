@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-04T09:01:00.261Z"
+last_updated: "2026-05-04T09:03:39.536Z"
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 10
-  completed_plans: 8
-  percent: 80
+  completed_plans: 9
+  percent: 90
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-04 after Phase 2 plan 01 (skeleton-disasm — GtxNpu shell + per-op registry + nop_wjoin.elf fixture; CORE-01 + CORE-02 complete)
+**Last updated:** 2026-05-04 after Phase 2 plan 04 (disasm — match/mask helpers + collect_disasms builder + 10-test suite; DISASM-01 complete)
 
 ## Project Reference
 
@@ -33,12 +33,12 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 02 (skeleton-disasm) — EXECUTING
-Plan: 2 of 5 (1 complete)
+Plan: 5 of 5 (4 complete)
 
 - **Phase:** 2
-- **Plan:** 02-01 complete; 02-02 next (Wave 1 — runs in parallel with 02-03 + 02-04)
+- **Plan:** 02-01..02-04 complete (Wave 1 parallel-merged); 02-05 integration next (Wave 2)
 - **Status:** Executing Phase 02
-- **Progress:** [████████░░] 80%
+- **Progress:** [█████████░] 90%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Plan: 2 of 5 (1 complete)
 | Phase 02-skeleton-disasm P01-skeleton | 7m44s | 3 tasks | 16 files |
 | Phase 02-skeleton-disasm P02 | 4m52s | 3 tasks | 3 files |
 | Phase 02 P03 | 5m30s | 3 tasks | 3 files |
+| Phase 02-skeleton-disasm P04-disasm | 6m0s | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,12 @@ Plan: 2 of 5 (1 complete)
 1. **`mxe_accum` is 2D `(GTX_NEST_NUM, GTX_SPU_NUM)` float32** verbatim per `vendor/gtx_cpp_reference/gtx/gtx_npu.h:1254`. Supersedes CONTEXT.md D-06 which incorrectly stated 4D `(NEST, SPU, M_TILE, N_TILE)`. P4 MM op should reference this not D-06.
 2. **`riscv.gtx.GtxNpu = None` when `_riscv.so` is absent** — package import wraps `from . import npu` in try/except so Phase 1 tests still pass without rebuilding the C extension. Plans 02-05 unit tests use mocks; plan 05 integration test gates on `_RISCV_AVAILABLE`.
 3. **Makefile `CC = …` (not `?=`)** — Make sets `CC=cc` implicitly so `?=` is a no-op. Use explicit assignment; callers can still override via `make CC=/path/to/gcc`.
+
+### Phase 2 Plan 04 Decisions (locked during execution)
+
+1. **Offline `_PyDisasmInsn` NamedTuple fallback** — disasm.py wraps the real `riscv.disasm.disasm_insn_t` in try/except ImportError; when `_riscv.so` is absent, helpers return a NamedTuple sentinel exposing the same `.name/.match/.mask/.args` surface so unit tests run without the C extension.
+2. **`disasm_insn_t` accepts positional varargs** — verified by reading `src/main/cpp/riscv_disasm.cc:29-37` (`py_disasm_insn_t_create(name, match, mask, py::args py_args)`). Helpers pass `gtx_xrd, gtx_xrs1, gtx_xrs2` positionally, no list wrapping needed.
+3. **Sample-5 P2 mnemonics use unambiguous custom0 names** (`wsplit_c0`/`wjoin_c0`) per CONTEXT.md D-12 adaptation. The custom1 warp variants (`warp_split`/`warp_join`) are independently registered and verified.
 
 ### Key Decisions (from PROJECT.md, locked at planning)
 
@@ -127,22 +134,23 @@ None. All 4 research streams converge on a HIGH-confidence approach; coverage is
 
 ### Last Action
 
-Phase 2 plan 01 (skeleton-disasm Wave 0 scaffold) executed solo on main. Three atomic commits:
-`2170e6d` (test, mock infrastructure + D-18 hybrid fallback), `cd7c042` (feat, riscv.gtx package
-skeleton — GtxNpu shell + per-op registry + dispatch builders + WarpState + ops stubs), and
-`01e9737` (chore, nop_wjoin.elf test fixture — assembly + Makefile + prebuilt 5KB binary).
-SUMMARY at `.planning/phases/02-skeleton-disasm/02-01-SUMMARY.md`. CORE-01 + CORE-02 marked
-complete in REQUIREMENTS.md. Two auto-fix deviations during T3 (Rule 3 blocking issues): Makefile
-`CC ?=` → `CC =` to override Make's implicit cc default; local `tests/gtx/data/elf/.gitignore`
-negation rules to override project-level `*.elf` and `Makefile` patterns. CRITICAL: `mxe_accum`
-locked as 2D `(GTX_NEST_NUM, GTX_SPU_NUM)` float32 per `gtx_npu.h:1254` — supersedes CONTEXT.md
-D-06 which stated 4D.
+Phase 2 plan 04 (disasm registration layer — Wave 1 parallel) executed against main. Three
+atomic commits: `e6c28bb` (feat, disasm.py match/mask helpers — verbatim port of
+`gtx_npu_disasm.inc:23-36` + offline `_PyDisasmInsn` NamedTuple fallback for `_riscv.so`-less
+unit testing), `3babd10` (feat, `_registry.collect_disasms()` real builder replaces plan 01
+stub), `7d4e76f` (test, 10-test suite covering all 4 worked-example formulas + 18-entry registry
+integration + ROADMAP P2 #2 sample 5 mnemonics). SUMMARY at
+`.planning/phases/02-skeleton-disasm/02-04-SUMMARY.md`. DISASM-01 marked complete in
+REQUIREMENTS.md. Zero deviations — plan executed exactly as written. After Wave 1 lands,
+`_registry.collect_disasms()` emits the planned 18 entries (4 SPR + 8 warp + 6 custom0 stubs);
+all 62 tests in `tests/gtx/` pass with no regressions.
 
 ### Next Action
 
-Wave 1 of Phase 2 ready: plans 02-02 (SPR), 02-03 (warp/control), 02-04 (disasm) can land in
-parallel. Each plan uses `from ..gtx._registry import handler` + `tests.gtx._mocks.MockProcessor`
-provided by Wave 0. After Wave 1, plan 02-05 (integration) closes Phase 2.
+Wave 1 complete (plans 02-02 SPR, 02-03 warp/control, 02-04 disasm all merged). Plan 02-05
+(integration) is Wave 2 final: `test_register.py`, `test_reset.py`, `test_dispatch.py`,
+`test_skeleton.py` (skipif-gated on `_riscv.so`). After plan 05, Phase 2 closes and Phase 3
+(DMA) becomes ready.
 
 ### Resumption Notes
 

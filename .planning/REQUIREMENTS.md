@@ -46,7 +46,7 @@
 
 ### Disasm
 
-- [ ] **DISASM-01**: `gtx_npu_disasm.inc`(~140 entries)에 1:1 대응되는
+- [x] **DISASM-01**: `gtx_npu_disasm.inc`(~140 entries)에 1:1 대응되는
   `disasm_insn_t` 리스트를 `get_disasms()`로 반환 — `pyspike` 트레이스에 정상 표시.
   **Phase 2 구현 결정 (CONTEXT.md D-09/D-10/D-13):** Per-op registry 패턴 —
   각 op 모듈이 자신의 `disasm_insn_t` 항목을 데코레이터(`@gtx.handler(...)`)로 동반 등록.
@@ -200,7 +200,7 @@
 | CORE-04 | Phase 2 | Pending |
 | SPR-01 | Phase 2 | Complete |
 | SPR-02 | Phase 2 | Complete |
-| DISASM-01 | Phase 2 | Pending |
+| DISASM-01 | Phase 2 | Complete |
 | DISP-01 | Phase 2 | Pending |
 | DISP-02 | Phase 2 | Complete |
 | DISP-03 | Phase 3 | Pending |
