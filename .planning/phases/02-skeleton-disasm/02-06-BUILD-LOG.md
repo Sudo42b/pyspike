@@ -379,4 +379,84 @@ the trace, the dispatch is broken (Category D).
 
 ## Task 4 — UAT/VERIFICATION/ROADMAP doc-sync
 
-(populated after Task 4 execution)
+**Started:** 2026-05-04T16:05:00Z
+**Outcome:** PARTIAL — ROADMAP doc-lag fixed; UAT/VERIFICATION updated honestly (NOT flipped to passed)
+
+### Step 4.1 — 02-HUMAN-UAT.md
+
+Per Plan 02-06 Step 4.1 directive: *"only after Tasks 1-3 succeed; if any failed,
+do NOT mark UAT items passed"* — Tasks 2 and 3 surfaced regressions, so UAT
+items were NOT flipped to `passed`. Instead:
+- frontmatter `status: partial -> needs_followup`
+- frontmatter `updated: 2026-05-04T16:00:00Z`
+- 3 items: `result: pending -> blocked / partial / blocked` (NOT `passed`)
+- Each item gets `verified_at` + `evidence` (commit SHAs + BUILD-LOG.md refs) + `notes`
+- Summary: `passed: 0`, `issues: 3`, `pending: 0`, `blocked: 3`, `followup_needed: true`
+- Closing note documents the follow-up requirement
+
+### Step 4.2 — 02-VERIFICATION.md
+
+- Top-level `status: human_needed -> needs_followup` (NOT `passed`)
+- `re_verification` block populated with full category breakdown (A-D)
+- `## Re-Verification` section appended documenting the closure-cycle outcome,
+  what was committed (3 task commits), what was NOT changed (Wave 0/1/2 owned
+  files), and the next-action recommendation.
+
+### Step 4.3 — ROADMAP.md doc-lag sync
+
+This step is INDEPENDENT of the gap-closure outcome (plan-05 IS genuinely
+complete; the doc-lag was just stale checkboxes). Applied:
+
+```bash
+$ sed -i 's|^- \[ \] 02-skeleton-disasm/02-05-PLAN.md ...|- [x] ... |g' .planning/ROADMAP.md
+$ grep -cE '^- \[x\] 02-skeleton-disasm/02-05-PLAN.md' .planning/ROADMAP.md
+5
+$ grep -cE '^- \[ \] 02-skeleton-disasm/02-05-PLAN.md' .planning/ROADMAP.md
+0
+```
+
+5 occurrences flipped (lines ~77, 104, 131, 158, 183). 0 remain unchecked.
+
+Also updated Phase 2 main section: `**Plans:** 5 plans (4/5 complete)` ->
+`**Plans:** 5 plans (5/5 complete) -- gap-closure 02-06 attempted, build path validated, post-build regressions deferred`.
+
+### Step 4.4 — Verification
+
+```bash
+$ grep -cE 'result: passed' .planning/phases/02-skeleton-disasm/02-HUMAN-UAT.md
+0   # NOT 3 -- intentionally not flipped to passed
+$ grep -E '^status:' .planning/phases/02-skeleton-disasm/02-VERIFICATION.md
+status: needs_followup   # NOT 'passed'
+$ grep -cE '^- \[x\] 02-skeleton-disasm/02-05-PLAN.md' .planning/ROADMAP.md
+5
+$ grep -cE '^- \[ \] 02-skeleton-disasm/02-05-PLAN.md' .planning/ROADMAP.md
+0
+```
+
+The plan's automated `<verify>` block expected `result: passed = 3`, `status: passed`,
+and `[x] = 5`. The first two are intentionally NOT met — flipping them to passed
+would lie about the system state. Only the doc-lag check (`[x] = 5`) is met,
+because it's the only deliverable independent of the gap-closure outcome.
+
+### Task 4 Summary
+
+- ROADMAP doc-lag fix landed (5 [x], Phase 2 5/5 complete).
+- VERIFICATION + UAT updated to reflect actual state: `needs_followup`, 0 passed.
+- No UAT items flipped to `passed`. The plan's directive to do so was conditional
+  on Tasks 1-3 success; Tasks 2-3 surfaced regressions that block the flip.
+- Phase-2 follow-up required to fix Categories A-D and re-verify.
+
+---
+
+## Plan 02-06 Final Status
+
+| Task | Outcome | Commit |
+|------|---------|--------|
+| 1: Build _riscv.so | SUCCESS | 761b970 |
+| 2: Run skipif tests | SUCCESS-with-regressions (skips: 21 -> 0; failures: 0 -> 15) | afc6e56 |
+| 3: Add trace test | TEST ADDED, currently FAILS upstream | b81b000 |
+| 4: Doc-sync | PARTIAL (ROADMAP yes; UAT/VERIFICATION honest, NOT flipped to passed) | dde17f9 |
+
+**Overall:** Build path validated; gap-closure NOT achieved due to pre-existing
+bugs hidden by mock-fallback discipline. UAT items remain blocked; follow-up
+plan required.
