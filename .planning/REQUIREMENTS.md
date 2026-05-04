@@ -33,7 +33,9 @@
 - [ ] **CORE-03**: WJOIN 시 `GTX_NO_EXIT` 환경변수 미설정이면 `SystemExit(0)`
   raise — 펌웨어 무한 루프 종료 메커니즘
 - [ ] **CORE-04**: `xs1=0` 우회 패턴 — `proc.get_state().XPR[insn.rs1]`로 직접
-  레지스터 읽어 Spike의 -1 마샬링 회피
+  레지스터 읽어 Spike의 -1 마샬링 회피.
+  **Phase 2 구현 결정 (CONTEXT.md D-05):** 데코레이터로 자동 wrap —
+  `(proc, insn, xs1, xs2)` 4-arg signature를 wrap하면서 xs1==0이면 GPR 직접 read로 교체.
 
 ### SPR (Special-Purpose Register)
 
@@ -45,13 +47,20 @@
 ### Disasm
 
 - [ ] **DISASM-01**: `gtx_npu_disasm.inc`(~140 entries)에 1:1 대응되는
-  `disasm_insn_t` 리스트를 `get_disasms()`로 반환 — `pyspike` 트레이스에 정상 표시
+  `disasm_insn_t` 리스트를 `get_disasms()`로 반환 — `pyspike` 트레이스에 정상 표시.
+  **Phase 2 구현 결정 (CONTEXT.md D-09/D-10/D-13):** Per-op registry 패턴 —
+  각 op 모듈이 자신의 `disasm_insn_t` 항목을 데코레이터(`@gtx.handler(...)`)로 동반 등록.
+  `disasm.py`가 누적/조회 API 제공. 항목 수는 phase 진행에 따라 누적
+  (P2: ~10 SPR/control, P3: +DMA, P4: +MM, P5: +VEC/ACT, 최종 ~140).
 
 ### Dispatch
 
 - [ ] **DISP-01**: `custom0()` funct7 디스패치 dict (gem5 simplified
   0x04–0x07 + ISS full 0x00–0x7F 양 인코딩 공존, funct7=0x00 충돌 시
-  `insn.rs1 != 0` 휴리스틱으로 WRSPR / MM 분기)
+  `insn.rs1 != 0` 휴리스틱으로 WRSPR / MM 분기).
+  **Phase 2 구현 결정 (CONTEXT.md D-01/D-02):** 단일 dict-of-handlers
+  `self._custom0_handlers: dict[int, Callable]`. funct7=0x00 충돌 시
+  `if insn.rs1 != 0: WRSPR (gem5 marker), else: MM/no-op fallback`.
 - [ ] **DISP-02**: `custom1()` warp 루프 제어 (start/end P/S/T, split/join) +
   P/S/T 상태 머신 정확히 동작
 - [ ] **DISP-03**: 4-mode dispatch router (Mode 1: no loop / Mode 2: P only /
