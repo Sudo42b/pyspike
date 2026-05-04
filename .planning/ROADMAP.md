@@ -69,8 +69,8 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `pytest tests/gtx/test_warp.py` exercises `start_p → start_t → end_t → end_p` via custom1 funct3 dispatch and the loop state machine ends in `(is_ploop=False, is_tloop=False)` with no leak across calls.
   5. `GTX_NO_EXIT` unset → WJOIN raises `SystemExit(0)`; `GTX_NO_EXIT=1` → WJOIN returns 0 and firmware loop continues (asserted by direct `custom1` invocation in unit test).
 
-**Plans:** 5 plans
-- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
+**Plans:** 5 plans (1/5 complete)
+- [x] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture) — completed 2026-05-04 (`2170e6d` `cd7c042` `01e9737`)
 - [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
 - [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
 - [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)

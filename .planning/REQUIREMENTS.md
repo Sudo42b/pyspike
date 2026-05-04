@@ -26,9 +26,9 @@
 
 ### Core (ROCC subclass / Reset / WJOIN)
 
-- [ ] **CORE-01**: `riscv.isa.ROCC` 서브클래스 `GtxNpu` 작성 +
+- [x] **CORE-01**: `riscv.isa.ROCC` 서브클래스 `GtxNpu` 작성 +
   `@riscv.isa.register("gtx")`로 자동 등록 — `pyspike --extlib=riscv.gtx`로 로드 가능
-- [ ] **CORE-02**: `reset()` 시 `XPR.write(2, 0x80100000)`로 sp 초기화 +
+- [x] **CORE-02**: `reset()` 시 `XPR.write(2, 0x80100000)`로 sp 초기화 +
   `mxe_accum`/SPR/L0/L1/L2 영(zero) 초기화
 - [ ] **CORE-03**: WJOIN 시 `GTX_NO_EXIT` 환경변수 미설정이면 `SystemExit(0)`
   raise — 펌웨어 무한 루프 종료 메커니즘
@@ -194,8 +194,8 @@
 | FOUND-02 | Phase 1 | Pending |
 | FOUND-03 | Phase 1 | Complete |
 | FOUND-04 | Phase 1 | Pending |
-| CORE-01 | Phase 2 | Pending |
-| CORE-02 | Phase 2 | Pending |
+| CORE-01 | Phase 2 | Complete |
+| CORE-02 | Phase 2 | Complete |
 | CORE-03 | Phase 2 | Pending |
 | CORE-04 | Phase 2 | Pending |
 | SPR-01 | Phase 2 | Pending |

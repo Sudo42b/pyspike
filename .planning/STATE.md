@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-last_updated: "2026-05-04T06:38:38.692Z"
+status: executing
+last_updated: "2026-05-04T08:48:21.628Z"
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
-  percent: 100
+  total_plans: 10
+  completed_plans: 6
+  percent: 60
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-04 after Phase 1 plan 04 (packaging — pyproject.toml 5-stanza patch; PKG-02 + FOUND-03 complete)
+**Last updated:** 2026-05-04 after Phase 2 plan 01 (skeleton-disasm — GtxNpu shell + per-op registry + nop_wjoin.elf fixture; CORE-01 + CORE-02 complete)
 
 ## Project Reference
 
@@ -24,7 +24,7 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 1 (Foundation) — all 5 plans complete (01-skeleton, 02-fp, 03-memory, 04-packaging, 05-submodule). Phase 1 ready for transition to Phase 2.
+**Current Focus:** Phase 02 — skeleton-disasm
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -32,10 +32,13 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
+Phase: 02 (skeleton-disasm) — EXECUTING
+Plan: 2 of 5 (1 complete)
+
 - **Phase:** 2
-- **Plan:** Not started
-- **Status:** Ready to plan
-- **Progress:** [██████████] 100% (Phase 1)
+- **Plan:** 02-01 complete; 02-02 next (Wave 1 — runs in parallel with 02-03 + 02-04)
+- **Status:** Executing Phase 02
+- **Progress:** [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -47,8 +50,15 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 | Wheel size | ≤50MB | TBD |
 | cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
 | Phase 01-foundation P04-packaging | 36m22s | 2 tasks | 1 files |
+| Phase 02-skeleton-disasm P01-skeleton | 7m44s | 3 tasks | 16 files |
 
 ## Accumulated Context
+
+### Phase 2 Plan 01 Decisions (locked during execution)
+
+1. **`mxe_accum` is 2D `(GTX_NEST_NUM, GTX_SPU_NUM)` float32** verbatim per `vendor/gtx_cpp_reference/gtx/gtx_npu.h:1254`. Supersedes CONTEXT.md D-06 which incorrectly stated 4D `(NEST, SPU, M_TILE, N_TILE)`. P4 MM op should reference this not D-06.
+2. **`riscv.gtx.GtxNpu = None` when `_riscv.so` is absent** — package import wraps `from . import npu` in try/except so Phase 1 tests still pass without rebuilding the C extension. Plans 02-05 unit tests use mocks; plan 05 integration test gates on `_RISCV_AVAILABLE`.
+3. **Makefile `CC = …` (not `?=`)** — Make sets `CC=cc` implicitly so `?=` is a no-op. Use explicit assignment; callers can still override via `make CC=/path/to/gcc`.
 
 ### Key Decisions (from PROJECT.md, locked at planning)
 
@@ -115,17 +125,22 @@ None. All 4 research streams converge on a HIGH-confidence approach; coverage is
 
 ### Last Action
 
-Phase 1 plan 04 (packaging) executed in worktree `agent-a0b41ae45d49c69d4` (Wave 2 solo).
-Two atomic commits: `cbd1487` (chore, pyproject.toml 5-stanza patch) and `f3c3b7a` (chore,
-verification record). SUMMARY at `.planning/phases/01-foundation/04-packaging-SUMMARY.md`.
-PKG-02 + FOUND-03 marked complete in REQUIREMENTS.md. Pre-existing pybind11 3.0.4 / csr_t
-binding incompatibility logged to `.planning/phases/01-foundation/deferred-items.md` —
-unrelated to this plan; canonical wheel build deferred to next CI cibuildwheel run.
+Phase 2 plan 01 (skeleton-disasm Wave 0 scaffold) executed solo on main. Three atomic commits:
+`2170e6d` (test, mock infrastructure + D-18 hybrid fallback), `cd7c042` (feat, riscv.gtx package
+skeleton — GtxNpu shell + per-op registry + dispatch builders + WarpState + ops stubs), and
+`01e9737` (chore, nop_wjoin.elf test fixture — assembly + Makefile + prebuilt 5KB binary).
+SUMMARY at `.planning/phases/02-skeleton-disasm/02-01-SUMMARY.md`. CORE-01 + CORE-02 marked
+complete in REQUIREMENTS.md. Two auto-fix deviations during T3 (Rule 3 blocking issues): Makefile
+`CC ?=` → `CC =` to override Make's implicit cc default; local `tests/gtx/data/elf/.gitignore`
+negation rules to override project-level `*.elf` and `Makefile` patterns. CRITICAL: `mxe_accum`
+locked as 2D `(GTX_NEST_NUM, GTX_SPU_NUM)` float32 per `gtx_npu.h:1254` — supersedes CONTEXT.md
+D-06 which stated 4D.
 
 ### Next Action
 
-Phase 1 fully landed. Next planning step: `/gsd:transition` → `/gsd:research-phase 2` →
-`/gsd:plan-phase 2`. Resume file: `.planning/phases/01-foundation/04-packaging-SUMMARY.md`.
+Wave 1 of Phase 2 ready: plans 02-02 (SPR), 02-03 (warp/control), 02-04 (disasm) can land in
+parallel. Each plan uses `from ..gtx._registry import handler` + `tests.gtx._mocks.MockProcessor`
+provided by Wave 0. After Wave 1, plan 02-05 (integration) closes Phase 2.
 
 ### Resumption Notes
 
