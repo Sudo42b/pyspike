@@ -20,10 +20,14 @@ import subprocess
 import sys
 import pytest
 
-# pylint: disable=import-error,no-name-in-module
-from riscv.cfg import cfg_t, mem_cfg_t
-from riscv.debug_module import debug_module_config_t
-from riscv.sim import sim_t
+try:  # D-18: guard for clean (non-_riscv) test collection
+    # pylint: disable=import-error,no-name-in-module
+    from riscv.cfg import cfg_t, mem_cfg_t
+    from riscv.debug_module import debug_module_config_t
+    from riscv.sim import sim_t
+    _RISCV_AVAILABLE = True
+except ImportError:
+    _RISCV_AVAILABLE = False
 
 
 project_dir = pathlib.Path(__file__).parent.parent.absolute()
@@ -38,6 +42,8 @@ def import_from_data_dir():
 
 @pytest.fixture(scope="session")
 def mock_sim():
+    if not _RISCV_AVAILABLE:
+        pytest.skip("_riscv extension not built — sim_t fixture unavailable")
     yield sim_t(
         cfg=cfg_t(
             isa="rv32gc",
