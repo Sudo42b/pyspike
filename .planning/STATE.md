@@ -1,0 +1,116 @@
+# State: pyspike + GTX NPU (Python RoCC Port)
+
+**Last updated:** 2026-05-04 after roadmap creation
+
+## Project Reference
+
+**Name:** pyspike + GTX NPU (Python RoCC Port)
+
+**Core Value:** 기존 NPU 펌웨어(.elf) 회귀 테스트가 pyspike+Python NPU에서도 그대로
+통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
+golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
+
+**Current Focus:** Roadmap finalized; awaiting Phase 1 planning kickoff.
+
+**Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
+`verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
+(`exact_matches == total_fp16`) against C++ golden.
+
+## Current Position
+
+- **Phase:** Pre-Phase 1 (roadmap complete, no plan started)
+- **Plan:** None
+- **Status:** Roadmap approved; ready for `/gsd:plan-phase 1` (or `/gsd:research-phase 1` skipped — Foundation is mechanical port)
+- **Progress:** [▱▱▱▱▱▱] 0/6 phases complete
+
+## Performance Metrics
+
+| Metric | Target | Current |
+|--------|--------|---------|
+| v1 requirement coverage | 42/42 | 42/42 ✓ |
+| Phases completed | 6 | 0 |
+| .elf regressions passing strict | 100% | 0% |
+| Wheel size | ≤50MB | TBD |
+| cp38–cp312 cibuildwheel matrix | green | green (baseline pre-GTX) |
+
+## Accumulated Context
+
+### Key Decisions (from PROJECT.md, locked at planning)
+
+1. **Pure Python + NumPy backend.** No new C++ code; no numba/cython/JAX/torch in v1.
+2. **Bit-exact target = C++ libgtx_npu.so DDR output** (offline diff). No online shadow run.
+3. **MM-first.** P4 is the project's value driver; P1–P3 exist to unblock P4.
+4. **PCIe-EP / vfio-user / CUDA / GTX commitlog excluded from v1.** Wheel-distribution simplicity > those features for v1.
+5. **C++ gtx sources kept in `vendor/gtx_cpp_reference/`** as ground-truth snapshot, NOT bundled in the wheel.
+6. **NumPy version pin: `numpy>=1.20,<2.0`** to preserve cp38 support and the existing pyspike cibuildwheel matrix.
+
+### Architecture Conventions (from research/ARCHITECTURE.md)
+
+- Package lands at `src/main/python/riscv/gtx/` (NOT `examples/`) — it ships in the wheel as a v1 product feature.
+- Module split mirrors C++ file split: `npu.py`, `memory.py`, `dispatch.py`, `loop.py`, `spr.py`, `disasm.py`, `fp.py`, `ddr.py`, `_verify.py`, `ops/{mm,vec,act,dma,pool,conv,tpose,format,mexec}.py`.
+- Op handlers are pure functions on `GtxMemory` — directly unit-testable without spike.
+- Dispatch uses `dict[funct7, handler]` with `@_handler(0x00)` decorator (NOT `match`, since cp38 target).
+- L0/L1/L2/DDR are `np.uint8` ndarray with halfword views (`view(np.uint16)` / `view(np.float16)`); GSPR/NSPR/LSPR are Python `dict[int,int]`.
+- FP discipline: load FP16 → upcast to FP32 → compute → single FP16 cast at write-back. Never accumulate in FP16.
+- Internal byte order = little-endian (matches `gtx/CLAUDE.md` and CPU-shadow view); DDR hex I/O uses verify.py's BE-pair format.
+- `mxe_accum` is class state, zeroed only by `reset()`, honoring `is_accumulate` from `funct7==0x01`.
+- No CSR exposure for SPRs — they live in `GtxMemory`, accessed via WRSPR/RDSPR custom0 funct7=0x00/0x01.
+
+### Critical Pitfalls Surfaced (from research/PITFALLS.md)
+
+Each phase's success criteria explicitly defends against the following:
+
+1. **verify.py BE-pair vs L1/L0 LE byte order** → P1 success criterion 2 (LE byte assertion).
+2. **Per-element FP16 cast in reductions** → P4 (`np.matmul` FP32) and P5 (VSUM/DOT/SOFTMAX/ESUM FP32-accumulate) criteria.
+3. **`mxe_accum` continuity across MM chains** → P4 success criterion 2 (mm.s→mmc.s→mmc chain test).
+4. **xs1=0 quirk** (Spike marshals -1) → P2 success criterion 3 (`proc.get_state().XPR[insn.rs1]` direct read).
+5. **funct7=0x00 collision (gem5 WRSPR vs ISS MM)** → P4 success criterion 3 (`insn.rs1!=0` heuristic).
+6. **Activation direction asymmetry** → P5 success criterion 2 (distinct ADDRA/ADDRR test).
+
+Other tracked: WJOIN `SystemExit(0)` (P2 #5), reset sp=0x80100000 (P2 #1), DDR_REVERSED both modes (P3 #2), wheel size budget (P6 #4), strict-mode acceptance gate (P4/P5/P6).
+
+### In-flight Verification Items (from research/SUMMARY.md "Gaps")
+
+NOT roadmap blockers — to be confirmed during phase execution:
+
+- **`illegal_instruction` exposure on `py_rocc_t`** — verify in P2; one-line pyspike binding patch if missing.
+- **`XPR.write(idx, value)` mutability from Python** — verify in P2; would block sp init if read-only.
+- **Disasm `arg` callable acceptance** — verify in P2; fallback: pre-format mnemonic strings.
+- **mexec full microcode loop** — defer to P5+ only if a regression trips it.
+- **Wheel size budget** — P6 flag: split into `spike[gtx-regression]` extra if >50MB.
+
+### Todos / Open Items
+
+- [ ] Pre-P1: copy `~/NIGHTLY/gtx_spike/gtx/*.{cc,h,inc,py,md}` into `vendor/gtx_cpp_reference/` (FOUND-04)
+- [ ] P3: `/gsd:research-phase 3` before `/gsd:plan-phase 3` (firmware_dma_op packing + deferred-store ordering)
+- [ ] P4: `/gsd:research-phase 4` before `/gsd:plan-phase 4` (firmware_mm_op packed-rs1 + mxe_accum tuple shape + funct7=0x00 disambiguation)
+- [ ] P5: `/gsd:research-phase 5` before `/gsd:plan-phase 5` (ACT direction table + format_cvt scale/offset + FP8 codec)
+- [ ] P6: decide wheel split strategy if `du -sh dist/*.whl > 50MB`
+
+### Blockers
+
+None. All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
+
+## Session Continuity
+
+### Last Action
+
+`gsd-roadmapper` produced ROADMAP.md, STATE.md, and updated REQUIREMENTS.md traceability.
+6 phases derived from research/SUMMARY.md (verified to satisfy 42/42 v1 requirement coverage).
+
+### Next Action
+
+Run `/gsd:plan-phase 1` (Phase 1: Foundation) — P1 is mechanical port (FP helpers + memory layout + skeleton), no `/gsd:research-phase` needed per SUMMARY.md flag analysis.
+
+### Resumption Notes
+
+If resuming work in a new session:
+1. Read `.planning/PROJECT.md` for core value + constraints
+2. Read `.planning/ROADMAP.md` for phase structure + success criteria
+3. Read `.planning/REQUIREMENTS.md` for full v1 requirement list with phase mappings
+4. Read this STATE.md for current position
+5. Per-phase research artifacts live under `.planning/research/` (already populated for the project; per-phase research is generated on-demand by `/gsd:research-phase <N>`)
+
+---
+
+*State initialized: 2026-05-04 after roadmap creation*

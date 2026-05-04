@@ -175,58 +175,67 @@
 
 ## Traceability
 
-페이즈 매핑은 ROADMAP.md 작성 시 `gsd-roadmapper`가 채움.
+페이즈 매핑은 ROADMAP.md (2026-05-04 작성)에 따라 `gsd-roadmapper`가 채움.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | TBD | Pending |
-| FOUND-02 | TBD | Pending |
-| FOUND-03 | TBD | Pending |
-| FOUND-04 | TBD | Pending |
-| CORE-01 | TBD | Pending |
-| CORE-02 | TBD | Pending |
-| CORE-03 | TBD | Pending |
-| CORE-04 | TBD | Pending |
-| SPR-01 | TBD | Pending |
-| SPR-02 | TBD | Pending |
-| DISASM-01 | TBD | Pending |
-| DISP-01 | TBD | Pending |
-| DISP-02 | TBD | Pending |
-| DISP-03 | TBD | Pending |
-| DMA-01 | TBD | Pending |
-| DMA-02 | TBD | Pending |
-| DMA-03 | TBD | Pending |
-| DMA-04 | TBD | Pending |
-| DMA-05 | TBD | Pending |
-| MM-01 | TBD | Pending |
-| MM-02 | TBD | Pending |
-| MM-03 | TBD | Pending |
-| MM-04 | TBD | Pending |
-| MM-05 | TBD | Pending |
-| VEC-01 | TBD | Pending |
-| VEC-02 | TBD | Pending |
-| VEC-03 | TBD | Pending |
-| VEC-04 | TBD | Pending |
-| VEC-05 | TBD | Pending |
-| ACT-01 | TBD | Pending |
-| ACT-02 | TBD | Pending |
-| ACT-03 | TBD | Pending |
-| ACT-04 | TBD | Pending |
-| ACT-05 | TBD | Pending |
-| VRF-01 | TBD | Pending |
-| VRF-02 | TBD | Pending |
-| VRF-03 | TBD | Pending |
-| VRF-04 | TBD | Pending |
-| PKG-01 | TBD | Pending |
-| PKG-02 | TBD | Pending |
-| PKG-03 | TBD | Pending |
-| PKG-04 | TBD | Pending |
+| FOUND-01 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Pending |
+| FOUND-03 | Phase 1 | Pending |
+| FOUND-04 | Phase 1 | Pending |
+| CORE-01 | Phase 2 | Pending |
+| CORE-02 | Phase 2 | Pending |
+| CORE-03 | Phase 2 | Pending |
+| CORE-04 | Phase 2 | Pending |
+| SPR-01 | Phase 2 | Pending |
+| SPR-02 | Phase 2 | Pending |
+| DISASM-01 | Phase 2 | Pending |
+| DISP-01 | Phase 2 | Pending |
+| DISP-02 | Phase 2 | Pending |
+| DISP-03 | Phase 3 | Pending |
+| DMA-01 | Phase 3 | Pending |
+| DMA-02 | Phase 3 | Pending |
+| DMA-03 | Phase 3 | Pending |
+| DMA-04 | Phase 3 | Pending |
+| DMA-05 | Phase 3 | Pending |
+| MM-01 | Phase 4 | Pending |
+| MM-02 | Phase 4 | Pending |
+| MM-03 | Phase 4 | Pending |
+| MM-04 | Phase 4 | Pending |
+| MM-05 | Phase 4 | Pending |
+| VEC-01 | Phase 5 | Pending |
+| VEC-02 | Phase 5 | Pending |
+| VEC-03 | Phase 5 | Pending |
+| VEC-04 | Phase 5 | Pending |
+| VEC-05 | Phase 5 | Pending |
+| ACT-01 | Phase 5 | Pending |
+| ACT-02 | Phase 5 | Pending |
+| ACT-03 | Phase 5 | Pending |
+| ACT-04 | Phase 5 | Pending |
+| ACT-05 | Phase 5 | Pending |
+| VRF-01 | Phase 6 | Pending |
+| VRF-02 | Phase 5 | Pending |
+| VRF-03 | Phase 6 | Pending |
+| VRF-04 | Phase 6 | Pending |
+| PKG-01 | Phase 6 | Pending |
+| PKG-02 | Phase 1 | Pending |
+| PKG-03 | Phase 6 | Pending |
+| PKG-04 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 42 total
-- Mapped to phases: 0 (will be filled by roadmapper)
-- Unmapped: 42 ⚠️ (pending roadmap)
+- Mapped to phases: 42 ✓
+- Unmapped: 0 ✓ (100% coverage)
+
+**Phase distribution:**
+- Phase 1 (Foundation): 5 (FOUND-01..04, PKG-02)
+- Phase 2 (Skeleton & Disasm): 9 (CORE-01..04, SPR-01, SPR-02, DISASM-01, DISP-01, DISP-02)
+- Phase 3 (DMA & DDR I/O): 6 (DMA-01..05, DISP-03)
+- Phase 4 (MM Subsystem): 5 (MM-01..05)
+- Phase 5 (VEC/ACT/Pool): 11 (VEC-01..05, ACT-01..05, VRF-02)
+- Phase 6 (Verification & Wheel): 6 (VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04)
 
 ---
 *Requirements defined: 2026-05-04*
-*Last updated: 2026-05-04 after initial definition*
+*Phase mappings filled: 2026-05-04 by gsd-roadmapper*
+*Last updated: 2026-05-04 after roadmap creation*
