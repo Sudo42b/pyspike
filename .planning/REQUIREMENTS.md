@@ -39,9 +39,9 @@
 
 ### SPR (Special-Purpose Register)
 
-- [ ] **SPR-01**: GSPR(0x000–0x3FF) / NSPR(0x400–0x7FF) / LSPR(0x800–0xBFF)을
+- [x] **SPR-01**: GSPR(0x000–0x3FF) / NSPR(0x400–0x7FF) / LSPR(0x800–0xBFF)을
   Python `dict[int, int]`로 표현, `wr_spr` / `rd_spr` 라우팅 구현
-- [ ] **SPR-02**: WRSPR(funct7=0x00, gem5 simplified) / RDSPR writeback 경로
+- [x] **SPR-02**: WRSPR(funct7=0x00, gem5 simplified) / RDSPR writeback 경로
   완성 — RDSPR 결과가 GPR에 정확히 기록됨
 
 ### Disasm
@@ -198,8 +198,8 @@
 | CORE-02 | Phase 2 | Complete |
 | CORE-03 | Phase 2 | Pending |
 | CORE-04 | Phase 2 | Pending |
-| SPR-01 | Phase 2 | Pending |
-| SPR-02 | Phase 2 | Pending |
+| SPR-01 | Phase 2 | Complete |
+| SPR-02 | Phase 2 | Complete |
 | DISASM-01 | Phase 2 | Pending |
 | DISP-01 | Phase 2 | Pending |
 | DISP-02 | Phase 2 | Pending |

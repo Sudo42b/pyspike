@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-04T08:48:21.628Z"
+last_updated: "2026-05-04T09:00:49.511Z"
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 10
-  completed_plans: 6
-  percent: 60
+  completed_plans: 8
+  percent: 70
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -38,7 +38,7 @@ Plan: 2 of 5 (1 complete)
 - **Phase:** 2
 - **Plan:** 02-01 complete; 02-02 next (Wave 1 — runs in parallel with 02-03 + 02-04)
 - **Status:** Executing Phase 02
-- **Progress:** [██████░░░░] 60%
+- **Progress:** [███████░░░] 70%
 
 ## Performance Metrics
 
@@ -51,6 +51,8 @@ Plan: 2 of 5 (1 complete)
 | cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
 | Phase 01-foundation P04-packaging | 36m22s | 2 tasks | 1 files |
 | Phase 02-skeleton-disasm P01-skeleton | 7m44s | 3 tasks | 16 files |
+| Phase 02-skeleton-disasm P02 | 4m52s | 3 tasks | 3 files |
+| Phase 02 P03 | 5m30s | 3 tasks | 3 files |
 
 ## Accumulated Context
 
