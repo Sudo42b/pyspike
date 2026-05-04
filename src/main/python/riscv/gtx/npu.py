@@ -58,8 +58,12 @@ class GtxNpu(isa.ROCC):
         self._custom0 = build_custom0_table(self)
         self._custom1 = build_custom1_table(self)
 
-    def get_instructions(self, proc: processor_t) -> List[insn_desc_t]:
-        return []   # RoCC opcodes 0x0b/0x2b pre-bound by Spike
+    # NOTE: do NOT override get_instructions(). The C++ rocc_t base
+    # (vendor/spike/riscv/rocc.cc:34-42) returns the c0/c1/c2/c3 dispatch
+    # entries for opcodes 0x0b/0x2b/0x5b/0x7b. Returning [] from Python
+    # blanks that out and makes the decoder reject custom1 as illegal —
+    # see tests/test_extension.py::MyDummyROCC for the canonical pattern
+    # (no override, n_insn==4).
 
     def get_disasms(self, proc: processor_t) -> List[disasm_insn_t]:
         # Plan 04 populates self._disasm_entries on demand
