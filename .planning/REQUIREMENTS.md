@@ -30,7 +30,7 @@
   `@riscv.isa.register("gtx")`로 자동 등록 — `pyspike --extlib=riscv.gtx`로 로드 가능
 - [x] **CORE-02**: `reset()` 시 `XPR.write(2, 0x80100000)`로 sp 초기화 +
   `mxe_accum`/SPR/L0/L1/L2 영(zero) 초기화
-- [ ] **CORE-03**: WJOIN 시 `GTX_NO_EXIT` 환경변수 미설정이면 `SystemExit(0)`
+- [x] **CORE-03**: WJOIN 시 `GTX_NO_EXIT` 환경변수 미설정이면 `SystemExit(0)`
   raise — 펌웨어 무한 루프 종료 메커니즘
 - [ ] **CORE-04**: `xs1=0` 우회 패턴 — `proc.get_state().XPR[insn.rs1]`로 직접
   레지스터 읽어 Spike의 -1 마샬링 회피.
@@ -61,7 +61,7 @@
   **Phase 2 구현 결정 (CONTEXT.md D-01/D-02):** 단일 dict-of-handlers
   `self._custom0_handlers: dict[int, Callable]`. funct7=0x00 충돌 시
   `if insn.rs1 != 0: WRSPR (gem5 marker), else: MM/no-op fallback`.
-- [ ] **DISP-02**: `custom1()` warp 루프 제어 (start/end P/S/T, split/join) +
+- [x] **DISP-02**: `custom1()` warp 루프 제어 (start/end P/S/T, split/join) +
   P/S/T 상태 머신 정확히 동작
 - [ ] **DISP-03**: 4-mode dispatch router (Mode 1: no loop / Mode 2: P only /
   Mode 3: P+S DMA / Mode 4: P+T compute) — NEST/SPU 라우팅 그룹이 C++과 일치
@@ -196,13 +196,13 @@
 | FOUND-04 | Phase 1 | Pending |
 | CORE-01 | Phase 2 | Complete |
 | CORE-02 | Phase 2 | Complete |
-| CORE-03 | Phase 2 | Pending |
+| CORE-03 | Phase 2 | Complete |
 | CORE-04 | Phase 2 | Pending |
 | SPR-01 | Phase 2 | Complete |
 | SPR-02 | Phase 2 | Complete |
 | DISASM-01 | Phase 2 | Pending |
 | DISP-01 | Phase 2 | Pending |
-| DISP-02 | Phase 2 | Pending |
+| DISP-02 | Phase 2 | Complete |
 | DISP-03 | Phase 3 | Pending |
 | DMA-01 | Phase 3 | Pending |
 | DMA-02 | Phase 3 | Pending |
