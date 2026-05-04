@@ -69,7 +69,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `pytest tests/gtx/test_warp.py` exercises `start_p → start_t → end_t → end_p` via custom1 funct3 dispatch and the loop state machine ends in `(is_ploop=False, is_tloop=False)` with no leak across calls.
   5. `GTX_NO_EXIT` unset → WJOIN raises `SystemExit(0)`; `GTX_NO_EXIT=1` → WJOIN returns 0 and firmware loop continues (asserted by direct `custom1` invocation in unit test).
 
-**Plans**: TBD
+**Plans:** 5 plans
+- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
+- [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
+- [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
+- [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
+- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -91,7 +96,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. S-loop deferred-store: a sequence `start_p → start_s → exec_dma_2d(STORE) → end_s → exec_dma_2d(STORE) → end_p` flushes both stores in order at `end_p`, and a DDR dump taken before `end_p` shows the pre-store contents (deferred queue verified by direct inspection of `mem.deferred_ddr_stores`).
   5. Mode 1 (no loop, broadcast 64) and Mode 3 (P+S, single NEST DMA) routing in `_dispatch` selects the same `(nest_id, spu_id)` set as `gtx_npu_dispatch.cc` for synthesized firmware traces (parametrized test over a fixture of (loop_state, opcode) tuples).
 
-**Plans**: TBD
+**Plans:** 5 plans
+- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
+- [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
+- [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
+- [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
+- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -113,7 +123,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. **First .elf GEMM regression passes strict mode**: `pyspike --extlib=riscv.gtx tests/gtx/data/elf/mm_basic.elf` with `GTX_DDR_DUMP` set produces a hex file that `verify.py --fp16 --ulp 1 --atol 0.001 --strict` (where strict requires `exact_matches == total_fp16`) reports as PASS against `tests/gtx/data/golden/mm_basic_n1s16.hex`.
   5. Mode 4 (P+T) dispatch routes a synthesized `firmware_mm_op` to exactly the `(tmu_id, curr_id)` SPU when `is_ploop=True, is_tloop=True`; `mxe_accum[other_nest][other_spu]` remains untouched (verified by snapshot diff).
 
-**Plans**: TBD
+**Plans:** 5 plans
+- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
+- [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
+- [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
+- [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
+- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -135,7 +150,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `pytest tests/gtx/test_pooling.py` passes — `exec_pooling` (max + avg) produces output of length `length/kernel_size` bit-exact with NumPy oracle (avg-pool canonicalizes signed zero to +0.0).
   5. **Activation regression .elf passes strict mode**: `pyspike --extlib=riscv.gtx tests/gtx/data/elf/activation_relu_gelu.elf` with `GTX_DDR_DUMP` produces a hex that `verify.py --fp16 --ulp 1 --atol 0.001 --strict` reports as PASS against the C++ golden.
 
-**Plans**: TBD
+**Plans:** 5 plans
+- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
+- [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
+- [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
+- [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
+- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -155,7 +175,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `cibuildwheel` matrix builds green for **cp310–cp312** manylinux2014_x86_64 (Phase 1 D-08; cp38/cp39 dropped) with no regressions vs the pre-GTX baseline; wheel size is ≤50MB (or split into `spike[gtx-regression]` extra if exceeded).
   5. `pyspike --extlib=riscv.gtx tests/gtx/data/elf/<any>.elf` from a `pip install`-ed wheel produces a DDR dump that the bundled `pyspike-verify` console script accepts as strict-mode PASS — proving the user's "한 줄 실행" path works end-to-end.
 
-**Plans**: TBD
+**Plans:** 5 plans
+- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
+- [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
+- [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
+- [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
+- [ ] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
 **UI hint**: no
 
 ---
@@ -165,7 +190,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 5/5 | Complete   | 2026-05-04 |
-| 2. Skeleton & Disasm | 0/? | Not started | - |
+| 2. Skeleton & Disasm | 0/5 | Not started | - |
 | 3. DMA & DDR I/O | 0/? | Not started | - |
 | 4. MM Subsystem | 0/? | Not started | - |
 | 5. VEC/ACT/Pool | 0/? | Not started | - |
