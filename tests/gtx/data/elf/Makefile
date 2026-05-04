@@ -9,7 +9,11 @@
 # Override Make's implicit CC=cc default. To use a different toolchain, run
 #   make CC=/path/to/riscv64-unknown-elf-gcc
 CC       = /opt/riscv/bin/riscv64-unknown-elf-gcc
-LDFLAGS  = -nostdlib -nostartfiles -static -Ttext=0x80000000
+# -Ttext alone places .text inside a LOAD segment that GCC 15.2 pads
+# backward by 0x1000 to fit .riscv.attributes, ending up at 0x7ffff000
+# which is below spike's DRAM (0x80000000). -Wl,-Ttext-segment forces
+# the LOAD VirtAddr to start at 0x80000000.
+LDFLAGS  = -nostdlib -nostartfiles -static -Wl,-Ttext-segment=0x80000000
 
 nop_wjoin.elf: nop_wjoin.S
 	$(CC) $(LDFLAGS) -o $@ $<
