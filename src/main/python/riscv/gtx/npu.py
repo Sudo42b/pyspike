@@ -71,7 +71,8 @@ class GtxNpu(isa.ROCC):
         return []   # SPRs are NOT CSRs (project convention)
 
     def reset(self, proc: processor_t) -> None:
-        super().reset(proc)
+        # super().reset() is a no-op in vendor/spike/riscv/extension.h:18
+        # and rejects MockProcessor under strict pybind11 types — skip it.
         # CORE-02: sp init
         proc.get_state().XPR.write(2, 0x80100000)
         # FPU enable (forward-compat for P4 GEMM, mstatus.FS = 01 Initial)
