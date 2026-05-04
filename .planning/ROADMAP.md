@@ -18,7 +18,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 
 ## Phases
 
-- [ ] **Phase 1: Foundation** — FP16 helpers, NumPy memory layer, package skeleton, NumPy/cp38 packaging baseline
+- [x] **Phase 1: Foundation** — FP16 helpers, NumPy memory layer, package skeleton, NumPy/cp38 packaging baseline (completed 2026-05-04)
 - [ ] **Phase 2: Skeleton & Disasm** — `GtxNpu(ROCC)` skeleton, SPR routing, disasm table, reset/WJOIN, custom0/1 dispatch shells
 - [ ] **Phase 3: DMA & DDR I/O** — Full DMA op set, deferred-store flush, DDR hex I/O (LTR + reversed), Mode 1/3 dispatch
 - [ ] **Phase 4: MM Subsystem** — `gemm_core`, all MM/MMC variants, `firmware_mm_op` packed-rs1, `mxe_accum` chain, Mode 4 dispatch, **first .elf regression passes strict mode**
@@ -164,7 +164,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/? | Not started | - |
+| 1. Foundation | 1/1 | Complete   | 2026-05-04 |
 | 2. Skeleton & Disasm | 0/? | Not started | - |
 | 3. DMA & DDR I/O | 0/? | Not started | - |
 | 4. MM Subsystem | 0/? | Not started | - |

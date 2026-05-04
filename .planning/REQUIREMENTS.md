@@ -12,7 +12,7 @@
 
 ### Foundation (FP/Memory/Package skeleton)
 
-- [ ] **FOUND-01**: `fp16_to_fp32` / `fp32_to_fp16` 헬퍼를 `np.float16` view 기반으로 구현 (D-09)
+- [x] **FOUND-01**: `fp16_to_fp32` / `fp32_to_fp16` 헬퍼를 `np.float16` view 기반으로 구현 (D-09)
   — NumPy 2.x IEEE 754 binary16 RNE 시맨틱 사용, 65536개 FP16 값 전수 round-trip 멱등성 검증
   (`f16 → f32 → f16 == f16`). C++ `gtx_npu.h:89-151`와의 strict 차이는 P4/P5에서 측정·대응
 - [ ] **FOUND-02**: L0(1KB×SPU) / L1(384KB×SPU) / L2(16MB×NEST) / DDR을
@@ -181,7 +181,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 1 | Pending |
+| FOUND-01 | Phase 1 | Complete |
 | FOUND-02 | Phase 1 | Pending |
 | FOUND-03 | Phase 1 | Complete |
 | FOUND-04 | Phase 1 | Pending |
