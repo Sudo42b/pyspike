@@ -43,23 +43,23 @@ updated: 2026-05-04 (after /gsd:plan-phase 2)
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 02-01-T1 | 02-01 | 0 | infra (D-17/D-18/D-19) | scaffold | `python -c "from tests.gtx._mocks import MockProcessor; MockProcessor().get_state().XPR.write(2, 0x80100000)"` | ✅ | ⬜ pending |
-| 02-01-T2 | 02-01 | 0 | CORE-01, CORE-02 | unit | `python -c "from riscv.gtx.encoding import GTX_F7_WJOIN; assert GTX_F7_WJOIN==0x03"` | ✅ | ⬜ pending |
-| 02-01-T3 | 02-01 | 0 | infra (D-22) | fixture | `ls tests/gtx/data/elf/nop_wjoin.S tests/gtx/data/elf/Makefile` | ✅ | ⬜ pending |
-| 02-02-T1 | 02-02 | 1 | SPR-01 | unit | inline python verifies routing — see plan 02-02 task 1 verify block | ✅ | ⬜ pending |
-| 02-02-T2 | 02-02 | 1 | SPR-02 | unit | `python -c "from riscv.gtx.ops.spr import wrspr_iss"` | ✅ | ⬜ pending |
-| 02-02-T3 | 02-02 | 1 | SPR-01, SPR-02 | unit | `pytest tests/gtx/test_spr.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-03-T1 | 02-03 | 1 | DISP-02, CORE-03 | unit | inline python verifies _do_* helpers — see plan 02-03 task 1 verify block | ✅ | ⬜ pending |
-| 02-03-T2 | 02-03 | 1 | DISP-02 | unit | `pytest tests/gtx/test_warp.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-03-T3 | 02-03 | 1 | CORE-03 | unit | `pytest tests/gtx/test_wjoin.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-04-T1 | 02-04 | 1 | DISASM-01 | unit | inline python verifies match/mask formulas — see plan 02-04 task 1 verify block | ✅ | ⬜ pending |
-| 02-04-T2 | 02-04 | 1 | DISASM-01 | unit | `python -c "from riscv.gtx import _registry; from riscv.gtx.ops import spr, control; assert len(_registry.collect_disasms()) >= 18"` | ✅ | ⬜ pending |
-| 02-04-T3 | 02-04 | 1 | DISASM-01 | unit | `pytest tests/gtx/test_disasm.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-05-T1 | 02-05 | 2 | CORE-01 | unit + skipif | `pytest tests/gtx/test_register.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-05-T2 | 02-05 | 2 | CORE-02 | unit + skipif | `pytest tests/gtx/test_reset.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-05-T3 | 02-05 | 2 | DISP-01 | unit + skipif | `pytest tests/gtx/test_dispatch.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-05-T4 | 02-05 | 2 | CORE-01, CORE-03 | integration + skipif | `pytest tests/gtx/test_skeleton.py -x -q --noconftest -o "addopts="` | ✅ | ⬜ pending |
-| 02-05-T5 | 02-05 | 2 | infra | doc | `grep -E "nyquist_compliant: true" .planning/phases/02-skeleton-disasm/02-VALIDATION.md` | ✅ | ⬜ pending |
+| 02-01-T1 | 02-01 | 0 | infra (D-17/D-18/D-19) | scaffold | `python -c "from tests.gtx._mocks import MockProcessor; MockProcessor().get_state().XPR.write(2, 0x80100000)"` | ✅ | ✅ done |
+| 02-01-T2 | 02-01 | 0 | CORE-01, CORE-02 | unit | `python -c "from riscv.gtx.encoding import GTX_F7_WJOIN; assert GTX_F7_WJOIN==0x03"` | ✅ | ✅ done |
+| 02-01-T3 | 02-01 | 0 | infra (D-22) | fixture | `ls tests/gtx/data/elf/nop_wjoin.S tests/gtx/data/elf/Makefile` | ✅ | ✅ done |
+| 02-02-T1 | 02-02 | 1 | SPR-01 | unit | inline python verifies routing — see plan 02-02 task 1 verify block | ✅ | ✅ done |
+| 02-02-T2 | 02-02 | 1 | SPR-02 | unit | `python -c "from riscv.gtx.ops.spr import wrspr_iss"` | ✅ | ✅ done |
+| 02-02-T3 | 02-02 | 1 | SPR-01, SPR-02 | unit | `pytest tests/gtx/test_spr.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-03-T1 | 02-03 | 1 | DISP-02, CORE-03 | unit | inline python verifies _do_* helpers — see plan 02-03 task 1 verify block | ✅ | ✅ done |
+| 02-03-T2 | 02-03 | 1 | DISP-02 | unit | `pytest tests/gtx/test_warp.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-03-T3 | 02-03 | 1 | CORE-03 | unit | `pytest tests/gtx/test_wjoin.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-04-T1 | 02-04 | 1 | DISASM-01 | unit | inline python verifies match/mask formulas — see plan 02-04 task 1 verify block | ✅ | ✅ done |
+| 02-04-T2 | 02-04 | 1 | DISASM-01 | unit | `python -c "from riscv.gtx import _registry; from riscv.gtx.ops import spr, control; assert len(_registry.collect_disasms()) >= 18"` | ✅ | ✅ done |
+| 02-04-T3 | 02-04 | 1 | DISASM-01 | unit | `pytest tests/gtx/test_disasm.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-05-T1 | 02-05 | 2 | CORE-01 | unit + skipif | `pytest tests/gtx/test_register.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-05-T2 | 02-05 | 2 | CORE-02 | unit + skipif | `pytest tests/gtx/test_reset.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-05-T3 | 02-05 | 2 | DISP-01 | unit + skipif | `pytest tests/gtx/test_dispatch.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-05-T4 | 02-05 | 2 | CORE-01, CORE-03 | integration + skipif | `pytest tests/gtx/test_skeleton.py -x -q --noconftest -o "addopts="` | ✅ | ✅ done |
+| 02-05-T5 | 02-05 | 2 | infra | doc | `grep -E "nyquist_compliant: true" .planning/phases/02-skeleton-disasm/02-VALIDATION.md` | ✅ | ✅ done |
 
 ---
 
@@ -122,4 +122,4 @@ updated: 2026-05-04 (after /gsd:plan-phase 2)
 - [x] Feedback latency < 30s
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** ready
+**Approval:** approved 2026-05-04
