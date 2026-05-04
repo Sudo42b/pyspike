@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-last_updated: "2026-05-04T06:28:47.293Z"
+status: planning
+last_updated: "2026-05-04T06:38:38.692Z"
 progress:
   total_phases: 6
   completed_phases: 1
@@ -32,9 +32,9 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-- **Phase:** Phase 1 (Foundation) — all plans complete (5/5 SUMMARY files on disk)
-- **Plan:** 04-packaging complete (2026-05-04). Final Phase 1 plan landed: pyproject.toml 5-stanza patch verified via setuptools.find_packages discovering `['riscv', 'riscv.gtx', 'riscv.gtx.ops']` + sdist build containing all 7 riscv.gtx files + `vendor/gtx_cpp_reference` count = 0 (D-06 prune working).
-- **Status:** Phase 1 fully landed. PKG-02 + FOUND-03 marked complete (Plan 04). FOUND-01 (Plan 02), FOUND-02 (Plan 03), FOUND-03 (Plan 01 + Plan 04), FOUND-04 (Plan 05) all green. Ready for Phase 2.
+- **Phase:** 2
+- **Plan:** Not started
+- **Status:** Ready to plan
 - **Progress:** [██████████] 100% (Phase 1)
 
 ## Performance Metrics
