@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-04T09:03:39.536Z"
+status: verifying
+last_updated: "2026-05-04T09:15:36.179Z"
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 10
-  completed_plans: 9
-  percent: 90
+  completed_plans: 10
+  percent: 100
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-04 after Phase 2 plan 04 (disasm — match/mask helpers + collect_disasms builder + 10-test suite; DISASM-01 complete)
+**Last updated:** 2026-05-04 after Phase 2 plan 05 (Wave 2 integration — 4 test files + VALIDATION approval; CORE-01..04 + DISP-01 all covered; Phase 02 functionally complete)
 
 ## Project Reference
 
@@ -32,13 +32,13 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-Phase: 02 (skeleton-disasm) — EXECUTING
-Plan: 5 of 5 (4 complete)
+Phase: 02 (skeleton-disasm) — COMPLETE (awaiting verify)
+Plan: 5 of 5 (5 complete)
 
 - **Phase:** 2
-- **Plan:** 02-01..02-04 complete (Wave 1 parallel-merged); 02-05 integration next (Wave 2)
-- **Status:** Executing Phase 02
-- **Progress:** [█████████░] 90%
+- **Plan:** 02-01..02-05 all complete (Wave 0/1/2 fully landed); next: `/gsd:verify-work 2` then `/gsd:phase-evolve 2` -> Phase 03 DMA
+- **Status:** Phase 02 functionally complete; ready for verifier
+- **Progress:** [██████████] 100%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: 5 of 5 (4 complete)
 | Phase 02-skeleton-disasm P02 | 4m52s | 3 tasks | 3 files |
 | Phase 02 P03 | 5m30s | 3 tasks | 3 files |
 | Phase 02-skeleton-disasm P04-disasm | 6m0s | 3 tasks | 3 files |
+| Phase 02-skeleton-disasm PP05-integration | 4m18s | 5 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -68,6 +69,12 @@ Plan: 5 of 5 (4 complete)
 1. **Offline `_PyDisasmInsn` NamedTuple fallback** — disasm.py wraps the real `riscv.disasm.disasm_insn_t` in try/except ImportError; when `_riscv.so` is absent, helpers return a NamedTuple sentinel exposing the same `.name/.match/.mask/.args` surface so unit tests run without the C extension.
 2. **`disasm_insn_t` accepts positional varargs** — verified by reading `src/main/cpp/riscv_disasm.cc:29-37` (`py_disasm_insn_t_create(name, match, mask, py::args py_args)`). Helpers pass `gtx_xrd, gtx_xrs1, gtx_xrs2` positionally, no list wrapping needed.
 3. **Sample-5 P2 mnemonics use unambiguous custom0 names** (`wsplit_c0`/`wjoin_c0`) per CONTEXT.md D-12 adaptation. The custom1 warp variants (`warp_split`/`warp_join`) are independently registered and verified.
+
+### Phase 2 Plan 05 Decisions (locked during execution)
+
+1. **Self-contained `_RISCV_AVAILABLE` module-level detection in each plan-05 test** (NOT the conftest fixture). The planner's acceptance command is `pytest ... --noconftest -o "addopts="`, which strips the `riscv_available` fixture defined in `tests/gtx/conftest.py`. First Task 1 run failed with "fixture 'riscv_available' not found" (Rule 3 - Blocking). Resolution: each test module duplicates the 5-line `try/except ImportError` detection. Conftest fixture is preserved for non-`--noconftest` runs.
+2. **Whole-module `pytestmark = pytest.mark.skipif`** for `test_reset.py` and `test_dispatch.py` (every test needs `_RISCV_AVAILABLE`). `test_register.py` keeps per-test guards because Tier 1 tests are always-run.
+3. **`test_skeleton.py` uses `subprocess.run` not pytest internals** -- avoids GIL contamination from running spike inside a pytest worker (research §1296-1297). pyspike CLI resolution: `shutil.which('pyspike')` first, fall back to `[sys.executable, "-m", "riscv"]`. Timeout=30s defends against WJOIN SystemExit non-propagation.
 
 ### Key Decisions (from PROJECT.md, locked at planning)
 
@@ -134,23 +141,27 @@ None. All 4 research streams converge on a HIGH-confidence approach; coverage is
 
 ### Last Action
 
-Phase 2 plan 04 (disasm registration layer — Wave 1 parallel) executed against main. Three
-atomic commits: `e6c28bb` (feat, disasm.py match/mask helpers — verbatim port of
-`gtx_npu_disasm.inc:23-36` + offline `_PyDisasmInsn` NamedTuple fallback for `_riscv.so`-less
-unit testing), `3babd10` (feat, `_registry.collect_disasms()` real builder replaces plan 01
-stub), `7d4e76f` (test, 10-test suite covering all 4 worked-example formulas + 18-entry registry
-integration + ROADMAP P2 #2 sample 5 mnemonics). SUMMARY at
-`.planning/phases/02-skeleton-disasm/02-04-SUMMARY.md`. DISASM-01 marked complete in
-REQUIREMENTS.md. Zero deviations — plan executed exactly as written. After Wave 1 lands,
-`_registry.collect_disasms()` emits the planned 18 entries (4 SPR + 8 warp + 6 custom0 stubs);
-all 62 tests in `tests/gtx/` pass with no regressions.
+Phase 2 plan 05 (Wave 2 integration — final P2 plan) executed against main. Five atomic
+commits: `0831898` (test, CORE-01 `test_register.py` 5 tests = 2 always-run + 3 skipif),
+`0a77638` (test, CORE-02 `test_reset.py` 8 tests skipif), `a5bd0c1` (test, DISP-01
+`test_dispatch.py` 9 tests skipif covering D-02 collision both branches + ISS encodings +
+unmapped fallback + custom1 sweep), `3ca5ab2` (test, ROADMAP P2 #1 `test_skeleton.py`
+2 tests = always-run .S/Makefile fixture-existence + subprocess `pyspike --extlib=riscv.gtx
+nop_wjoin.elf` integration gated on _riscv + .elf), `e3f1f1c` (docs, VALIDATION.md
+`Approval: ready -> approved 2026-05-04` + 17 task statuses pending -> done). SUMMARY at
+`.planning/phases/02-skeleton-disasm/02-05-SUMMARY.md`. CORE-01..04 + DISP-01 all
+marked complete in REQUIREMENTS.md. One auto-fixed deviation (Rule 3 - Blocking: the
+planner's `--noconftest` acceptance command strips conftest fixtures; resolved by adding
+self-contained `_RISCV_AVAILABLE` detection per test module). After plan 05, Phase 2 is
+functionally complete: 86 tests in tests/gtx/ (65 pass + 21 skipif on `_riscv.so`).
 
 ### Next Action
 
-Wave 1 complete (plans 02-02 SPR, 02-03 warp/control, 02-04 disasm all merged). Plan 02-05
-(integration) is Wave 2 final: `test_register.py`, `test_reset.py`, `test_dispatch.py`,
-`test_skeleton.py` (skipif-gated on `_riscv.so`). After plan 05, Phase 2 closes and Phase 3
-(DMA) becomes ready.
+Phase 02 functionally complete. Run `/gsd:verify-work 2` to launch the verifier sub-agent
+(reviews entire phase against PROJECT/ROADMAP/REQUIREMENTS), then `/gsd:phase-evolve 2`
+to lock Phase 2 decisions into PROJECT.md and advance STATE.md to Phase 3. Phase 3 (DMA)
+becomes ready after evolve. Note: when CI builds `_riscv.so`, all 21 currently-skipif tests
+should flip to pass; if any fail, file follow-up under deferred-items.md.
 
 ### Resumption Notes
 

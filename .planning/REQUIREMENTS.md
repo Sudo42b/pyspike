@@ -32,7 +32,7 @@
   `mxe_accum`/SPR/L0/L1/L2 영(zero) 초기화
 - [x] **CORE-03**: WJOIN 시 `GTX_NO_EXIT` 환경변수 미설정이면 `SystemExit(0)`
   raise — 펌웨어 무한 루프 종료 메커니즘
-- [ ] **CORE-04**: `xs1=0` 우회 패턴 — `proc.get_state().XPR[insn.rs1]`로 직접
+- [x] **CORE-04**: `xs1=0` 우회 패턴 — `proc.get_state().XPR[insn.rs1]`로 직접
   레지스터 읽어 Spike의 -1 마샬링 회피.
   **Phase 2 구현 결정 (CONTEXT.md D-05):** 데코레이터로 자동 wrap —
   `(proc, insn, xs1, xs2)` 4-arg signature를 wrap하면서 xs1==0이면 GPR 직접 read로 교체.
@@ -55,7 +55,7 @@
 
 ### Dispatch
 
-- [ ] **DISP-01**: `custom0()` funct7 디스패치 dict (gem5 simplified
+- [x] **DISP-01**: `custom0()` funct7 디스패치 dict (gem5 simplified
   0x04–0x07 + ISS full 0x00–0x7F 양 인코딩 공존, funct7=0x00 충돌 시
   `insn.rs1 != 0` 휴리스틱으로 WRSPR / MM 분기).
   **Phase 2 구현 결정 (CONTEXT.md D-01/D-02):** 단일 dict-of-handlers
@@ -197,11 +197,11 @@
 | CORE-01 | Phase 2 | Complete |
 | CORE-02 | Phase 2 | Complete |
 | CORE-03 | Phase 2 | Complete |
-| CORE-04 | Phase 2 | Pending |
+| CORE-04 | Phase 2 | Complete |
 | SPR-01 | Phase 2 | Complete |
 | SPR-02 | Phase 2 | Complete |
 | DISASM-01 | Phase 2 | Complete |
-| DISP-01 | Phase 2 | Pending |
+| DISP-01 | Phase 2 | Complete |
 | DISP-02 | Phase 2 | Complete |
 | DISP-03 | Phase 3 | Pending |
 | DMA-01 | Phase 3 | Pending |
