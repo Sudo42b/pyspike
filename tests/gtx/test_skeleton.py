@@ -58,12 +58,6 @@ def _resolve_pyspike_command():
     return [sys.executable, "-m", "riscv"]
 
 
-@pytest.mark.xfail(
-    reason="Category D (deferred): RoCC dispatch lifecycle bug — sp init "
-    "doesn't stick + custom1 traps as illegal. See "
-    ".planning/phases/01-foundation/deferred-items.md.",
-    strict=False,
-)
 def test_pyspike_extlib_riscv_gtx_nop_wjoin_exits_zero():
     """ROADMAP P2 success criterion 1: NOP firmware exits cleanly."""
     if not _RISCV_AVAILABLE:
@@ -73,6 +67,7 @@ def test_pyspike_extlib_riscv_gtx_nop_wjoin_exits_zero():
 
     cmd = _resolve_pyspike_command() + [
         "--extlib=riscv.gtx",
+        "--extension=gtx",
         str(ELF_PATH),
     ]
     env = os.environ.copy()
@@ -111,12 +106,6 @@ def test_elf_fixture_exists_or_documented():
     assert mk_path.exists(), f"missing: {mk_path}"
 
 
-@pytest.mark.xfail(
-    reason="Category D (deferred): WJOIN dispatch doesn't reach GtxNpu.custom1 "
-    "under spike runtime; trace stays empty. See "
-    ".planning/phases/01-foundation/deferred-items.md.",
-    strict=False,
-)
 def test_full_trace_mnemonics_present(tmp_path):
     """Gap-closure test (02-06): spike --log trace contains gtx mnemonics.
 
@@ -146,8 +135,10 @@ def test_full_trace_mnemonics_present(tmp_path):
 
     trace_path = tmp_path / "gtx-trace.log"
     cmd = _resolve_pyspike_command() + [
+        "-l",  # enable execution log
         f"--log={trace_path}",
         "--extlib=riscv.gtx",
+        "--extension=gtx",
         str(ELF_PATH),
     ]
     env = os.environ.copy()
@@ -172,7 +163,13 @@ def test_full_trace_mnemonics_present(tmp_path):
 
     trace_text = trace_path.read_text(errors="replace")
     import re
-    matches = re.findall(r"(wjoin|wrspr|rdspr)", trace_text)
+    # disasm_insn_t normalizes underscores to dots, so the trace shows e.g.
+    # 'warp.join' instead of 'warp_join'. Match either form.
+    matches = re.findall(
+        r"(warp\.(?:join|split|start\.[pts]|end\.[pts])"
+        r"|wjoin|wrspr|rdspr)",
+        trace_text,
+    )
     assert len(matches) >= 1, (
         f"Expected >= 1 mnemonic match in trace, got {len(matches)}\n"
         f"trace excerpt (first 2000 chars):\n{trace_text[:2000]}\n"
