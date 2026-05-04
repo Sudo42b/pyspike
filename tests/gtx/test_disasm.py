@@ -19,13 +19,20 @@ All tests run offline (no _riscv.so) -- disasm.py provides a sentinel fallback
 so .name / .match / .mask attributes are inspectable.
 """
 from riscv.gtx.disasm import (
-    add_r_custom0, add_rf3_custom0, add_warp,
+    add_r_custom0, add_rf3_custom0, add_warp, _RISCV_DISASM_AVAILABLE,
 )
 from riscv.gtx import _registry
 # Force-import op modules so the registry is populated by the time
 # collect_disasms() runs.
 from riscv.gtx.ops import spr as _spr   # noqa: F401
 from riscv.gtx.ops import control as _ctrl  # noqa: F401
+
+
+def _norm(name: str) -> str:
+    """Real disasm_insn_t C++ ctor normalizes mnemonic '_' -> '.'.
+    Offline _PyDisasmInsn fallback preserves the input as-is. Tests must
+    pass on both paths."""
+    return name.replace('_', '.') if _RISCV_DISASM_AVAILABLE else name
 
 
 # ----------------- Formula tests (research §537-555 worked examples) -----------------
@@ -50,7 +57,7 @@ def test_add_rf3_custom0_mm_s_formula():
     """mm_s ISS-full (funct7=0x00, funct3=0). MM op -- registered in P4, but
     the formula is exercised here in isolation."""
     e = add_rf3_custom0('mm_s', 0x00, 0)
-    assert e.name == 'mm_s'
+    assert e.name == _norm('mm_s')
     assert e.match == 0x0000000B, hex(e.match)
     assert e.mask == 0xFE00707F, hex(e.mask)
 
@@ -58,7 +65,7 @@ def test_add_rf3_custom0_mm_s_formula():
 def test_add_warp_start_p_formula():
     """warp_start_p (custom1, funct3=0b110) -- research §551-555."""
     e = add_warp('warp_start_p', 0b110)
-    assert e.name == 'warp_start_p'
+    assert e.name == _norm('warp_start_p')
     assert e.match == 0x0000602B, hex(e.match)
     assert e.mask == 0x0000707F, hex(e.mask)
 
@@ -66,7 +73,7 @@ def test_add_warp_start_p_formula():
 def test_add_warp_join_formula():
     """warp_join (custom1, funct3=0b101)."""
     e = add_warp('warp_join', 0b101)
-    assert e.name == 'warp_join'
+    assert e.name == _norm('warp_join')
     assert e.match == (0b101 << 12) | 0x2b, hex(e.match)
     assert e.mask == (0x7 << 12) | 0x7f, hex(e.mask)
 
@@ -99,7 +106,7 @@ def test_collect_disasms_contains_p2_sample_5():
     """
     entries = _registry.collect_disasms()
     names = {e.name for e in entries}
-    sample5 = ['wrspr', 'rdspr', 'wsplit_c0', 'wjoin_c0', 'warp_start_p']
+    sample5 = [_norm(n) for n in ('wrspr', 'rdspr', 'wsplit_c0', 'wjoin_c0', 'warp_start_p')]
     missing = [m for m in sample5 if m not in names]
     assert not missing, f"sample mnemonics missing: {missing}; got names: {sorted(names)}"
 
@@ -108,8 +115,10 @@ def test_collect_disasms_all_8_warp_mnemonics_present():
     """All 8 custom1 funct3 warp mnemonics registered (DISP-02 + DISASM-01)."""
     entries = _registry.collect_disasms()
     names = {e.name for e in entries}
-    warp_mnemonics = ['warp_start_t', 'warp_end_t', 'warp_start_s', 'warp_end_s',
-                      'warp_split', 'warp_join', 'warp_start_p', 'warp_end_p']
+    warp_mnemonics = [_norm(n) for n in (
+        'warp_start_t', 'warp_end_t', 'warp_start_s', 'warp_end_s',
+        'warp_split', 'warp_join', 'warp_start_p', 'warp_end_p',
+    )]
     missing = [m for m in warp_mnemonics if m not in names]
     assert not missing, f"warp mnemonics missing: {missing}"
 
@@ -118,7 +127,7 @@ def test_collect_disasms_all_4_spr_mnemonics_present():
     """All 4 SPR funct7 mnemonics registered (SPR-02 + DISASM-01)."""
     entries = _registry.collect_disasms()
     names = {e.name for e in entries}
-    spr_mnemonics = ['wrspr', 'rdspr', 'wrspr_gem5', 'rdspr_gem5']
+    spr_mnemonics = [_norm(n) for n in ('wrspr', 'rdspr', 'wrspr_gem5', 'rdspr_gem5')]
     missing = [m for m in spr_mnemonics if m not in names]
     assert not missing, f"SPR mnemonics missing: {missing}"
 
