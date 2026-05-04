@@ -34,6 +34,12 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   (Python 3.8–3.12 baseline; **Phase 1 discuss에서 cp310–cp312로 축소 결정 — D-08**) — existing
 - ✓ **PYS-EXT-07**: `riscv.dev.MMIO` 베이스 클래스로 Python MMIO 디바이스 모델
   지원 — existing
+- ✓ **GTX-MEM-01**: 모든 L1/L0 FP16 접근을 little-endian 바이트 순서로 처리
+  (SystemC TLM 일치 — bit-exact 필수 조건) — **Validated in Phase 1: Foundation**
+  (D-17 LE byte-order assertion 8/8 PASS; `__init__.py` non-LE host tripwire active)
+- ✓ **GTX-REF-01**: 기존 C++ gtx 소스를 `vendor/gtx_cpp_reference/` 스냅샷으로 두어
+  golden 비교용 baseline + 포팅 시 ground-truth로 활용 — **Validated in Phase 1: Foundation**
+  (D-04 `https://github.com/Sudo42b/gtx_spike` submodule 등록, D-06 wheel 미포함)
 
 ### Active
 
@@ -67,10 +73,7 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   으로 NPU 인스턴스 생성·실행 가능, 펌웨어/golden hex 자산도 wheel에 포함
 - [ ] **GTX-RST-01**: `reset()` 시 `sp = 0x80100000` 초기화 + WJOIN 자동 종료
   (`GTX_NO_EXIT` 미설정 시) 등 호환 동작 유지
-- [ ] **GTX-MEM-01**: 모든 L1/L0 FP16 접근을 little-endian 바이트 순서로 처리
-  (SystemC TLM 일치 — bit-exact 필수 조건)
-- [ ] **GTX-REF-01**: 기존 C++ gtx 소스를 `vendor/gtx_cpp_reference/` (또는 동등
-  경로)에 스냅샷으로 두어 golden 비교용 baseline + 포팅 시 ground-truth로 활용
+<!-- GTX-MEM-01 / GTX-REF-01 → Validated in Phase 1 (moved above) -->
 
 ### Out of Scope
 
@@ -147,9 +150,9 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 |----------|-----------|---------|
 | C++ libgtx_npu.so를 wheel에 동봉하지 않고 Python으로 재작성 | Python에서 ISA/op 변형 실험·해킹 용이성 우선. C++ 코드는 검증 레퍼런스로만 유지 | — Pending |
 | NumPy를 메모리/연산 백엔드로 채택 | Pure Python은 너무 느려 펌웨어 회귀가 비실용. cython/C 추가는 wheel 복잡도↑. NumPy가 균형점 | — Pending |
-| NumPy ≥ 2.0 + cp310-cp312 (cp38/cp39 드롭, D-07/D-08) | NumPy 2.x FP16 RNE 표준화·코드 단순. cibuildwheel 매트릭스 축소는 사용자 명시 결정 | — Pending |
-| `np.float16` view 채택 (D-09) — 순수 비트 변환 거부 | NumPy 2.x view가 IEEE 754 binary16 보장. P4/P5에서 strict 모드로 차이 측정 후 필요시 비트 fallback | — Pending |
-| C++ 레퍼런스 = git submodule (`https://github.com/Sudo42b/gtx_spike`, D-04) | 자동 업스트림 동기화. 공개 레포라 CI 익명 clone 가능 | — Pending |
+| NumPy ≥ 2.0 + cp310-cp312 (cp38/cp39 드롭, D-07/D-08) | NumPy 2.x FP16 RNE 표준화·코드 단순. cibuildwheel 매트릭스 축소는 사용자 명시 결정 | ✓ Validated in Phase 1 (pyproject.toml 패치 완료) |
+| `np.float16` view 채택 (D-09) — 순수 비트 변환 거부 | NumPy 2.x view가 IEEE 754 binary16 보장. P4/P5에서 strict 모드로 차이 측정 후 필요시 비트 fallback | ✓ Validated in Phase 1 (helper-level, 65536 round-trip + NaN 보존; op-level은 P4/P5 deferred) |
+| C++ 레퍼런스 = git submodule (`https://github.com/Sudo42b/gtx_spike`, D-04) | 자동 업스트림 동기화. 공개 레포라 CI 익명 clone 가능 | ✓ Validated in Phase 1 (`vendor/gtx_cpp_reference` 등록, MANIFEST.in prune) |
 | Bit-exact 비교 대상은 C++ libgtx_npu.so | C++가 SystemC와 이미 일치 검증 완료(사용자 확인) → SystemC 직접 접근 없이도 유효한 golden 확보 | — Pending |
 | MM 서브시스템 우선 구현 | GEMM이 NPU 핵심 부하, 다른 op들이 간접적으로 의존(operand staging, mxe_accum). MM 동작이 가장 강한 진척 신호 | — Pending |
 | PCIe-EP / vfio-user / CUDA 경로 v1 제외 | wheel 배포 복잡도가 v1 핵심 가치(ISA/펌웨어 회귀)와 비례하지 않음. v2에서 재평가 | — Pending |
@@ -173,4 +176,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot)*
+*Last updated: 2026-05-04 after Phase 1 complete (Foundation: FP16 helpers + GtxMemory + riscv.gtx package skeleton + git submodule + pyproject.toml pivot landed; 13/13 tests pass)*
