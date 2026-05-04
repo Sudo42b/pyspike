@@ -44,7 +44,7 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `vendor/gtx_cpp_reference/` is registered as a git submodule (D-04) pointing to `https://github.com/Sudo42b/gtx_spike`, scope = `gtx/` + spike patches (D-05). `git submodule status` shows it as initialized; `MANIFEST.in` excludes it from wheel (D-06).
   5. `pyproject.toml` declares `numpy>=2.0,<3` runtime dep, `requires-python = ">=3.10"` (D-07/D-08), and `[tool.cibuildwheel].build` lists only cp310/cp311/cp312 (cp38/cp39 lines removed). `pip wheel .` produces a valid manylinux2014_x86_64 wheel.
 
-**Plans:** 5 plans (4 in Wave 1 parallel, 1 in Wave 2 — packaging gates on Wave 1 + submodule)
+**Plans:** 5/5 plans complete
 - [ ] 01-foundation/01-skeleton-PLAN.md — riscv.gtx 패키지 스켈레톤 (`__init__.py`, `params.py`, `encoding.py`, `ops/__init__.py`, `tests/gtx/__init__.py`)
 - [ ] 01-foundation/02-fp-PLAN.md — FP16↔FP32 헬퍼 + 65536 round-trip 테스트 (FOUND-01)
 - [ ] 01-foundation/03-memory-PLAN.md — GtxMemory(L0/L1/L2 + SPR + DDR lazy) + memory layout 테스트 (FOUND-02)
@@ -164,7 +164,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 1/1 | Complete   | 2026-05-04 |
+| 1. Foundation | 5/5 | Complete   | 2026-05-04 |
 | 2. Skeleton & Disasm | 0/? | Not started | - |
 | 3. DMA & DDR I/O | 0/? | Not started | - |
 | 4. MM Subsystem | 0/? | Not started | - |

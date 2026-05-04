@@ -117,7 +117,7 @@
 
 - [ ] **PKG-01**: `pyproject.toml` `[tool.setuptools.package-data]`에 `riscv.gtx.data/`
   추가 — `.elf` / `.hex` 자산이 wheel에 포함
-- [ ] **PKG-02**: NumPy 의존성 `numpy>=2.0,<3` 추가 (D-07).
+- [x] **PKG-02**: NumPy 의존성 `numpy>=2.0,<3` 추가 (D-07).
   cp310+가 베이스라인이므로 `importlib.resources`는 stdlib 사용, 백포트 불필요.
   `requires-python = ">=3.10"`로 변경 (D-08)
 - [ ] **PKG-03**: `pip install spike` 후 한 줄(`from riscv.gtx import GtxNpu`)로
@@ -220,7 +220,7 @@
 | VRF-03 | Phase 6 | Pending |
 | VRF-04 | Phase 6 | Pending |
 | PKG-01 | Phase 6 | Pending |
-| PKG-02 | Phase 1 | Pending |
+| PKG-02 | Phase 1 | Complete |
 | PKG-03 | Phase 6 | Pending |
 | PKG-04 | Phase 6 | Pending |
 

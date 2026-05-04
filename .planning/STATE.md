@@ -1,6 +1,20 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: completed
+last_updated: "2026-05-04T06:28:47.293Z"
+progress:
+  total_phases: 6
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 5
+  percent: 100
+---
+
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-04 after Phase 1 plan 02 (FP16/FP32 helpers via np.float16 view; FOUND-01 complete)
+**Last updated:** 2026-05-04 after Phase 1 plan 04 (packaging — pyproject.toml 5-stanza patch; PKG-02 + FOUND-03 complete)
 
 ## Project Reference
 
@@ -10,7 +24,7 @@
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 1 (Foundation) — plan 02 (fp) complete in parallel worktree; sibling plans 01-skeleton/03-memory/04-packaging/05-submodule concurrent.
+**Current Focus:** Phase 1 (Foundation) — all 5 plans complete (01-skeleton, 02-fp, 03-memory, 04-packaging, 05-submodule). Phase 1 ready for transition to Phase 2.
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -18,10 +32,10 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-- **Phase:** Phase 1 (Foundation) — execution in flight (parallel worktree wave)
-- **Plan:** 02-fp complete (2026-05-04). Other Phase 1 plans (01-skeleton, 03-memory, 04-packaging, 05-submodule) execute concurrently in sibling worktrees.
-- **Status:** Phase 1 discuss complete — 12 implementation decisions locked (D-01..D-12) + sub-decisions D-13..D-17. Plan 02 D-09 in code: `riscv.gtx.fp.fp16_to_fp32` / `fp32_to_fp16` via `np.float16` view (astype-only, no bit manipulation). 65536 FP16 round-trip + 2046 NaN bit patterns + subnormals + -0.0 + known values all bit-exact on NumPy 2.2.6 (5/5 pytest pass in 0.28s).
-- **Progress:** [▱▱▱▱▱▱] 0/6 phases complete (Phase 1: 1/5 plans complete in this worktree's view)
+- **Phase:** Phase 1 (Foundation) — all plans complete (5/5 SUMMARY files on disk)
+- **Plan:** 04-packaging complete (2026-05-04). Final Phase 1 plan landed: pyproject.toml 5-stanza patch verified via setuptools.find_packages discovering `['riscv', 'riscv.gtx', 'riscv.gtx.ops']` + sdist build containing all 7 riscv.gtx files + `vendor/gtx_cpp_reference` count = 0 (D-06 prune working).
+- **Status:** Phase 1 fully landed. PKG-02 + FOUND-03 marked complete (Plan 04). FOUND-01 (Plan 02), FOUND-02 (Plan 03), FOUND-03 (Plan 01 + Plan 04), FOUND-04 (Plan 05) all green. Ready for Phase 2.
+- **Progress:** [██████████] 100% (Phase 1)
 
 ## Performance Metrics
 
@@ -32,6 +46,7 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 | .elf regressions passing strict | 100% | 0% |
 | Wheel size | ≤50MB | TBD |
 | cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
+| Phase 01-foundation P04-packaging | 36m22s | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -100,21 +115,22 @@ None. All 4 research streams converge on a HIGH-confidence approach; coverage is
 
 ### Last Action
 
-Phase 1 plan 02 (fp) executed in parallel worktree `agent-a64955efd060d29a5`. Two atomic
-commits: `0453995` (test RED, 5 acceptance tests) and `8311a46` (feat GREEN, fp.py 52 LOC).
-SUMMARY at `.planning/phases/01-foundation/02-fp-SUMMARY.md`. FOUND-01 marked complete in
-REQUIREMENTS.md. ROADMAP.md plan-progress row updated for Phase 1 (per-worktree count).
+Phase 1 plan 04 (packaging) executed in worktree `agent-a0b41ae45d49c69d4` (Wave 2 solo).
+Two atomic commits: `cbd1487` (chore, pyproject.toml 5-stanza patch) and `f3c3b7a` (chore,
+verification record). SUMMARY at `.planning/phases/01-foundation/04-packaging-SUMMARY.md`.
+PKG-02 + FOUND-03 marked complete in REQUIREMENTS.md. Pre-existing pybind11 3.0.4 / csr_t
+binding incompatibility logged to `.planning/phases/01-foundation/deferred-items.md` —
+unrelated to this plan; canonical wheel build deferred to next CI cibuildwheel run.
 
 ### Next Action
 
-Orchestrator reconciles parallel-wave outputs (plans 01/02/03/04/05) and re-runs
-`gsd-tools state advance-plan` / `roadmap update-plan-progress` once all sibling worktrees
-merge. Resume file: `.planning/phases/01-foundation/01-CONTEXT.md`. After Phase 1 wave
-fully merges, the next planning step is `/gsd:plan-phase 2`.
+Phase 1 fully landed. Next planning step: `/gsd:transition` → `/gsd:research-phase 2` →
+`/gsd:plan-phase 2`. Resume file: `.planning/phases/01-foundation/04-packaging-SUMMARY.md`.
 
 ### Resumption Notes
 
 If resuming work in a new session:
+
 1. Read `.planning/PROJECT.md` for core value + constraints
 2. Read `.planning/ROADMAP.md` for phase structure + success criteria
 3. Read `.planning/REQUIREMENTS.md` for full v1 requirement list with phase mappings
