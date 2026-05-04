@@ -312,11 +312,14 @@ PYBIND11_MODULE(_riscv, m) {
         .def_property_readonly("v_mew", &insn_t::v_mew)
         .def_property_readonly("v_zimm6", &insn_t::v_zimm6)
 
-        .def_property_readonly("p_imm2", &insn_t::p_imm2)
-        .def_property_readonly("p_imm3", &insn_t::p_imm3)
-        .def_property_readonly("p_imm4", &insn_t::p_imm4)
-        .def_property_readonly("p_imm5", &insn_t::p_imm5)
-        .def_property_readonly("p_imm6", &insn_t::p_imm6)
+        .def_property_readonly("p_imm8", &insn_t::p_imm8)
+        .def_property_readonly("p_imm10csl", &insn_t::p_imm10csl)
+        .def_property_readonly("p_imm10csr", &insn_t::p_imm10csr)
+        .def_property_readonly("p_imm10csrw", &insn_t::p_imm10csrw)
+        .def_property_readonly("shamtd", &insn_t::shamtd)
+        .def_property_readonly("shamtw", &insn_t::shamtw)
+        .def_property_readonly("shamth", &insn_t::shamth)
+        .def_property_readonly("shamtb", &insn_t::shamtb)
 
         .def_property_readonly("b_imm5", &insn_t::b_imm5)
 

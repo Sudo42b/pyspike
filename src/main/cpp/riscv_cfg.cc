@@ -79,7 +79,7 @@ managed_cfg_t::create(std::optional<std::string> isa,
     cfg->mem_layout = mem_layout.value();
   }
   if (start_pc.has_value()) {
-    cfg->start_pc = start_pc.value();
+    cfg->start_pc.set_global(start_pc.value());
   }
   return cfg;
 }
