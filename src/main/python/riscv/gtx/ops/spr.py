@@ -13,12 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""GTX op modules -- handlers registered via @gtx._registry.handler.
+"""SPR ops -- WRSPR/RDSPR (gem5 + ISS encodings).
 
-Importing each submodule triggers its @handler decorators (Pitfall 6).
-Plan 02 fills `spr`; plan 03 fills `control`. Plans 04-05 add `dma`/`mm`/etc.
+Plan 01: stub. Plan 02 implements wrspr_iss/rdspr_iss/wrspr_gem5/rdspr_gem5.
 """
-from . import spr   # noqa: F401  -- triggers SPR @handler decorators
-from . import control  # noqa: F401  -- triggers warp/control @handler decorators
-
-__all__ = ["spr", "control"]
+# Plan 02 will register:
+# @handler(kind='custom0', funct7=0x49, mnemonic='wrspr')
+# @handler(kind='custom0', funct7=0x48, mnemonic='rdspr')
+# @handler(kind='custom0', funct7=0x00, mnemonic='wrspr_gem5')   # collision-aware
+# @handler(kind='custom0', funct7=0x01, mnemonic='rdspr_gem5')

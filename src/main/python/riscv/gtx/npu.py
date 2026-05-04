@@ -1,0 +1,125 @@
+#
+# Copyright 2026 WuXi EsionTech Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+"""GtxNpu -- riscv.isa.ROCC subclass, registered as 'gtx' (CORE-01, D-14)."""
+from typing import List
+import numpy as np
+# pylint: disable=import-error,no-name-in-module
+from riscv import isa
+from riscv.csrs import csr_t
+from riscv.disasm import disasm_insn_t
+from riscv.processor import insn_desc_t, processor_t
+
+from .memory import GtxMemory
+from .warp_state import WarpState
+from .params import (GTX_NEST_NUM, GTX_SPU_NUM)
+from . import _registry  # noqa: F401  -- imported for completeness
+from . import ops as _ops  # noqa: F401  -- triggers @handler decorators
+from .dispatch import build_custom0_table, build_custom1_table
+
+
+@isa.register("gtx")
+class GtxNpu(isa.ROCC):
+    """GTX NPU functional model -- Phase 2 dispatch shell (CORE-01)."""
+
+    def __init__(self):
+        super().__init__()
+        self.mem = GtxMemory()
+        self.warp = WarpState()
+        # Layered SPR storage (D-11 + research §390-396 strong recommendation):
+        #   gspr: flat dict (single instance)
+        #   nspr: list of dict, length GTX_NEST_NUM
+        #   lspr: list of list of dict, [NEST][SPU]
+        self.gspr: dict = {}
+        self.nspr: list = [dict() for _ in range(GTX_NEST_NUM)]
+        self.lspr: list = [
+            [dict() for _ in range(GTX_SPU_NUM)] for _ in range(GTX_NEST_NUM)
+        ]
+        # mxe_accum: 2D scalar accumulator per (NEST, SPU). FP32. CORRECTED
+        # from CONTEXT.md D-06 (4D was wrong -- see C++ gtx_npu.h:1254).
+        self._mxe_accum: np.ndarray = np.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=np.float32
+        )
+        # Disasm cache (plan 04 fills via _registry.collect_disasms)
+        self._disasm_entries: List[disasm_insn_t] = []
+        # Dispatch tables (plan 02-03 fill _registry.HANDLERS)
+        self._custom0 = build_custom0_table(self)
+        self._custom1 = build_custom1_table(self)
+
+    def get_instructions(self, proc: processor_t) -> List[insn_desc_t]:
+        return []   # RoCC opcodes 0x0b/0x2b pre-bound by Spike
+
+    def get_disasms(self, proc: processor_t) -> List[disasm_insn_t]:
+        # Plan 04 populates self._disasm_entries on demand
+        if not self._disasm_entries:
+            self._disasm_entries = list(_registry.collect_disasms())
+        return list(self._disasm_entries)
+
+    def get_csrs(self, proc: processor_t) -> List[csr_t]:
+        return []   # SPRs are NOT CSRs (project convention)
+
+    def reset(self, proc: processor_t) -> None:
+        super().reset(proc)
+        # CORE-02: sp init
+        proc.get_state().XPR.write(2, 0x80100000)
+        # FPU enable (forward-compat for P4 GEMM, mstatus.FS = 01 Initial)
+        try:
+            mstatus = proc.get_csr(0x300)
+            mstatus = (mstatus & ~0x6000) | 0x2000
+            proc.put_csr(0x300, mstatus)
+        except Exception:
+            pass
+        # mxe_accum zero-init
+        self._mxe_accum.fill(0.0)
+        # Memory zero-init
+        self.mem._l0_bytes.fill(0)
+        self.mem._l1_bytes.fill(0)
+        self.mem._l2_bytes.fill(0)
+        # SPR zero-init + defaults (gtx_npu_core.cc:80-109 verbatim)
+        self.gspr.clear()
+        for addr in (0x000, 0x001, 0x002, 0x003, 0x004, 0x010, 0x011):
+            self.gspr[addr] = 0
+        for n in range(GTX_NEST_NUM):
+            self.nspr[n].clear()
+            self.nspr[n][0x400] = 0xFFFF   # NSPR_THREAD_MASK = all SPUs active
+            self.nspr[n][0x401] = 0
+            self.nspr[n][0x402] = 1        # NSPR_TYPE = FP16 default
+            self.nspr[n][0x403] = 0
+            self.nspr[n][0x700] = 0
+            self.nspr[n][0x780] = 0
+            self.nspr[n][0x781] = 0
+            self.nspr[n][0x782] = 0
+            for s in range(GTX_SPU_NUM):
+                self.lspr[n][s].clear()
+                self.lspr[n][s][0x900] = 0
+                self.lspr[n][s][0x901] = 0
+                self.lspr[n][s][0x902] = 0
+                self.lspr[n][s][0x903] = 0
+        # Warp state reset
+        self.warp.reset()
+
+    def custom0(self, proc, insn, xs1, xs2) -> int:
+        funct7 = insn.funct
+        handler = self._custom0.get(funct7)
+        if handler is None:
+            return 0   # silent NOP for unmapped funct7 (P3-P5 fill)
+        return handler(proc, insn, xs1, xs2)
+
+    def custom1(self, proc, insn, xs1, xs2) -> int:
+        funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
+        handler = self._custom1.get(funct3)
+        if handler is None:
+            return 0
+        return handler(proc, insn, xs1, xs2)

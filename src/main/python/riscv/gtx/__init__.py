@@ -36,4 +36,18 @@ from . import memory
 from . import params
 from . import ddr
 
-__all__ = ["encoding", "fp", "memory", "params", "ddr"]
+# Pitfall 6 (research): pyspike --extlib=riscv.gtx imports this module;
+# importing npu triggers @isa.register("gtx") which makes the extension
+# findable by Spike's PythonBridge.
+try:
+    from . import npu   # noqa: F401
+    from .npu import GtxNpu
+except ImportError as _exc:
+    # _riscv.so not available -- Phase 1 tests still pass; npu is unavailable
+    # until a wheel build (or in-tree build_ext) lands. Plans 02-05 unit tests
+    # use mocks via tests/gtx/conftest.py; integration test plan 05 gates
+    # on _RISCV_AVAILABLE.
+    npu = None  # type: ignore[assignment]
+    GtxNpu = None  # type: ignore[assignment]
+
+__all__ = ["encoding", "fp", "memory", "params", "ddr", "npu", "GtxNpu"]
