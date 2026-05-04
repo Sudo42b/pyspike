@@ -1,0 +1,9 @@
+# nop_wjoin.elf is intentionally committed (D-22) -- pre-built binary for tests.
+# Override the project-level gitignore (../../../.gitignore patterns *.elf and
+# Makefile) so this fixture and its build recipe land in the repo.
+!nop_wjoin.elf
+!Makefile
+
+# Build artifacts from `make` other than nop_wjoin.elf:
+*.o
+*.tmp
