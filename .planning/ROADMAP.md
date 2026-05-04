@@ -49,7 +49,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 - [ ] 01-foundation/02-fp-PLAN.md — FP16↔FP32 헬퍼 + 65536 round-trip 테스트 (FOUND-01)
 - [ ] 01-foundation/03-memory-PLAN.md — GtxMemory(L0/L1/L2 + SPR + DDR lazy) + memory layout 테스트 (FOUND-02)
 - [ ] 01-foundation/04-packaging-PLAN.md — pyproject.toml 5-stanza 패치 + wheel 빌드 검증 (PKG-02 + FOUND-03 wheel ship)
-- [x] 01-foundation/05-submodule-PLAN.md — vendor/gtx_cpp_reference git submodule + MANIFEST.in prune (FOUND-04 + D-06) ✓ 2026-05-04
+- [ ] 01-foundation/05-submodule-PLAN.md — vendor/gtx_cpp_reference git submodule + MANIFEST.in prune (FOUND-04 + D-06)
 **UI hint**: no
 
 ---
