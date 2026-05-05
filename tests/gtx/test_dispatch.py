@@ -185,3 +185,86 @@ def test_custom1_unmapped_funct3_returns_zero():
         else:
             ret = npu.custom1(proc, insn, xs1=0, xs2=0)
             assert ret == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Plan 02 Task 1: 2-level custom0 dispatch + deferred_ddr_stores
+# ---------------------------------------------------------------------------
+
+def test_custom0_2level_dispatch_p2_handlers_still_route():
+    """All P2 handlers (mask_funct3=False) still reach via inner key None.
+
+    Backwards-compat: the upgrade from flat dict[funct7,Callable] to
+    dict[funct7,dict[Optional[int],Callable]] must not break P2 entries.
+    """
+    npu = _make_npu()
+    # Each P2 funct7 must have a sub_table that is a dict.
+    for funct7 in (0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x48, 0x49):
+        sub = npu._custom0.get(funct7)
+        assert isinstance(sub, dict), (
+            f"funct7={funct7:#x} sub-table is not a dict (got {type(sub)})"
+        )
+        # P2 handlers all use mask_funct3=False -> inner key is None
+        assert None in sub, (
+            f"funct7={funct7:#x} missing sentinel None inner key (P2 backwards-compat)"
+        )
+
+
+def test_custom0_2level_dispatch_unmapped_funct7_returns_zero():
+    """Unmapped funct7 -> silent NOP (return 0) with 2-level table."""
+    npu = _make_npu()
+    proc = _make_proc()
+    insn = _make_insn(funct=0x7F, rs1=0, rs2=0)   # 0x7F not in any plan's set
+    ret = npu.custom0(proc, insn, xs1=0, xs2=0)
+    assert ret == 0
+
+
+def test_deferred_ddr_stores_initialized_empty():
+    """GtxNpu().deferred_ddr_stores starts as empty list (D-05)."""
+    npu = _make_npu()
+    assert hasattr(npu, "deferred_ddr_stores"), "GtxNpu must have deferred_ddr_stores"
+    assert npu.deferred_ddr_stores == []
+    assert isinstance(npu.deferred_ddr_stores, list)
+
+
+def test_reset_clears_deferred_ddr_stores():
+    """reset() clears self.deferred_ddr_stores (D-05)."""
+    from riscv.gtx.dma_engine import DeferredDdrStore
+    npu = _make_npu()
+    proc = _make_proc()
+    sentinel = DeferredDdrStore(
+        nest=0, l2_off=0, ddr_off=0, length=1, height=1,
+        l2_stride=0, ddr_stride=0,
+    )
+    npu.deferred_ddr_stores.append(sentinel)
+    assert len(npu.deferred_ddr_stores) == 1
+    npu.reset(proc)
+    assert npu.deferred_ddr_stores == []
+
+
+def test_flush_deferred_ddr_stores_empty_is_noop():
+    """flush_deferred_ddr_stores() on empty queue is a no-op."""
+    npu = _make_npu()
+    assert hasattr(npu, "flush_deferred_ddr_stores")
+    # Must not raise; queue stays empty.
+    npu.flush_deferred_ddr_stores()
+    assert npu.deferred_ddr_stores == []
+
+
+def test_flush_deferred_ddr_stores_consumes_queue():
+    """flush_deferred_ddr_stores() copies L2->DDR per request and clears queue."""
+    import numpy as np
+    from riscv.gtx.dma_engine import DeferredDdrStore
+    npu = _make_npu()
+    # Pre-populate L2 nest 1 with a known pattern at offset 100..200
+    npu.mem.l2_byte(1)[100:200] = np.arange(100, dtype=np.uint8)
+    # Queue a single deferred copy: L2 nest 1 [100:200] -> DDR offset 0x1000..0x1064
+    npu.deferred_ddr_stores.append(DeferredDdrStore(
+        nest=1, l2_off=100, ddr_off=0x1000, length=100, height=1,
+        l2_stride=100, ddr_stride=100,
+    ))
+    npu.flush_deferred_ddr_stores()
+    assert npu.deferred_ddr_stores == []
+    # Verify DDR contents match L2 source
+    post = bytes(npu.mem._ddr_bytes[0x1000:0x1000 + 100])
+    assert post == bytes(np.arange(100, dtype=np.uint8))
