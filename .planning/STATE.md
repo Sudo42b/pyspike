@@ -64,6 +64,10 @@ Plan: ALL 5 plans landed across 3 waves
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 7 added: 제대로 동작을 하면, numba 등의 라이브러리를 통해 동적 최적화 기술을 이용하여 최적화 (정상 동작 확인 후 핫스팟 가속; 진입 조건 = P6 회귀 그린)
+
 ### Phase 2 Plan 01 Decisions (locked during execution)
 
 1. **`mxe_accum` is 2D `(GTX_NEST_NUM, GTX_SPU_NUM)` float32** verbatim per `vendor/gtx_cpp_reference/gtx/gtx_npu.h:1254`. Supersedes CONTEXT.md D-06 which incorrectly stated 4D `(NEST, SPU, M_TILE, N_TILE)`. P4 MM op should reference this not D-06.

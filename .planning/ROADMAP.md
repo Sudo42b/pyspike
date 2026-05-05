@@ -24,6 +24,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 - [ ] **Phase 4: MM Subsystem** — `gemm_core`, all MM/MMC variants, `firmware_mm_op` packed-rs1, `mxe_accum` chain, Mode 4 dispatch, **first .elf regression passes strict mode**
 - [ ] **Phase 5: VEC/ACT/Pool** — Vector ops (SASMD/DOT/VSUM/CLAMP), forward+reversed activations, pooling, format_cvt (incl. FP8 codec), per-op `verify_ref` oracle suite
 - [ ] **Phase 6: Verification & Wheel** — `verify.py` ported as `riscv.gtx._verify`, full .elf regression harness (strict mode), `pip install spike` ship gate, cibuildwheel matrix green
+- [ ] **Phase 7: Numba Dynamic Optimization** — 정상 동작 확인 후 numba 등 동적 최적화 라이브러리로 핫스팟 가속 (P6 회귀 그린이 진입 조건)
 
 ---
 
@@ -218,6 +219,16 @@ golden)와 ULP 허용오차 내로 일치한다.
 | 5. VEC/ACT/Pool | VEC-01, VEC-02, VEC-03, VEC-04, VEC-05, ACT-01, ACT-02, ACT-03, ACT-04, ACT-05, VRF-02 | 11 |
 | 6. Verification & Wheel | VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04 | 6 |
 | **Total** | | **42 / 42** |
+
+### Phase 7: 제대로 동작을 하면, numba등의 라이브러리를 통해 동적 최적화 기술을 이용하여 최적화 해줘.
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 6
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 7 to break down)
 
 ---
 
