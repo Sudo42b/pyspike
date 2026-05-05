@@ -40,6 +40,10 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 - ✓ **GTX-REF-01**: 기존 C++ gtx 소스를 `vendor/gtx_cpp_reference/` 스냅샷으로 두어
   golden 비교용 baseline + 포팅 시 ground-truth로 활용 — **Validated in Phase 1: Foundation**
   (D-04 `https://github.com/Sudo42b/gtx_spike` submodule 등록, D-06 wheel 미포함)
+- ✓ **GTX-DMA-01**: DMA load/store/copy + SVR + transpose + DDR init/dump
+  (left-to-right / `GTX_DDR_REVERSED` 양 모드) 구현 — **Validated in Phase 3: DMA & DDR I/O**
+  (DMA-01..05 + DISP-03 closed; 6 exec_* helpers + DeferredDdrStore + 2-level custom0 dispatch
+  + 4-mode router + ddr doubling-grow + GTX_DDR_REVERSED bit-exact round-trip; 179/179 P3 tests green)
 
 ### Active
 
@@ -51,8 +55,7 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   워프 루프 상태머신(4-mode 라우팅) 구현
 - [ ] **GTX-MM-01**: MM 서브시스템 (`gemm_core`, `exec_mm*`, `mxe_accum`,
   `firmware_mm_op`) 우선 구현 — **NPU 핵심**
-- [ ] **GTX-DMA-01**: DMA load/store/copy + SVR + transpose + DDR init/dump
-  (left-to-right / `GTX_DDR_REVERSED` 양 모드) 구현
+<!-- GTX-DMA-01 → Validated in Phase 3 (moved above) -->
 - [ ] **GTX-VEC-01**: VEC 서브시스템 (SASMD add/sub/mul/div, DOT/VSUM, CLAMP,
   L1/L0 분기) 구현 — VSUM FP32 누적 정밀도 규약 포함
 - [ ] **GTX-ACT-01**: ACT 서브시스템 (RELU/SOFTMAX/ESUM 정방향, PRELU/GELU/TANH/SIGM
@@ -61,6 +64,8 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   읽기·쓰기 (`wr_spr`, `rd_spr`, `RDSPR` writeback) 구현
 - [ ] **GTX-DISP-01**: 통합 오피코드 라우터 `dispatch_iss_opcode` (0=MM, 1=VEC,
   2=ACT, 3=DMA) + gem5 간소화(0x04–0x07) / ISS full(0x00–0x7F) 양 인코딩 공존
+  — Phase 3 부분 진행: 4-mode 라우터(`dispatch_4mode`) + DMA-only `dispatch_iss_opcode`
+  스텁 land (DISP-03). MM/VEC/ACT funct7 fillers는 P4/P5 잔여
 - [ ] **GTX-DISASM-01**: `gtx_npu_disasm.inc`에 대응하는 `disasm_insn_t` 테이블을
   Python `get_disasms()`로 노출
 - [ ] **GTX-VERIFY-01**: 기존 `verify.py` (DDR FP16 ULP/atol 비교) 자산을 pyspike에
@@ -176,4 +181,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-04 after Phase 1 complete (Foundation: FP16 helpers + GtxMemory + riscv.gtx package skeleton + git submodule + pyproject.toml pivot landed; 13/13 tests pass)*
+*Last updated: 2026-05-05 after Phase 3 complete (DMA & DDR I/O: 6 DMA exec_* helpers + DeferredDdrStore + 2-level custom0 dispatch + 4-mode router + DDR doubling-grow + GTX_DDR_REVERSED bit-exact round-trip; DMA-01..05 + DISP-03 closed; 179/179 P3 tests pass)*
