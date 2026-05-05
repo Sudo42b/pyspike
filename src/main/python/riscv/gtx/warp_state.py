@@ -28,6 +28,9 @@ class WarpState:
     is_sloop: bool = False  # P3+ DMA paths only
     tmu_id: int = 0   # NEST id selected by start_p
     curr_id: int = 0  # SPU id (T-loop) or GDMAC id (S-loop)
+    # P3: process-lifetime sentinel -- set True by WSPLIT, NOT cleared by reset()
+    # (matches C++ gtx_npu.h:1251 field initializer; see 03-RESEARCH Pitfall 7)
+    wsplit_seen: bool = False
 
     def reset(self) -> None:
         self.is_ploop = False
@@ -35,3 +38,4 @@ class WarpState:
         self.is_sloop = False
         self.tmu_id = 0
         self.curr_id = 0
+        # NOTE: wsplit_seen intentionally NOT reset -- see field comment above.

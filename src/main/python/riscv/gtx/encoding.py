@@ -63,3 +63,30 @@ GSPR_STARTS: int = 0x102
 GSPR_ENDS: int = 0x103
 GSPR_STARTT: int = 0x104
 GSPR_ENDT: int = 0x105
+
+# ----- ISS funct7 (custom0) -- DMA section, P3 -----
+GTX_ISS_F7_DMA_TPOSE: int = 0x38      # tpose (transpose)
+GTX_ISS_F7_DMA_FILL: int = 0x39       # fill
+GTX_ISS_F7_DMA_LD_ST: int = 0x40      # firmware DMA load/store/copy
+GTX_ISS_F7_DMA_3D: int = 0x41         # SVR + 3D variants (load_svr/store_svr/load_3d/store_3d)
+GTX_ISS_F7_DMA_MCAST_S2L: int = 0x42  # disasm-only stub in P3
+GTX_ISS_F7_DMA_LD_SVR_L1: int = 0x43  # load_svr_l1 alias
+GTX_ISS_F7_DMA_MCAST_GS: int = 0x44   # disasm-only stub (mcast_g2s/mcast_s2s/copy_mem share funct7)
+GTX_ISS_F7_DMA_ST_SVR_L1: int = 0x45  # store_svr_l1 alias
+GTX_ISS_F7_CREDIT_ST_CHK: int = 0x53  # credit_st_chk -- flush trigger when is_sloop
+
+# ----- GSPR addresses for firmware operand staging --
+# AUTHORITATIVE: gtx_params.h:38-41 (verified by orchestrator, revision iter 1).
+# Do NOT copy these from older drafts -- the original drafted 0x110..0x113 values
+# were WRONG and would silently break GSPR-staged operand reads.
+GSPR_GTX_OPERAND1: int = 0x001
+GSPR_GTX_OPERAND2: int = 0x002
+GSPR_GTX_OPERAND3: int = 0x003
+GSPR_GTX_OPCODE:   int = 0x004
+
+# ----- LSPR per-SPU SPM addresses --
+# AUTHORITATIVE: gtx_params.h:64-67. Used by tpose / fill / future LSPR-staged ops.
+LSPR_SPM_ADDRA: int = 0x900
+LSPR_SPM_ADDRB: int = 0x901
+LSPR_SPM_ADDRC: int = 0x902
+LSPR_SPM_ADDRR: int = 0x903

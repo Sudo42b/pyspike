@@ -34,6 +34,9 @@ GTX_DDR_DEFAULT_SIZE_BYTES: int = 4 * 1024 * 1024 * 1024   # 4 GiB
 # DDR I/O (D-03)
 GTX_DDR_BUS_WORD_BYTES: int = 32   # 32-byte bus word for GTX_DDR_REVERSED reversal
 
+# DDR base physical address (firmware GTX_MAIN_BASE -- gtx_params.h:24)
+GTX_DDR_BASE: int = 0x370000000
+
 # SPR address ranges (D-11)
 GSPR_BASE: int = 0x000
 GSPR_END: int = 0x3FF
