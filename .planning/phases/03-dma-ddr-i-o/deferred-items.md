@@ -31,3 +31,8 @@ to Plan 02's wave 2 implementation.
 **Action for Plan 02 team:** investigate. Plan 04's full Plan-04 + adjacent
 suite (test_dispatch_4mode + test_dispatch + test_dma_engine + test_ddr_modes
 = 72 tests) all pass — Plan 04 is unaffected.
+
+**RESOLVED (post-doc):** Plan 02 added two further commits (`13a7b78` /
+`3292a7f` / `45090f2` / `7d5ac22`) after Plan 04's GREEN, completing its
+own ops/dma.py active handlers + disasm stubs. Final full-suite run is
+165/165 green. This deferred item is closed; kept here for paper-trail only.
