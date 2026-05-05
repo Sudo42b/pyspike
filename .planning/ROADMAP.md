@@ -20,7 +20,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 
 - [x] **Phase 1: Foundation** — FP16 helpers, NumPy memory layer, package skeleton, NumPy/cp38 packaging baseline (completed 2026-05-04)
 - [ ] **Phase 2: Skeleton & Disasm** — `GtxNpu(ROCC)` skeleton, SPR routing, disasm table, reset/WJOIN, custom0/1 dispatch shells
-- [ ] **Phase 3: DMA & DDR I/O** — Full DMA op set, deferred-store flush, DDR hex I/O (LTR + reversed), Mode 1/3 dispatch
+- [x] **Phase 3: DMA & DDR I/O** — Full DMA op set, deferred-store flush, DDR hex I/O (LTR + reversed), Mode 1/3 dispatch (completed 2026-05-05)
 - [ ] **Phase 4: MM Subsystem** — `gemm_core`, all MM/MMC variants, `firmware_mm_op` packed-rs1, `mxe_accum` chain, Mode 4 dispatch, **first .elf regression passes strict mode**
 - [ ] **Phase 5: VEC/ACT/Pool** — Vector ops (SASMD/DOT/VSUM/CLAMP), forward+reversed activations, pooling, format_cvt (incl. FP8 codec), per-op `verify_ref` oracle suite
 - [ ] **Phase 6: Verification & Wheel** — `verify.py` ported as `riscv.gtx._verify`, full .elf regression harness (strict mode), `pip install spike` ship gate, cibuildwheel matrix green
@@ -96,7 +96,7 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. S-loop deferred-store: a sequence `start_p → start_s → exec_dma_2d(STORE) → end_s → exec_dma_2d(STORE) → end_p` flushes both stores in order at `end_p`, and a DDR dump taken before `end_p` shows the pre-store contents (deferred queue verified by direct inspection of `mem.deferred_ddr_stores`).
   5. Mode 1 (no loop, broadcast 64) and Mode 3 (P+S, single NEST DMA) routing in `_dispatch` selects the same `(nest_id, spu_id)` set as `gtx_npu_dispatch.cc` for synthesized firmware traces (parametrized test over a fixture of (loop_state, opcode) tuples).
 
-**Plans:** 5 plans
+**Plans:** 5/5 plans complete
 - [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
 - [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
 - [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
@@ -191,7 +191,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 |-------|----------------|--------|-----------|
 | 1. Foundation | 5/5 | Complete   | 2026-05-04 |
 | 2. Skeleton & Disasm | 0/5 | Not started | - |
-| 3. DMA & DDR I/O | 2/5 | In Progress | - |
+| 3. DMA & DDR I/O | 5/5 | Complete   | 2026-05-05 |
 | 4. MM Subsystem | 0/? | Not started | - |
 | 5. VEC/ACT/Pool | 0/? | Not started | - |
 | 6. Verification & Wheel | 0/? | Not started | - |

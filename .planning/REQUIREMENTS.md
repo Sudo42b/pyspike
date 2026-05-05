@@ -72,11 +72,11 @@
   `exec_transpose`, `exec_fill` 전체 ops 구현
 - [x] **DMA-02**: `firmware_dma_op` 패킹 인코딩 디코딩 — funct3 = 000(LOAD) /
   001(STORE) / 010(COPY) 분기
-- [ ] **DMA-03**: S-loop L2→DDR 스토어 deferred-store 큐, `endp`에서 일괄 flush —
+- [x] **DMA-03**: S-loop L2→DDR 스토어 deferred-store 큐, `endp`에서 일괄 flush —
   순서가 C++ 동작과 동일
 - [x] **DMA-04**: DDR hex I/O 두 모드(`ddr_init_from_file`, `ddr_dump_to_file`)
   — 표준 LTR(기본) + `GTX_DDR_REVERSED=1` (256-bit 버스 워드 역순) 모두 동작
-- [ ] **DMA-05**: DMA 라운드트립 테스트 — Python에서 L1에 패턴 쓰고 → DDR로 store
+- [x] **DMA-05**: DMA 라운드트립 테스트 — Python에서 L1에 패턴 쓰고 → DDR로 store
   → DDR에서 다시 load → 원본과 bit-exact 일치
 
 ### MM (Matrix Multiplication — NPU 핵심)
@@ -206,9 +206,9 @@
 | DISP-03 | Phase 3 | Complete |
 | DMA-01 | Phase 3 | Complete |
 | DMA-02 | Phase 3 | Complete |
-| DMA-03 | Phase 3 | Pending |
+| DMA-03 | Phase 3 | Complete |
 | DMA-04 | Phase 3 | Complete |
-| DMA-05 | Phase 3 | Pending |
+| DMA-05 | Phase 3 | Complete |
 | MM-01 | Phase 4 | Pending |
 | MM-02 | Phase 4 | Pending |
 | MM-03 | Phase 4 | Pending |
