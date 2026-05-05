@@ -124,12 +124,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. **First .elf GEMM regression passes strict mode**: `pyspike --extlib=riscv.gtx tests/gtx/data/elf/mm_basic.elf` with `GTX_DDR_DUMP` set produces a hex file that `verify.py --fp16 --ulp 1 --atol 0.001 --strict` (where strict requires `exact_matches == total_fp16`) reports as PASS against `tests/gtx/data/golden/mm_basic_n1s16.hex`.
   5. Mode 4 (P+T) dispatch routes a synthesized `firmware_mm_op` to exactly the `(tmu_id, curr_id)` SPU when `is_ploop=True, is_tloop=True`; `mxe_accum[other_nest][other_spu]` remains untouched (verified by snapshot diff).
 
-**Plans:** 5 plans
-- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
-- [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
-- [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
-- [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
-- [x] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
+**Plans:** 5 plans (Wave 0 scaffold + 3 parallel Wave 1 compute modules + Wave 2 integration)
+- [ ] 04-mm-subsystem/04-01-PLAN.md — Wave 0 scaffold (test scaffolds + _verify_minimal + mm_basic.elf fixture + golden hex)
+- [ ] 04-mm-subsystem/04-02-PLAN.md — Wave 1 gemm_core.py (explicit 3-loop FP32 accumulate) — MM-01
+- [ ] 04-mm-subsystem/04-03-PLAN.md — Wave 1 mm_engine.py (decode_firmware_mm_args + 5 variant helpers) — MM-03
+- [ ] 04-mm-subsystem/04-04-PLAN.md — Wave 1 ops/mm.py (10 @handlers + Pitfall F NOP-safety) — MM-02 + MM-03
+- [ ] 04-mm-subsystem/04-05-PLAN.md — Wave 2 chain tests + strict-mode .elf regression — MM-04 + MM-05
 **UI hint**: no
 
 ---
