@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-05T14:59:53.809Z"
+status: planning
+last_updated: "2026-05-05T15:10:06.110Z"
 progress:
   total_phases: 6
   completed_phases: 3
@@ -35,9 +35,9 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 Phase: 03 (dma-ddr-i-o) — COMPLETE (pending /gsd:verify-work 3)
 Plan: ALL 5 plans landed across 3 waves
 
-- **Phase:** 3
-- **Plan:** 01 (dma-engine) ✓; 03 (ddr-io) ✓; 02 (ops-dma) ✓; 04 (dispatch-4mode) ✓; 05 (flush-roundtrip) ✓
-- **Status:** Phase 03 complete — Wave 3 done; awaiting verifier
+- **Phase:** 4
+- **Plan:** Not started
+- **Status:** Ready to plan
 - **Progress:** [██████████] 100%
 
 ## Performance Metrics
@@ -196,9 +196,11 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 Phase 03 Wave 3 (Plan 05 flush-roundtrip) complete — Phase 3 DONE pending
 `/gsd:verify-work 3`. **Plan 05** executed TDD-RED-then-GREEN with 3 atomic
 `--no-verify` commits:
+
 - `542ef53` (test Task 1 RED): 11 deferred-store dual-trigger tests; 6 pass
   already (queue/flush/Pitfall-7/!wsplit-seen-suppression/dispatch-no-flush),
   5 fail awaiting wiring.
+
 - `1fc5eb0` (feat Task 1 GREEN): wired `_do_endp` flush when `!wsplit_seen`,
   `wsplit`/`wsplit_custom0` set `wsplit_seen=True`, `_credit_st_chk` flush when
   `is_sloop`, `dispatch_iss_opcode` flush when funct7==CREDIT_ST_CHK and
@@ -206,6 +208,7 @@ Phase 03 Wave 3 (Plan 05 flush-roundtrip) complete — Phase 3 DONE pending
   `flush_deferred_ddr_stores=lambda: None` + `deferred_ddr_stores=[]`
   (Rule 1 fix for now-required API on stub fakes). All 11 deferred-store
   tests + 16 test_warp tests green.
+
 - `d321c19` (feat Task 2 + sign-off): 3 round-trip integration tests
   (LTR, REVERSED, L1->L1 ancillary copy) + VALIDATION.md frontmatter +
   Approval flip. All 3 tests passed on first run because Plans 01-04 had
