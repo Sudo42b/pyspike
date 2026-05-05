@@ -51,20 +51,52 @@ def handler(*, kind: str, funct7: Optional[int] = None,
     return decorator
 
 
-def collect_for_kind(kind: str) -> Dict[int, Callable]:
-    """Build dispatch dict for a given kind. Plan 02-03 fills the registry,
-    plan 01 returns empty dicts since no handlers are registered yet."""
-    out: Dict[int, Callable] = {}
+def collect_for_kind(kind: str):
+    """Build dispatch dict for a given kind.
+
+    For 'custom0': returns 2-level Dict[int, Dict[Optional[int], Callable]].
+        Outer key = funct7. Inner key = funct3 (when mask_funct3=True) or None
+        (when mask_funct3=False). The sentinel None key keeps P2 backwards
+        compatibility: the dispatcher tries None first, then synthesized funct3
+        if None is not present (see GtxNpu.custom0).
+    For 'custom1': returns flat Dict[int, Callable] keyed by funct3 (unchanged).
+    """
+    if kind == "custom1":
+        out_flat: Dict[int, Callable] = {}
+        for entry in _HANDLER_REGISTRY:
+            if entry["kind"] != "custom1":
+                continue
+            key = entry["funct3"]
+            if key is None:
+                raise ValueError(
+                    f"@handler custom1 missing funct3: mnemonic={entry['mnemonic']}"
+                )
+            out_flat[key] = entry["fn"]
+        return out_flat
+
+    if kind != "custom0":
+        raise ValueError(f"unknown kind: {kind!r}")
+
+    # 2-level for custom0: dict[funct7, dict[Optional[int], Callable]]
+    out_2level: Dict[int, Dict] = {}
     for entry in _HANDLER_REGISTRY:
-        if entry["kind"] != kind:
+        if entry["kind"] != "custom0":
             continue
-        key = entry["funct7"] if kind == "custom0" else entry["funct3"]
-        if key is None:
+        funct7 = entry["funct7"]
+        if funct7 is None:
             raise ValueError(
-                f"@handler entry missing key: kind={kind} mnemonic={entry['mnemonic']}"
+                f"@handler custom0 missing funct7: mnemonic={entry['mnemonic']}"
             )
-        out[key] = entry["fn"]
-    return out
+        inner_key: Optional[int] = (
+            entry["funct3"] if entry.get("mask_funct3") else None
+        )
+        sub = out_2level.setdefault(funct7, {})
+        if inner_key in sub:
+            raise ValueError(
+                f"duplicate handler: funct7=0x{funct7:02x} funct3={inner_key}"
+            )
+        sub[inner_key] = entry["fn"]
+    return out_2level
 
 
 def collect_disasms() -> list:

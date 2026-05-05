@@ -22,10 +22,16 @@ from typing import Callable, Dict
 from . import _registry
 
 
-def build_custom0_table(npu) -> Dict[int, Callable]:
-    """Build funct7 -> handler dict (closure-binding npu)."""
+def build_custom0_table(npu) -> Dict[int, Dict]:
+    """Build funct7 -> {funct3-or-None: bound-handler} 2-level dict.
+
+    Closure-binds npu so handlers can read npu.warp / npu.gspr / npu.mem.
+    Inner key None means "no funct3 sub-decomposition" (P2 backwards-compat).
+    Inner key int means "funct3 selector" (P3+ mask_funct3=True path).
+    """
     raw = _registry.collect_for_kind("custom0")
-    return {f7: _bind(fn, npu) for f7, fn in raw.items()}
+    return {f7: {f3: _bind(fn, npu) for f3, fn in sub.items()}
+            for f7, sub in raw.items()}
 
 
 def build_custom1_table(npu) -> Dict[int, Callable]:
@@ -40,3 +46,10 @@ def _bind(fn: Callable, npu) -> Callable:
     wrapped.__name__ = fn.__name__
     wrapped.__doc__ = fn.__doc__
     return wrapped
+
+
+# ----- 4-mode dispatch router (Plan 04) ---------------------------------
+# Defined in a sibling module to avoid Wave 2 file-write conflict with
+# Plan 02's table builders. Re-exported here so callers can import via
+# `from riscv.gtx.dispatch import dispatch_4mode` (stable public surface).
+from .dispatch_4mode import dispatch_4mode, dispatch_iss_opcode  # noqa: F401,E402

@@ -38,6 +38,10 @@ class GtxNpu(isa.ROCC):
         super().__init__()
         self.mem = GtxMemory()
         self.warp = WarpState()
+        # P3 D-05: deferred S-loop L2->DDR store queue. Pushed by ops/dma.py
+        # @handler firmware_dma_store (S-loop branch), flushed by ops/control.py
+        # end_p (when !wsplit_seen) or ops/dma.py credit_st_chk (when is_sloop).
+        self.deferred_ddr_stores: list = []
         # Layered SPR storage (D-11 + research §390-396 strong recommendation):
         #   gspr: flat dict (single instance)
         #   nspr: list of dict, length GTX_NEST_NUM
@@ -112,15 +116,58 @@ class GtxNpu(isa.ROCC):
                 self.lspr[n][s][0x901] = 0
                 self.lspr[n][s][0x902] = 0
                 self.lspr[n][s][0x903] = 0
+        # P3 D-05: clear deferred queue on reset (wsplit_seen NOT cleared --
+        # see WarpState.reset() field comment + 03-RESEARCH Pitfall 7)
+        self.deferred_ddr_stores.clear()
         # Warp state reset
         self.warp.reset()
 
     def custom0(self, proc, insn, xs1, xs2) -> int:
+        """2-level dispatch: funct7 -> {funct3-or-None: handler}.
+
+        Tries the no-sub-decomposition entry first (sentinel inner key None for
+        P2 backwards-compat); if absent, synthesizes funct3 from RoCC R-type
+        flags and tries the integer-keyed sub-table (P3+ mask_funct3=True path).
+        Unmapped routes return 0 (silent NOP, P5/P6 may upgrade to illegal).
+        """
         funct7 = insn.funct
-        handler = self._custom0.get(funct7)
+        sub_table = self._custom0.get(funct7)
+        if sub_table is None:
+            return 0
+        # P2 backwards-compat: try the non-decomposed entry first
+        handler = sub_table.get(None)
         if handler is None:
-            return 0   # silent NOP for unmapped funct7 (P3-P5 fill)
+            funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
+            handler = sub_table.get(funct3)
+        if handler is None:
+            return 0
         return handler(proc, insn, xs1, xs2)
+
+    def flush_deferred_ddr_stores(self) -> None:
+        """Direct port of gtx_npu_dma.cc:415-435.
+
+        Empties self.deferred_ddr_stores by performing each requested L2->DDR
+        per-row copy. Plan 05 wires the triggers (end_p when !wsplit_seen +
+        credit_st_chk when is_sloop); this plan only registers the API.
+        """
+        if not self.deferred_ddr_stores:
+            return
+        # Lazy-import to avoid circular ddr.py <- dma_engine.py <- this
+        from .ddr import ensure_ddr
+        from .params import GTX_L2_SIZE_BYTES
+        for req in self.deferred_ddr_stores:
+            for row in range(req.height):
+                ddr_off = req.ddr_off + row * req.ddr_stride
+                l2_off = (req.l2_off + row * req.l2_stride) % GTX_L2_SIZE_BYTES
+                copy_len = req.length
+                ensure_ddr(self.mem, ddr_off + copy_len)
+                copy_len = min(copy_len, self.mem._ddr_bytes.size - ddr_off)
+                copy_len = min(copy_len, GTX_L2_SIZE_BYTES - l2_off)
+                if copy_len > 0:
+                    self.mem._ddr_bytes[ddr_off:ddr_off + copy_len] = (
+                        self.mem.l2_byte(req.nest)[l2_off:l2_off + copy_len]
+                    )
+        self.deferred_ddr_stores.clear()
 
     def custom1(self, proc, insn, xs1, xs2) -> int:
         funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
