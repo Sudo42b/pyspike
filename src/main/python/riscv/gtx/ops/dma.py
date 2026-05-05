@@ -255,3 +255,63 @@ def _fill(npu, proc, insn, xs1, xs2):
     return dma_engine.exec_fill(
         npu.mem, nest_id=nest, spu_id=spu,
         length=length, fill_val=fill_val, addr_r=addr_r)
+
+
+# ============================================================================
+# Disasm-only stubs (v2 deferral -- DMA-V2-01)
+#
+# Per 03-RESEARCH "P3 Scope vs v2 Deferral":
+#   load_3d, store_3d, mcast_s2l, mcast_g2s, mcast_s2s, copy_mem
+# are registered for disasm parity with C++ but body is NOP in P3.
+# ============================================================================
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_3D, funct3=4,
+         mnemonic='load_3d', mask_funct3=True)
+def _load_3d_stub(npu, proc, insn, xs1, xs2):
+    """v2 deferral (DMA-V2-01)."""
+    return 0
+
+
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_3D, funct3=5,
+         mnemonic='store_3d', mask_funct3=True)
+def _store_3d_stub(npu, proc, insn, xs1, xs2):
+    """v2 deferral."""
+    return 0
+
+
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_S2L,
+         mnemonic='mcast_s2l')
+def _mcast_s2l_stub(npu, proc, insn, xs1, xs2):
+    """v2 deferral."""
+    return 0
+
+
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_GS, funct3=0,
+         mnemonic='mcast_g2s', mask_funct3=True)
+def _mcast_g2s_stub(npu, proc, insn, xs1, xs2):
+    """v2 deferral."""
+    return 0
+
+
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_GS, funct3=2,
+         mnemonic='mcast_s2s', mask_funct3=True)
+def _mcast_s2s_stub(npu, proc, insn, xs1, xs2):
+    """v2 deferral."""
+    return 0
+
+
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_GS, funct3=3,
+         mnemonic='copy_mem', mask_funct3=True)
+def _copy_mem_stub(npu, proc, insn, xs1, xs2):
+    """v2 deferral."""
+    return 0
+
+
+# ============================================================================
+# credit_st_chk -- stub here; Plan 05 fills body with flush trigger.
+# ============================================================================
+@handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_ST_CHK,
+         mnemonic='credit_st_chk')
+def _credit_st_chk(npu, proc, insn, xs1, xs2):
+    """Plan 05: triggers npu.flush_deferred_ddr_stores() when is_sloop."""
+    # Plan 05 body: if npu.warp.is_sloop: npu.flush_deferred_ddr_stores()
+    return 0
