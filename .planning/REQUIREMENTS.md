@@ -63,7 +63,7 @@
   `if insn.rs1 != 0: WRSPR (gem5 marker), else: MM/no-op fallback`.
 - [x] **DISP-02**: `custom1()` warp 루프 제어 (start/end P/S/T, split/join) +
   P/S/T 상태 머신 정확히 동작
-- [ ] **DISP-03**: 4-mode dispatch router (Mode 1: no loop / Mode 2: P only /
+- [x] **DISP-03**: 4-mode dispatch router (Mode 1: no loop / Mode 2: P only /
   Mode 3: P+S DMA / Mode 4: P+T compute) — NEST/SPU 라우팅 그룹이 C++과 일치
 
 ### DMA + DDR I/O
@@ -203,7 +203,7 @@
 | DISASM-01 | Phase 2 | Complete |
 | DISP-01 | Phase 2 | Complete |
 | DISP-02 | Phase 2 | Complete |
-| DISP-03 | Phase 3 | Pending |
+| DISP-03 | Phase 3 | Complete |
 | DMA-01 | Phase 3 | Complete |
 | DMA-02 | Phase 3 | Pending |
 | DMA-03 | Phase 3 | Pending |
