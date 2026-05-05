@@ -2,8 +2,8 @@
 phase: 3
 slug: dma-ddr-i-o
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-05-05
 ---
 
@@ -82,4 +82,11 @@ created: 2026-05-05
 - [ ] Feedback latency < 30s
 - [ ] `nyquist_compliant: true` set in frontmatter (after planner adds task `<automated>` blocks)
 
-**Approval:** pending
+**Approval:** ready
+
+*Sign-off conditions met (Plan 05 Task 2 final step):*
+- All 5 plan PLANs have `<automated>` blocks in every task `<verify>`
+- All 6 Wave 0 test scaffolds exist and are populated by their owning plans
+- Full P3 suite (`pytest tests/gtx/ -x --noconftest -o "addopts="`) is green
+  (179 passed at sign-off)
+- All 6 requirement IDs (DMA-01..05, DISP-03) closed
