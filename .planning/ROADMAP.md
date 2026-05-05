@@ -191,7 +191,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 |-------|----------------|--------|-----------|
 | 1. Foundation | 5/5 | Complete   | 2026-05-04 |
 | 2. Skeleton & Disasm | 0/5 | Not started | - |
-| 3. DMA & DDR I/O | 0/? | Not started | - |
+| 3. DMA & DDR I/O | 2/5 | In Progress | - |
 | 4. MM Subsystem | 0/? | Not started | - |
 | 5. VEC/ACT/Pool | 0/? | Not started | - |
 | 6. Verification & Wheel | 0/? | Not started | - |
