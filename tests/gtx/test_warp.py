@@ -29,7 +29,17 @@ from riscv.gtx.warp_state import WarpState
 
 
 def _fake_npu():
-    return SimpleNamespace(warp=WarpState())
+    """Stub npu shim with WarpState + a no-op flush_deferred_ddr_stores.
+
+    Plan 05 wired _do_endp to call npu.flush_deferred_ddr_stores() when
+    !wsplit_seen, so even a SimpleNamespace fake needs to expose the method
+    (default WarpState has wsplit_seen=False so the flush path is exercised).
+    """
+    return SimpleNamespace(
+        warp=WarpState(),
+        deferred_ddr_stores=[],
+        flush_deferred_ddr_stores=lambda: None,
+    )
 
 
 class _FakeProc:

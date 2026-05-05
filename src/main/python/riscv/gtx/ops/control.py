@@ -64,8 +64,17 @@ def _do_startp(npu, rs1: int, rs2: int) -> None:
 
 
 def _do_endp(npu, rs1: int, rs2: int) -> None:
-    """Port of gtx_npu_t::endp. Clears is_ploop. (P3+: DDR dump if !wsplit_seen.)"""
+    """Port of gtx_npu_t::endp. Clears is_ploop. P3 (Plan 05): flushes the
+    deferred-store queue when !wsplit_seen.
+
+    RESEARCH "Deferred-Store Flush Trigger" #1: simple firmware (no WSPLIT)
+    flushes here at end_p. Plan-style firmware (with WSPLIT) flushes via
+    credit_st_chk mid-execution instead -- see ops/dma.py:_credit_st_chk.
+    The wsplit_seen sentinel chooses the path. ROADMAP P3 success #4 path.
+    """
     npu.warp.is_ploop = False
+    if not npu.warp.wsplit_seen:
+        npu.flush_deferred_ddr_stores()
 
 
 def _do_startt(npu, rs1: int, rs2: int) -> None:
@@ -145,10 +154,14 @@ def ends(npu, proc, insn, xs1, xs2):
 
 @handler(kind='custom1', funct3=0b100, mnemonic='warp_split')
 def wsplit(npu, proc, insn, xs1, xs2):
-    """WSPLIT -- start timing section. P2: NOP (no cycle accounting yet).
+    """WSPLIT -- start timing section. P3 (Plan 05): sets wsplit_seen sentinel.
 
-    P3+ may add wsplit_cycle = total_npu_cycles tracking + wsplit_seen flag.
+    The wsplit_seen flag determines which deferred-store flush trigger fires:
+    when set, end_p suppresses its flush so plan-style firmware (which flushes
+    mid-execution via credit_st_chk) doesn't double-flush. See 03-RESEARCH
+    "Deferred-Store Flush Trigger".
     """
+    npu.warp.wsplit_seen = True
     return 0
 
 
@@ -193,7 +206,11 @@ def endp(npu, proc, insn, xs1, xs2):
 # ============================================================================
 @handler(kind='custom0', funct7=0x02, mnemonic='wsplit_c0')
 def wsplit_custom0(npu, proc, insn, xs1, xs2):
-    """custom0 funct7=0x02 WSPLIT (firmware variant). NOP in P2."""
+    """custom0 funct7=0x02 WSPLIT (firmware variant). P3 (Plan 05): sets
+    wsplit_seen sentinel -- mirror of custom1 funct3=0b100 wsplit handler.
+    See 03-RESEARCH "Deferred-Store Flush Trigger".
+    """
+    npu.warp.wsplit_seen = True
     return 0
 
 

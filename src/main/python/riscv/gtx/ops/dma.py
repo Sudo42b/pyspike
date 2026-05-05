@@ -312,6 +312,13 @@ def _copy_mem_stub(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_ST_CHK,
          mnemonic='credit_st_chk')
 def _credit_st_chk(npu, proc, insn, xs1, xs2):
-    """Plan 05: triggers npu.flush_deferred_ddr_stores() when is_sloop."""
-    # Plan 05 body: if npu.warp.is_sloop: npu.flush_deferred_ddr_stores()
+    """Direct port of gtx_npu_dispatch.cc:898-905 + gtx_npu_custom0.cc:684-694.
+
+    Plan-style firmware (uses WSPLIT/WJOIN) flushes deferred S-loop stores
+    here mid-execution, after T-loop signals via credit. ROADMAP success #4
+    tests the end_p flush; this trigger is for P4 mm_basic.elf (plan-style
+    firmware path). See 03-RESEARCH "Deferred-Store Flush Trigger" #2.
+    """
+    if npu.warp.is_sloop:
+        npu.flush_deferred_ddr_stores()
     return 0

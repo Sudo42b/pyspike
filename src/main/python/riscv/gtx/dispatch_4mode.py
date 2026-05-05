@@ -54,14 +54,15 @@ def dispatch_iss_opcode(npu, nest_id: int, spu_id: int, funct7: int,
         return 0
     if spu_id < 0 or spu_id >= GTX_SPU_NUM:
         return 0
-    # P3 NOPs for everything. P4/P5 will dispatch to op modules here.
-    # Plan 05 will replace this body with a credit_st_chk flush trigger:
-    #   if funct7 == GTX_ISS_F7_CREDIT_ST_CHK and npu.warp.is_sloop:
-    #       npu.flush_deferred_ddr_stores()
-    # Reference funct7 constants (used by P4/P5 fillers):
-    _ = (funct7, op1, op2, op3)  # silence linters; future entry point
-    _ = (GTX_ISS_F7_DMA_LD_SVR_L1, GTX_ISS_F7_DMA_ST_SVR_L1,
-         GTX_ISS_F7_CREDIT_ST_CHK)
+    # Plan 05: credit_st_chk flush trigger (mirror of ops/dma.py:_credit_st_chk
+    # for the dispatch_4mode entry path -- RESEARCH "3 call sites" lock-in).
+    if funct7 == GTX_ISS_F7_CREDIT_ST_CHK and npu.warp.is_sloop:
+        npu.flush_deferred_ddr_stores()
+        return 0
+    # P4/P5 will add MM/VEC/ACT cases here. Reference funct7 constants
+    # used by P4/P5 fillers:
+    _ = (op1, op2, op3)  # silence linters; future entry point
+    _ = (GTX_ISS_F7_DMA_LD_SVR_L1, GTX_ISS_F7_DMA_ST_SVR_L1)
     return 0
 
 
