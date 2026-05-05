@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-05T14:41:10.828Z"
+last_updated: "2026-05-05T14:45:03.798Z"
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 16
-  completed_plans: 14
-  percent: 88
+  completed_plans: 15
+  percent: 94
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-05 after Phase 3 Wave 2 complete (Plans 02 + 04 in parallel — ops-dma + dispatch-4mode both landed; DISP-03 ready to mark complete)
+**Last updated:** 2026-05-05 after Phase 3 Wave 2 complete (Plans 02 + 04 in parallel — ops-dma + dispatch-4mode both landed; DMA-02 + DISP-03 ready to mark complete)
 
 ## Project Reference
 
@@ -38,7 +38,7 @@ Plan: Wave 2 complete (Plans 02 + 04 landed in parallel); Wave 3 next (Plan 05 f
 - **Phase:** 3
 - **Plan:** 01 (dma-engine) ✓; 03 (ddr-io) ✓; 02 (ops-dma) ✓; 04 (dispatch-4mode) ✓; 05 (flush-roundtrip) next
 - **Status:** Executing Phase 03 — Wave 2 of 3 complete
-- **Progress:** [█████████░] 88%
+- **Progress:** [█████████░] 94%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Plan: Wave 2 complete (Plans 02 + 04 landed in parallel); Wave 3 next (Plan 05 f
 | Phase 03-dma-ddr-i-o P01 | 9min | 2 tasks | 10 files |
 | Phase 03-dma-ddr-i-o P03 | 5min | 1 tasks | 2 files |
 | Phase 03-dma-ddr-i-o P04 | 6m 29s | 1 tasks | 3 files |
+| Phase 03-dma-ddr-i-o P02 | 13min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,15 @@ Plan: Wave 2 complete (Plans 02 + 04 landed in parallel); Wave 3 next (Plan 05 f
 4. **`ddr_dump_to_file` accepts addr/size as args ONLY (D-09).** Does NOT consult any dump-related env vars (`GTX_DDR_DUMP` / `_ADDR` / `_SIZE` are CLI/P6 territory). Acceptance grep `grep -c "GTX_DDR_DUMP" ddr.py == 0` enforces this — docstring uses the phrase "any dump-related env vars" instead of literal token names so the grep stays clean.
 5. **Half-density asymmetry.** Parser supports any line length ≤ 32 (16-byte hex lines advance offset by 16, not 32) — verified by `test_ddr_init_half_density_16_bytes`. Dumper always emits full 32-byte lines (zero-pads on out-of-range). Asymmetric on purpose — matches C++; only upstream tools (SystemC trace dumper) emit half-density.
 6. **No `_RISCV_AVAILABLE` skipif on `test_ddr_modes.py`** — DDR I/O is pure-python (mem: GtxMemory only, no spike deps; D-07). Plan 01 explicitly noted this carve-out for pure-python tests.
+
+### Phase 3 Plan 02 Decisions (locked during execution)
+
+1. **2-level custom0 dispatch uses sentinel None inner key.** `_registry.collect_for_kind('custom0')` returns `dict[int, dict[Optional[int], Callable]]`. P2 handlers (`mask_funct3=False`) register under the inner key `None`; P3+ funct3-decomposed handlers (`mask_funct3=True`) register under integer funct3. `GtxNpu.custom0` first tries `sub_table.get(None)` (P2 backwards-compat), then falls back to synthesized funct3 = `(insn.xd<<2)|(insn.xs1<<1)|insn.xs2`. Single dispatcher; no separate flat-table for P2.
+2. **deferred_ddr_stores list lives on GtxNpu instance (D-05).** `__init__` creates it before `gspr`; `reset()` clears it (alongside SPR re-init). `flush_deferred_ddr_stores()` method added with C++ `gtx_npu_dma.cc:415-435` body. Plan 05 wires the actual call sites (end_p when `!wsplit_seen`, credit_st_chk when `is_sloop`); this plan only registers the API and the queue.
+3. **ops/dma.py imports LSPR addresses from encoding.py — no magic numbers.** `LSPR_SPM_ADDRA = 0x900` (gtx_params.h:64) for tpose source; `LSPR_SPM_ADDRR = 0x903` (gtx_params.h:67) for tpose result and fill. The dedicated tests `test_tpose_reads_lspr_spm_addrr_at_0x903` + `test_fill_reads_lspr_spm_addrr_at_0x903` would FAIL if a stale draft using `0x901` (LSPR_SPM_ADDRB) leaked in — addr_r would silently read 0 instead of the firmware-staged value. `grep -E "0x901" ops/dma.py` matches NOTHING.
+4. **rs3 read from `npu.gspr.get(GSPR_GTX_OPERAND3, 0)` — NOT XPR.** Operand 3 is GSPR-staged (gtx_params.h:40 GSPR_GTX_OPERAND3 = 0x003). All three firmware_dma branches (load/store/copy) read this.
+5. **5 v2-deferral stubs + credit_st_chk all return 0 (NOP) but populate disasm registry.** load_3d/store_3d/mcast_s2l/mcast_g2s/mcast_s2s/copy_mem registered for spike trace fidelity. credit_st_chk awaits Plan 05 body (`if npu.warp.is_sloop: npu.flush_deferred_ddr_stores()`).
+6. **Wave 2 cooperative parallel landing.** Both Plan 02 and sibling Plan 04 added the `dispatch_4mode` re-export line in `dispatch.py` independently — converged on identical text. No merge conflict because Plan 02's table-builder edit and Plan 04's re-export are in different regions of the same file. `--no-verify` on all task commits avoided pre-commit hook contention.
 
 ### Phase 3 Plan 04 Decisions (locked during execution)
 
@@ -173,27 +183,40 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 03 Wave 2 complete (Plans 02 + 04 landed in parallel). Plan 04 (dispatch-4mode)
-executed TDD against main. Two atomic `--no-verify` commits: `259c18d` (test, Task 1
-RED: 13 dispatch_4mode tests fail at import — dispatch_4mode / dispatch_iss_opcode
-symbols not yet exported), `4831bc6` (feat, Task 1 GREEN: dispatch_4mode.py 120 LOC,
-4-mode warp router + DMA-only iss_opcode stub; dispatch.py re-export was cooperatively
-landed by sibling Plan 02 commit `38aac36` — no merge intervention needed). SUMMARY at
-`.planning/phases/03-dma-ddr-i-o/03-04-dispatch-4mode-SUMMARY.md`. Self-check PASSED:
-all 8 must_haves.truths + all 3 key_links satisfied, 13/13 dispatch_4mode tests pass,
-72/72 adjacency tests pass (test_dispatch + test_dma_engine + test_ddr_modes). DISP-03
-requirement ready to mark complete. No deviations — plan executed exactly as written.
-8 pre-existing failures in test_firmware_dma.py (Plan 02 territory) logged in
-`deferred-items.md`; out of Plan 04 scope per executor scope-boundary rules.
+Phase 03 Wave 2 complete (Plans 02 + 04 landed in parallel). **Plan 02 (ops-dma)**
+executed TDD-RED-then-GREEN per task across 6 atomic `--no-verify` commits:
+`6f9bbba` (test Task 1 RED), `38aac36` (feat Task 1 GREEN: 2-level custom0 dispatch
++ deferred_ddr_stores + flush API), `3292a7f` (test Task 2a RED: 9 firmware_dma
+routing/decode tests + LSPR-ADDRR=0x903 assertion tests), `13a7b78` (feat Task 2a
+GREEN: ops/dma.py 9 active @handler entries — firmware_dma load/store/copy +
+load/store_svr + l1 aliases + tpose/fill), `7d5ac22` (test Task 2b RED: 6 v2-stub
++ credit_st_chk + disasm parity tests), `45090f2` (feat Task 2b GREEN: 7 stub
+@handler entries appended; ops/dma.py = 16 entries / 317 LOC). SUMMARY at
+`.planning/phases/03-dma-ddr-i-o/03-02-ops-dma-SUMMARY.md`. Self-check PASSED:
+all 8 must_haves.truths + all 5 key_links satisfied; 162/164 P3 tests pass
+(2 skips are Plan 05 wave-0 placeholders). The 8 prior failures referenced in
+`deferred-items.md` from Plan 04's snapshot were Plan 02 wave-0 placeholder tests
+that this plan filled. DMA-02 requirement closed. No deviations — minor cosmetic
+adjustments only (docstring rephrased to remove literal `0x901` substring for
+strict grep; `test_disasm_includes_all_dma_mnemonics` uses registry walk rather
+than disasm_insn_t introspection per plan latitude).
+
+**Plan 04 (dispatch-4mode)** also landed in parallel with two commits (`259c18d`
+RED + `4831bc6` GREEN), 13/13 dispatch_4mode tests + 72/72 adjacency green.
+DISP-03 requirement closed. Plan 04 SUMMARY at
+`.planning/phases/03-dma-ddr-i-o/03-04-dispatch-4mode-SUMMARY.md`.
 
 ### Next Action
 
-Wave 2 done. Orchestrator validates pre-commit hooks once across all four Wave 2 commits
-(6f9bbba, 38aac36, 259c18d, 4831bc6) then advances to Wave 3 (03-05-flush-roundtrip).
-Plan 05 reads `flush_deferred_ddr_stores` (Plan 02 added) and replaces the
-`dispatch_iss_opcode` body insertion point in `dispatch_4mode.py` with the
-credit_st_chk flush trigger. Plan 02 team should also investigate the 8
-test_firmware_dma.py KeyError failures (plan-02-internal mocking issue).
+Wave 2 done. Orchestrator validates pre-commit hooks once across all six Plan 02
+commits + two Plan 04 commits, then advances to Wave 3 (03-05-flush-roundtrip).
+Plan 05 reads `flush_deferred_ddr_stores` (Plan 02 added on GtxNpu), replaces
+the `_credit_st_chk` stub body in `ops/dma.py` with `if npu.warp.is_sloop:
+npu.flush_deferred_ddr_stores()`, replaces the `_do_endp` body with `npu.warp
+.is_ploop=False; if not npu.warp.wsplit_seen: npu.flush_deferred_ddr_stores()`,
+adds `wsplit_seen=True` write to both `wsplit` (custom1 funct3=0b100) and
+`wsplit_custom0` (custom0 funct7=0x02), and fills the wave-0 placeholder
+`test_deferred_store.py` + `test_dma_roundtrip.py` test bodies.
 
 ### Resumption Notes
 

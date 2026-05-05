@@ -70,7 +70,7 @@
 
 - [x] **DMA-01**: `exec_dma_2d`, `exec_load_svr`, `exec_store_svr`,
   `exec_transpose`, `exec_fill` 전체 ops 구현
-- [ ] **DMA-02**: `firmware_dma_op` 패킹 인코딩 디코딩 — funct3 = 000(LOAD) /
+- [x] **DMA-02**: `firmware_dma_op` 패킹 인코딩 디코딩 — funct3 = 000(LOAD) /
   001(STORE) / 010(COPY) 분기
 - [ ] **DMA-03**: S-loop L2→DDR 스토어 deferred-store 큐, `endp`에서 일괄 flush —
   순서가 C++ 동작과 동일
@@ -205,7 +205,7 @@
 | DISP-02 | Phase 2 | Complete |
 | DISP-03 | Phase 3 | Complete |
 | DMA-01 | Phase 3 | Complete |
-| DMA-02 | Phase 3 | Pending |
+| DMA-02 | Phase 3 | Complete |
 | DMA-03 | Phase 3 | Pending |
 | DMA-04 | Phase 3 | Complete |
 | DMA-05 | Phase 3 | Pending |
