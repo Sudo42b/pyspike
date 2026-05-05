@@ -380,3 +380,91 @@ def test_fill_reads_lspr_spm_addrr_at_0x903(monkeypatch):
     assert captured["length"] == 64
     assert captured["fill_val"] == 0xBEEF
     assert captured["addr_r"] == 0xCAFE0000
+
+
+# ============================================================================
+# Task 2b: disasm-only stubs (load_3d/store_3d/mcast_*/copy_mem) + credit_st_chk
+# ============================================================================
+
+def test_firmware_dma_funct7_0x41_funct3_4_load_3d_is_nop():
+    """funct7=0x41 funct3=4 (load_3d) is a v2 deferral disasm-only stub:
+    returns 0 and does NOT touch deferred_ddr_stores."""
+    npu = _make_npu()
+    proc = _make_proc()
+    # synthesize funct3=4: xd=1, xs1=0, xs2=0 -> (1<<2)|(0<<1)|0 = 4
+    insn = _make_insn(funct=0x41, xd=1, xs1=0, xs2=0, rs1=1, rs2=2)
+    rc = npu.custom0(proc, insn, 0, 0)
+    assert rc == 0
+    assert npu.deferred_ddr_stores == []
+
+
+def test_firmware_dma_funct7_0x41_funct3_5_store_3d_is_nop():
+    """funct7=0x41 funct3=5 (store_3d) v2 deferral stub returns 0."""
+    npu = _make_npu()
+    proc = _make_proc()
+    # synthesize funct3=5: xd=1, xs1=0, xs2=1 -> 5
+    insn = _make_insn(funct=0x41, xd=1, xs1=0, xs2=1, rs1=1, rs2=2)
+    rc = npu.custom0(proc, insn, 0, 0)
+    assert rc == 0
+
+
+def test_firmware_dma_mcast_funct7_0x42_is_nop():
+    """funct7=0x42 (mcast_s2l) v2 deferral stub returns 0."""
+    npu = _make_npu()
+    proc = _make_proc()
+    insn = _make_insn(funct=0x42, xd=0, xs1=0, xs2=0, rs1=1, rs2=2)
+    rc = npu.custom0(proc, insn, 0, 0)
+    assert rc == 0
+
+
+def test_firmware_dma_mcast_funct7_0x44_funct3_branches_are_nop():
+    """funct7=0x44 funct3=0/2/3 (mcast_g2s/mcast_s2s/copy_mem) v2 deferral stubs."""
+    npu = _make_npu()
+    proc = _make_proc()
+    for f3 in (0, 2, 3):
+        xd = (f3 >> 2) & 1
+        xs1_bit = (f3 >> 1) & 1
+        xs2_bit = f3 & 1
+        insn = _make_insn(funct=0x44, xd=xd, xs1=xs1_bit, xs2=xs2_bit,
+                          rs1=1, rs2=2)
+        rc = npu.custom0(proc, insn, 0, 0)
+        assert rc == 0, f"funct3={f3} stub did not return 0"
+
+
+def test_credit_st_chk_p3_stub_returns_zero():
+    """funct7=0x53 (credit_st_chk) stub returns 0 in Plan 02; Plan 05 will
+    replace body with `if npu.warp.is_sloop: npu.flush_deferred_ddr_stores()`."""
+    npu = _make_npu()
+    proc = _make_proc()
+    insn = _make_insn(funct=0x53, xd=0, xs1=0, xs2=0, rs1=0, rs2=0)
+    rc = npu.custom0(proc, insn, 0, 0)
+    assert rc == 0
+
+
+def test_disasm_includes_all_dma_mnemonics():
+    """All 16 DMA mnemonics (9 active + 5 v2 stubs + 1 alias load_svr_l1 +
+    1 alias store_svr_l1 + credit_st_chk = total mix) registered in disasm.
+
+    Best-effort: walks the registry directly to confirm @handler decorators
+    fired for every expected mnemonic. Bypasses any disasm_insn_t introspection
+    quirks under different bindings.
+    """
+    from riscv.gtx import _registry as reg
+    seen_mnemonics = {
+        e["mnemonic"] for e in reg._HANDLER_REGISTRY
+        if e.get("mnemonic")
+    }
+    required = {
+        # active firmware_dma + load/store_svr + tpose/fill (9)
+        'load', 'store', 'copy',
+        'load_svr', 'store_svr',
+        'load_svr_l1', 'store_svr_l1',
+        'tpose', 'fill',
+        # v2 deferral stubs (5)
+        'load_3d', 'store_3d',
+        'mcast_s2l', 'mcast_g2s', 'mcast_s2s', 'copy_mem',
+        # credit_st_chk (1)
+        'credit_st_chk',
+    }
+    missing = required - seen_mnemonics
+    assert not missing, f"missing DMA mnemonics from @handler registry: {missing}"
