@@ -44,6 +44,12 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   (left-to-right / `GTX_DDR_REVERSED` 양 모드) 구현 — **Validated in Phase 3: DMA & DDR I/O**
   (DMA-01..05 + DISP-03 closed; 6 exec_* helpers + DeferredDdrStore + 2-level custom0 dispatch
   + 4-mode router + ddr doubling-grow + GTX_DDR_REVERSED bit-exact round-trip; 179/179 P3 tests green)
+- ✓ **GTX-MM-01**: MM 서브시스템 (`gemm_core` 3-loop FP32-accumulate, 5 MM/MMC variant
+  helpers, `firmware_mm_op` packed-rs1 디스패치, `mxe_accum` chain, Mode 4 isolation)
+  — **Validated in Phase 4: MM Subsystem** (MM-01..05 closed; gemm_core.py 150 LOC pure
+  NumPy + mm_engine.py 342 LOC + ops/mm.py 10 @handlers + WRSPR funct7=0x00 collision
+  re-dispatch + mm_basic.elf strict-mode regression returncode=0; 199/200 P4 tests pass,
+  1 graceful-skip on P6-deferred GTX_DDR_DUMP atexit hook)
 
 ### Active
 
@@ -53,8 +59,7 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   메모리 계층(GSPR/NSPR/LSPR + L0/L1/L2/DDR)을 NumPy ndarray(`np.float16`)로 표현
 - [ ] **GTX-CORE-02**: `custom0()`/`custom1()` 진입점에서 funct7 디스패치 + P/S/T
   워프 루프 상태머신(4-mode 라우팅) 구현
-- [ ] **GTX-MM-01**: MM 서브시스템 (`gemm_core`, `exec_mm*`, `mxe_accum`,
-  `firmware_mm_op`) 우선 구현 — **NPU 핵심**
+<!-- GTX-MM-01 → Validated in Phase 4 (moved above) -->
 <!-- GTX-DMA-01 → Validated in Phase 3 (moved above) -->
 - [ ] **GTX-VEC-01**: VEC 서브시스템 (SASMD add/sub/mul/div, DOT/VSUM, CLAMP,
   L1/L0 분기) 구현 — VSUM FP32 누적 정밀도 규약 포함
@@ -65,7 +70,9 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 - [ ] **GTX-DISP-01**: 통합 오피코드 라우터 `dispatch_iss_opcode` (0=MM, 1=VEC,
   2=ACT, 3=DMA) + gem5 간소화(0x04–0x07) / ISS full(0x00–0x7F) 양 인코딩 공존
   — Phase 3 부분 진행: 4-mode 라우터(`dispatch_4mode`) + DMA-only `dispatch_iss_opcode`
-  스텁 land (DISP-03). MM/VEC/ACT funct7 fillers는 P4/P5 잔여
+  스텁 land (DISP-03). Phase 4 추가: MM funct7=0x00/0x01 fillers + WRSPR collision
+  re-dispatch land (ops/mm.py 10 @handlers + ops/spr.py rs1!=0 fallback). VEC/ACT
+  funct7 fillers는 P5 잔여
 - [ ] **GTX-DISASM-01**: `gtx_npu_disasm.inc`에 대응하는 `disasm_insn_t` 테이블을
   Python `get_disasms()`로 노출
 - [ ] **GTX-VERIFY-01**: 기존 `verify.py` (DDR FP16 ULP/atol 비교) 자산을 pyspike에
@@ -74,6 +81,9 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   NPU 단위 테스트로 흡수해 op별 ULP 일치 확인
 - [ ] **GTX-FW-01**: 기존 펌웨어 회귀 (`run_tests_n1s16.sh`,
   `run_llext_tests.sh`에 대응되는 .elf 시퀀스)를 pyspike+Python NPU 환경에서 100% 통과
+  — Phase 4 부분 진행: `mm_basic.elf` strict-mode 회귀가 subprocess returncode=0으로
+  SPR→dispatch→DMA→compute→writeback plumbing chain 검증 완료. DDR dump auto-flush
+  atexit 훅(GTX_DDR_DUMP)은 P6 잔여로 dump-compare arm은 graceful-skip 상태
 - [ ] **GTX-PKG-01**: `pip install spike` 후 한 줄 (`from riscv.gtx import GtxNpu`)
   으로 NPU 인스턴스 생성·실행 가능, 펌웨어/golden hex 자산도 wheel에 포함
 - [ ] **GTX-RST-01**: `reset()` 시 `sp = 0x80100000` 초기화 + WJOIN 자동 종료
@@ -181,4 +191,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-05 after Phase 3 complete (DMA & DDR I/O: 6 DMA exec_* helpers + DeferredDdrStore + 2-level custom0 dispatch + 4-mode router + DDR doubling-grow + GTX_DDR_REVERSED bit-exact round-trip; DMA-01..05 + DISP-03 closed; 179/179 P3 tests pass)*
+*Last updated: 2026-05-06 after Phase 4 complete (MM Subsystem: gemm_core 3-loop FP32-accumulate + mm_engine 5 variant helpers + ops/mm 10 @handlers + WRSPR funct7=0x00 collision re-dispatch + mm_basic.elf strict-mode subprocess regression returncode=0; MM-01..05 closed; 199/200 P4 tests pass with 1 graceful-skip on P6-deferred GTX_DDR_DUMP atexit)*
