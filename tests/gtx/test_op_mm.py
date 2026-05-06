@@ -20,12 +20,42 @@ except ImportError:
 def test_gemm_core_explicit_3loop_matches_oracle():
     """MM-01: gemm_core uses explicit Python 3-loop FP32 accumulate (NOT np.matmul)
     per RESEARCH np.matmul Bit-Exactness section."""
-    pytest.skip("Wave 1: gemm_core not yet built (Plan 02)")
+    from riscv.gtx.gemm_core import gemm_core
+    np.random.seed(42)
+    A = np.random.randn(16, 16).astype(np.float16)
+    B = np.random.randn(16, 16).astype(np.float16)
+    actual = gemm_core(A, B)
+
+    A_f32 = A.astype(np.float32)
+    B_f32 = B.astype(np.float32)
+    expected_f32 = np.zeros((16, 16), dtype=np.float32)
+    for i in range(16):
+        for j in range(16):
+            s = np.float32(0.0)
+            for k in range(16):
+                s += A_f32[i, k] * B_f32[k, j]
+            expected_f32[i, j] = s
+    expected = expected_f32.astype(np.float16)
+
+    assert actual.dtype == np.float16
+    assert actual.shape == (16, 16)
+    # Bit-exact compare via uint16 view (D-15)
+    np.testing.assert_array_equal(actual.view(np.uint16), expected.view(np.uint16))
 
 
 def test_gemm_core_fp32_internal_not_fp16():
     """MM-01 / Pitfall 2: regression -- np.float16([1.0, 1e-4]*1000).sum() must NOT inf."""
-    pytest.skip("Wave 1: gemm_core not yet built (Plan 02)")
+    from riscv.gtx.gemm_core import gemm_reduce_sum_a
+    # Pitfall 2 textbook case: long vector, mixed magnitudes.
+    # FP16-internal accumulate would inf or saturate; FP32 stays finite.
+    arr = np.array([1.0, 1e-4] * 1000, dtype=np.float16)
+    result = gemm_reduce_sum_a(arr)
+    assert np.isfinite(result), \
+        f"gemm_reduce_sum_a should accumulate in FP32, got {result}"
+    # Expected ~1000 + 1000*1e-4 ~= 1000.1; FP16 input loses precision on 1e-4.
+    assert 999.0 < result < 1001.0, f"sum out of expected range: {result}"
+    assert isinstance(result, float), \
+        f"gemm_reduce_sum_a must return Python float, got {type(result)}"
 
 
 def test_handler_registry_has_all_10_mm_variants():
@@ -75,4 +105,15 @@ def test_verify_minimal_be_fp16_pairs():
 
 def test_gemm_core_signature_stateless():
     """MM-01 / D-03: gemm_core is array-in/array-out, no npu/proc/insn dependency."""
-    pytest.skip("Wave 1: gemm_core not yet built (Plan 02)")
+    import inspect
+    from riscv.gtx import gemm_core as gemm_core_mod
+    sig = inspect.signature(gemm_core_mod.gemm_core)
+    params = list(sig.parameters.keys())
+    forbidden = {'npu', 'proc', 'insn', 'self', 'mem', 'memory'}
+    for p in params:
+        assert p not in forbidden, \
+            f"gemm_core must be stateless (D-03), but found '{p}' parameter"
+    src = inspect.getsource(gemm_core_mod)
+    assert 'from .npu' not in src, "gemm_core must not depend on npu (leaf module)"
+    assert 'from .memory' not in src, "gemm_core must not depend on memory (leaf module)"
+    assert 'from .dispatch' not in src, "gemm_core must not depend on dispatch"
