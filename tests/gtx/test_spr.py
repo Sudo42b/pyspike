@@ -28,12 +28,20 @@ from riscv.gtx.params import GTX_NEST_NUM, GTX_SPU_NUM
 
 
 def _fake_npu():
-    """Minimal npu surface that wr_spr / rd_spr / handlers need."""
+    """Minimal npu surface that wr_spr / rd_spr / handlers need.
+
+    P4 plan 04 expansion: wrspr_gem5/rdspr_gem5 re-dispatch to MM/MMC funct3-keyed
+    handlers via npu._custom0.get(funct7, {}).get(funct3); shim grew _custom0={}
+    so the rs1!=0 path can NOP-fallback when no funct3 entry exists (matches the
+    test's "rs1!=0 -> stub returns 0" expectation since no MM handler is wired
+    in this lightweight shim context).
+    """
     return SimpleNamespace(
         gspr={},
         nspr=[{} for _ in range(GTX_NEST_NUM)],
         lspr=[[{} for _ in range(GTX_SPU_NUM)] for _ in range(GTX_NEST_NUM)],
         warp=WarpState(),
+        _custom0={},  # P4 plan 04: stub for re-dispatch fallback
     )
 
 

@@ -92,17 +92,27 @@ def test_custom0_funct7_collision_rs1_zero_writes_spr():
 
 
 def test_custom0_funct7_collision_rs1_nonzero_returns_zero():
-    """DISP-01 / D-02: funct7=0x00, insn.rs1!=0 -> P4 MM stub (return 0, no SPR write)."""
+    """DISP-01 / D-02: funct7=0x00, insn.rs1!=0 -> P4 MM dispatch (return 0, no SPR mutation).
+
+    Plan 04 update: previously a stub returning 0; now wires actual MM dispatch.
+    Use 1x1x1 GEMM (smallest valid dims) to verify the route runs quickly and
+    that SPRs remain unchanged (MM writes L1 only, not GSPR/LSPR contents --
+    LSPR_SPM_ADDRA/B/C/R values are pre-seeded by reset() and not modified).
+    """
     npu = _make_npu()
     proc = _make_proc()
-    proc.get_state().XPR.write(3, 0x900)
+    npu.reset(proc)  # populate SPRs to deterministic state
+    # 1x1x1 packed dims via dim16: row_A=col_A=col_B=1
+    rs1_packed = (1 << 48) | (1 << 16) | 1
+    proc.get_state().XPR.write(3, rs1_packed)
     proc.get_state().XPR.write(4, 0xCAFE)
     snapshot_gspr = dict(npu.gspr)
     snapshot_lspr00 = dict(npu.lspr[0][0])
+    # synthesized funct3 = (xd<<2)|(xs1<<1)|xs2 = 0 = mm_s
     insn = _make_insn(funct=0x00, rs1=3, rs2=4)
     ret = npu.custom0(proc, insn, xs1=0, xs2=0)
     assert ret == 0
-    # P4 MM stub: NO SPR mutation
+    # MM writes L1 bytes (FP32 result to ADDRC), but does NOT mutate GSPR/LSPR dicts.
     assert npu.gspr == snapshot_gspr
     assert npu.lspr[0][0] == snapshot_lspr00
 

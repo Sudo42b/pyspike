@@ -21,5 +21,6 @@ Plan 02 fills `spr`; plan 03 fills `control`. Plans 04-05 add `dma`/`mm`/etc.
 from . import spr   # noqa: F401  -- triggers SPR @handler decorators
 from . import control  # noqa: F401  -- triggers warp/control @handler decorators
 from . import dma   # noqa: F401  -- triggers DMA @handler decorators (Plan 02)
+from . import mm   # noqa: F401  -- triggers MM @handler decorators (Plan 04)
 
-__all__ = ["spr", "control", "dma"]
+__all__ = ["spr", "control", "dma", "mm"]
