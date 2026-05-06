@@ -90,3 +90,14 @@ LSPR_SPM_ADDRA: int = 0x900
 LSPR_SPM_ADDRB: int = 0x901
 LSPR_SPM_ADDRC: int = 0x902
 LSPR_SPM_ADDRR: int = 0x903
+
+
+# ----- MM funct3 (custom0 funct7=0x00 MM-family, funct7=0x01 MMC-family) -----
+# Verified against vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:39-50
+# and gtx_npu_mm.cc:357-376 dispatch switch.
+# NOTE: funct3=4..6 are reserved; gtx_npu_mm.cc:373-376 falls through to basic mm.
+GTX_F3_MM_S: int = 0      # mm_s / mmc_s -- FP32 result to ADDRC
+GTX_F3_MM_O: int = 1      # mm_o / mmc_o -- scalar sum(A) to L0 BE + mxe_accum
+GTX_F3_MM:   int = 2      # mm   / mmc   -- basic GEMM, ADDRC FP32 bias staging
+GTX_F3_MM_V: int = 3      # mm_v / mmc_v -- scalar dot(A,B) to L0 LE + mxe_accum
+GTX_F3_MM_T: int = 7      # mm_t / mmc_t -- transposed C^T to ADDRR (NxM layout!)
