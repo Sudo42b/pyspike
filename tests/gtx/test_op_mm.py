@@ -92,7 +92,28 @@ def test_exec_mm_t_writes_transposed():
 def test_decode_firmware_mm_args():
     """MM-03: rs1 packed = colB[63:48]|colA[31:16]|rowA[15:0],
     0=65536 per field (dim16 lambda)."""
-    pytest.skip("Wave 1: mm_engine not yet built (Plan 03)")
+    from riscv.gtx.mm_engine import decode_firmware_mm_args
+
+    # Case 1: concrete 4x4x4 (matches mm_basic.S literal)
+    d = decode_firmware_mm_args(0x0004_0000_0004_0004)
+    assert d == {'row_A': 4, 'col_A': 4, 'col_B': 4}, f"4x4x4 case: {d}"
+
+    # Case 2: Pitfall C -- per-field 0->65536 (NOT whole-word check)
+    d = decode_firmware_mm_args(0)
+    assert d == {'row_A': 0x10000, 'col_A': 0x10000, 'col_B': 0x10000}, \
+        f"all-zero case: {d}"
+
+    # Case 3: distinct values, exercise all three field positions
+    rs1 = (0xABCD << 48) | (0x1234 << 16) | 0x5678
+    d = decode_firmware_mm_args(rs1)
+    assert d == {'row_A': 0x5678, 'col_A': 0x1234, 'col_B': 0xABCD}, \
+        f"distinct fields: {d}"
+
+    # Case 4: only col_A is zero -- dim16 promotes ONLY that field
+    rs1 = (0xFFFF << 48) | 0xFFFF  # row_A=0xFFFF, col_A=0, col_B=0xFFFF
+    d = decode_firmware_mm_args(rs1)
+    assert d == {'row_A': 0xFFFF, 'col_A': 0x10000, 'col_B': 0xFFFF}, \
+        f"only col_A zero: {d}"
 
 
 def test_verify_minimal_be_fp16_pairs():
