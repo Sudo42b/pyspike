@@ -81,7 +81,7 @@
 
 ### MM (Matrix Multiplication — NPU 핵심)
 
-- [ ] **MM-01**: `gemm_core` — `np.matmul`을 `dtype=np.float32`로 호출하고 단일
+- [x] **MM-01**: `gemm_core` — `np.matmul`을 `dtype=np.float32`로 호출하고 단일
   `np.float16` cast로 결과 산출
 - [ ] **MM-02**: `exec_mm`, `exec_mm_s`, `exec_mm_o`, `exec_mm_v`, `exec_mm_t`,
   `exec_mmc`, `exec_mmc_s`, `exec_mmc_o`, `exec_mmc_v`, `exec_mmc_t` 전 변형 동작

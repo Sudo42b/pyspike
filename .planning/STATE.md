@@ -2,19 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
+current_plan: 3
 status: executing
-last_updated: "2026-05-06T00:19:33.478Z"
+last_updated: "2026-05-06T00:32:25.121Z"
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 21
-  completed_plans: 17
-  percent: 81
+  completed_plans: 18
+  percent: 86
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-06 after Phase 4 Plan 01 complete (Wave 0 MM scaffolds + .elf fixture — 18 named test scaffolds skip cleanly + _verify_minimal BE bit-pair landed + mm_basic.elf pre-built; Wave 1 Plans 02/03/04 unblocked)
+**Last updated:** 2026-05-06 after Phase 4 Plan 02 complete (gemm_core stateless kernel — 3 functions in 150-LOC leaf module; 3 MM-01 scaffolds GREEN-filled; 183 passed/16 skipped/0 failed; Plans 03/04 unblocked for Wave 1b sibling waves)
 
 ## Project Reference
 
@@ -33,13 +34,13 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 04 (mm-subsystem) — EXECUTING
-Current Plan: 2
+Current Plan: 3
 Total Plans in Phase: 5
 
 - **Phase:** 4
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
-- **Status:** Executing Phase 04
-- **Progress:** [████████░░] 81%
+- **Status:** Ready to execute
+- **Progress:** [█████████░] 86%
 
 ## Performance Metrics
 
@@ -63,6 +64,7 @@ Total Plans in Phase: 5
 | Phase 03-dma-ddr-i-o P02 | 13min | 3 tasks | 6 files |
 | Phase 03-dma-ddr-i-o P05 | 5m53s | 2 tasks | 7 files |
 | Phase 04-mm-subsystem P01 | 7min | 3 tasks | 10 files |
+| Phase 04-mm-subsystem P02 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -122,6 +124,13 @@ Total Plans in Phase: 5
 2. **`dispatch_iss_opcode` is a TRUE stub in P3.** Every funct7 NOPs and returns 0; OOB nest_id/spu_id silently NOP. The body has a comment block naming exactly which lines Plan 05 will replace with the credit_st_chk flush trigger (`if funct7 == GTX_ISS_F7_CREDIT_ST_CHK and npu.warp.is_sloop: npu.flush_deferred_ddr_stores()`). P4 fills `GTX_OP_MM=0`; P5 fills VEC/ACT (1/2).
 3. **Pitfall 8 dual coverage.** Mode 3 OR-rule covered by (a) `is_load = (sub_op == 0) or (opcode == GTX_OP_DMA)` — three truth-table corner tests, AND (b) `width = op3 & 0xFFFF`, `height = (op3 >> 16) & 0xFFFF` — explicit bitfield assertions in two tests. Single-check coverage would let one piece silently regress.
 4. **Pre-existing failures in `tests/gtx/test_firmware_dma.py` (Plan 02 territory)** documented in `deferred-items.md` and out of Plan 04 scope per executor scope-boundary rules. Plan 04's 72-test adjacency suite (test_dispatch_4mode + test_dispatch + test_dma_engine + test_ddr_modes) all green.
+
+### Phase 4 Plan 02 Decisions (locked during execution)
+
+1. **Explicit Python 3-loop FP32 accumulate in `gemm_core` — NOT `np.matmul`** (RESEARCH np.matmul Bit-Exactness lock). BLAS drifts up to 4 ULP / 0.0078 abs on 41/500 random 16x16x16 FP16-cast-to-FP32 trials, exceeding `verify.py --ulp 1 --atol 0.001`. Strict-mode (D-14) regression cannot tolerate any drift. P7 numba `@njit` reactivates BLAS-equivalent throughput while preserving the scalar accumulate ordering. `gemm_dot` similarly uses explicit loop, NOT `np.dot`.
+2. **Matrix-bias path vs scalar-chain path are SEPARATE functions.** CONTEXT D-03's surface sketch had `gemm_core(..., prior_accum: float)` returning `(C, new_accum)` — but the C++ shows MM/MMC use a matrix bias (`bias_fp32: NDArray[np.float32]` of shape `(M, N)` staged from L1 ADDRC) while MM_O/MMC_O/MM_V/MMC_V use scalar `mxe_accum[nest, spu]` chain. Plan 02 cleanly split: `gemm_core(has_bias, bias_fp32)` for matrix variants; `gemm_reduce_sum_a(prior_accum)` and `gemm_dot(prior_accum)` for scalar variants. mm_engine (Plan 03) selects the right kernel per variant — dispatch is unambiguous.
+3. **Leaf module discipline locked** (D-01/D-03). `gemm_core.py` imports only `from typing` + `numpy` + `numpy.typing` — zero `riscv.gtx.*` imports, zero `npu`/`proc`/`insn` parameters. Confirmed by `test_gemm_core_signature_stateless` via `inspect.signature` + `inspect.getsource`. P7 `@njit` boundary clean.
+4. **Surgical scope on test_op_mm.py** (parallel-plan ownership). Only the 3 named gemm_core scaffolds (MM-01) GREEN-filled; the 8 other scaffolds (MM-02 handler-registry/exec, MM-03 decode, MM-05 verify_minimal smoke) left as `pytest.skip(...)` — they are owned by Plans 03 (mm_engine) and 04 (ops/mm). This guarantees Wave 1b plans 03/04 see no merge conflicts on the same test file when they GREEN-fill their respective scaffolds.
 
 ### Phase 4 Plan 01 Decisions (locked during execution)
 
@@ -209,38 +218,42 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 04 Wave 0 (Plan 01 scaffold + .elf fixture) complete — TDD-RED gate
-landed. **Plan 01** executed sequentially (Wave 1a) with 3 atomic commits
-(normal hooks, no `--no-verify`):
+Phase 04 Wave 1b sub-wave (Plan 02 gemm_core kernel) complete — first
+GREEN of the MM subsystem. **Plan 02** executed in ~4 min with 2 atomic
+commits (normal hooks, no `--no-verify`):
 
-- `26b8262` (feat Task 1): `tests/gtx/_verify_minimal.py` — `compare_hex`
-  BE FP16 bit-pair compare per `verify.py:235`; signed-magnitude ULP
-  fallback; verified by round-trip on `np.float16(1.0) = 0x3C00`.
+- `7b2a115` (feat Task 1): `src/main/python/riscv/gtx/gemm_core.py` —
+  150-LOC pure-Python leaf module; 3 functions: `gemm_core` (explicit
+  3-loop FP32 accumulate, NOT np.matmul, port of gtx_npu_mm.cc:73-79),
+  `gemm_reduce_sum_a` (MM_O/MMC_O scalar sum, gtx_npu_mm.cc:200-211),
+  `gemm_dot` (MM_V/MMC_V scalar dot, gtx_npu_mm.cc:262-265). 0 imports
+  from `riscv.gtx.*`; 0 spike deps. P7 numba `@njit` boundary marked.
 
-- `3b95f38` (feat Task 2): `tests/gtx/data/elf/mm_basic.{S,elf}` +
-  `Makefile` rule + `.gitignore` `!mm_basic.elf` override (Rule 3 blocking
-  fix). Pre-built RV64 ELF entry 0x800000b0; objdump confirms instruction
-  `0x0000a50b` = custom0 funct7=0x00 funct3=2 rs1=x1 rd=x10 (mm op).
+- `13d8a58` (test Task 2): GREEN-fill 3 of 11 scaffolds in
+  `tests/gtx/test_op_mm.py` — `test_gemm_core_explicit_3loop_matches_oracle`
+  (16x16x16 random FP16 GEMM, bit-exact uint16-view compare against in-test
+  3-loop oracle), `test_gemm_core_fp32_internal_not_fp16` (Pitfall 2
+  regression: `[1.0, 1e-4]*1000` as FP16 stays finite ~1000.0), and
+  `test_gemm_core_signature_stateless` (inspect.signature + getsource lock).
+  Other 8 scaffolds untouched (owned by Plans 03/04 — parallel-safe).
 
-- `2a03451` (test Task 3): 4 test scaffold files (test_op_mm 11 + test_mm_chain
-  4 + test_funct7_routing 3 + test_regression_fw_mm 1+1) covering all 18
-  VALIDATION-named MM tests + zero-init golden hex (32 bytes of 0x00 from
-  `gemm_core(zeros @ zeros)` explicit 3-loop FP32).
-
-SUMMARY at `.planning/phases/04-mm-subsystem/04-01-SUMMARY.md`. Self-check
-PASSED: all 8 created files exist; `pytest tests/gtx/ -q --noconftest -o
-"addopts="` reports **180 passed, 19 skipped, 0 failed** (P3 baseline 179
-+ new fixture-present 1; 18 named scaffolds + 1 fixture-present + 1 strict-
-mode subprocess scaffold all skip cleanly via `pytest.skip(...)`).
+SUMMARY at `.planning/phases/04-mm-subsystem/04-02-SUMMARY.md`. Self-check
+PASSED: 1 created file + 1 modified file present; both commits in
+`git log`; `pytest tests/gtx/ -q --noconftest -o "addopts="` reports
+**183 passed, 16 skipped, 0 failed** (P4 plan 01 baseline 180/19 + 3
+GREEN converted from skip).
 
 ### Next Action
 
-Wave 1 unblocked — Plans 02 (gemm_core), 03 (mm_engine), 04 (ops/mm) can
-now begin in parallel (D-01 3-way module split). Plan 02 fills 3 RED
-scaffolds (`test_gemm_core_*` in test_op_mm.py); Plan 03 fills 2 (decode +
-Mode 4 routing); Plan 04 fills 11 (10 @handler entry points + funct7
-collision matrix + 4 mm_chain scaffolds). Plan 05 (Wave 2) then wires
-the strict-mode subprocess regression body in `test_regression_fw_mm.py`.
+Wave 1b siblings unblocked — Plans 03 (mm_engine) and 04 (ops/mm) will
+spawn next. Plan 03 fills 2 scaffolds (`test_decode_firmware_mm_args` +
+`test_mode4_routes_to_tmu_curr`) and provides `mm_engine.firmware_mm`
+that consumes `from riscv.gtx.gemm_core import gemm_core, gemm_reduce_sum_a,
+gemm_dot`. Plan 04 fills 11 scaffolds (10 `@handler` entry points + funct7
+collision matrix + 4 mm_chain scaffolds) and goes through Plan 03's
+`mm_engine.firmware_mm` rather than calling gemm_core directly. Plan 05
+(Wave 2) wires the subprocess strict-mode regression body in
+`test_regression_fw_mm.py`.
 
 ### Resumption Notes
 
