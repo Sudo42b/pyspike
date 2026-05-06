@@ -111,12 +111,12 @@ def _do_ends(npu, rs1: int, rs2: int) -> None:
 
 # ============================================================================
 # custom1 funct3 handlers -- DISP-02
-# (each reads rs1/rs2 directly via proc.get_state().XPR per CORE-04, then
+# (each reads rs1/rs2 directly via proc.state.XPR per CORE-04, then
 #  delegates to the matching _do_* helper.)
 # ============================================================================
 @handler(kind='custom1', funct3=0b000, mnemonic='warp_start_t')
 def startt(npu, proc, insn, xs1, xs2):
-    state = proc.get_state()
+    state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
     _do_startt(npu, rs1_val, rs2_val)
@@ -125,7 +125,7 @@ def startt(npu, proc, insn, xs1, xs2):
 
 @handler(kind='custom1', funct3=0b001, mnemonic='warp_end_t')
 def endt(npu, proc, insn, xs1, xs2):
-    state = proc.get_state()
+    state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
     _do_endt(npu, rs1_val, rs2_val)
@@ -136,7 +136,7 @@ def endt(npu, proc, insn, xs1, xs2):
 def starts(npu, proc, insn, xs1, xs2):
     """P3 DMA: full implementation in phase 03. P2 still wires _do_starts so
     spr_router.wr_spr(GSPR_STARTS, ..) flag-only side-effect works."""
-    state = proc.get_state()
+    state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
     _do_starts(npu, rs1_val, rs2_val)
@@ -145,7 +145,7 @@ def starts(npu, proc, insn, xs1, xs2):
 
 @handler(kind='custom1', funct3=0b011, mnemonic='warp_end_s')
 def ends(npu, proc, insn, xs1, xs2):
-    state = proc.get_state()
+    state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
     _do_ends(npu, rs1_val, rs2_val)
@@ -185,7 +185,7 @@ def wjoin_with_exit(npu, proc, insn, xs1, xs2):
 
 @handler(kind='custom1', funct3=0b110, mnemonic='warp_start_p')
 def startp(npu, proc, insn, xs1, xs2):
-    state = proc.get_state()
+    state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
     _do_startp(npu, rs1_val, rs2_val)
@@ -194,7 +194,7 @@ def startp(npu, proc, insn, xs1, xs2):
 
 @handler(kind='custom1', funct3=0b111, mnemonic='warp_end_p')
 def endp(npu, proc, insn, xs1, xs2):
-    state = proc.get_state()
+    state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
     _do_endp(npu, rs1_val, rs2_val)

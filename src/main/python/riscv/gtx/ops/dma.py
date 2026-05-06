@@ -75,7 +75,7 @@ def _firmware_dma_load(npu, proc, insn, xs1, xs2):
     Pitfall 3 (CORE-04): xs1/xs2 args are unreliable when the encoding flag is 0
     (Spike marshals -1). Read XPR[insn.rs1] / XPR[insn.rs2] directly.
     """
-    state = proc.get_state()
+    state = proc.state
     rs1 = state.XPR[insn.rs1]
     rs2 = state.XPR[insn.rs2]
     rs3 = npu.gspr.get(GSPR_GTX_OPERAND3, 0)   # 0x003 per gtx_params.h:40
@@ -106,7 +106,7 @@ def _firmware_dma_store(npu, proc, insn, xs1, xs2):
     is_sloop branch passes `npu` (not `npu.mem`) so firmware_dma_sloop_store can
     push DeferredDdrStore onto npu.deferred_ddr_stores (Plan 05 flushes).
     """
-    state = proc.get_state()
+    state = proc.state
     rs1 = state.XPR[insn.rs1]
     rs2 = state.XPR[insn.rs2]
     rs3 = npu.gspr.get(GSPR_GTX_OPERAND3, 0)
@@ -137,7 +137,7 @@ def _firmware_dma_copy(npu, proc, insn, xs1, xs2):
     Pitfall 1: COPY decodes addr_hi from rs1>>32 (32-bit dst), NOT (rs1>>27)&0x1F..
     addr_hi is the dst, addr_lo is the src.
     """
-    state = proc.get_state()
+    state = proc.state
     rs1 = state.XPR[insn.rs1]
     rs2 = state.XPR[insn.rs2]
     rs3 = npu.gspr.get(GSPR_GTX_OPERAND3, 0)
@@ -160,7 +160,7 @@ def _firmware_dma_copy(npu, proc, insn, xs1, xs2):
          mnemonic='load_svr', mask_funct3=True)
 def _load_svr(npu, proc, insn, xs1, xs2):
     """load_svr (funct7=0x41 funct3=0): L1 -> L0 SVR transfer (32 bytes)."""
-    state = proc.get_state()
+    state = proc.state
     l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
     l0_reg = state.XPR[insn.rs2] & 0x1F
     nest = _select_nest(npu)
@@ -174,7 +174,7 @@ def _load_svr(npu, proc, insn, xs1, xs2):
          mnemonic='store_svr', mask_funct3=True)
 def _store_svr(npu, proc, insn, xs1, xs2):
     """store_svr (funct7=0x41 funct3=1): L0 -> L1 SVR transfer (32 bytes)."""
-    state = proc.get_state()
+    state = proc.state
     l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
     l0_reg = state.XPR[insn.rs2] & 0x1F
     nest = _select_nest(npu)
@@ -190,7 +190,7 @@ def _store_svr(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_SVR_L1, mnemonic='load_svr_l1')
 def _load_svr_l1(npu, proc, insn, xs1, xs2):
     """load_svr_l1 (funct7=0x43): L1-bound load_svr alias."""
-    state = proc.get_state()
+    state = proc.state
     l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
     l0_reg = state.XPR[insn.rs2] & 0x1F
     nest = _select_nest(npu)
@@ -203,7 +203,7 @@ def _load_svr_l1(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_ST_SVR_L1, mnemonic='store_svr_l1')
 def _store_svr_l1(npu, proc, insn, xs1, xs2):
     """store_svr_l1 (funct7=0x45): L1-bound store_svr alias."""
-    state = proc.get_state()
+    state = proc.state
     l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
     l0_reg = state.XPR[insn.rs2] & 0x1F
     nest = _select_nest(npu)
@@ -224,7 +224,7 @@ def _tpose(npu, proc, insn, xs1, xs2):
     Result matrix base: LSPR_SPM_ADDRR (0x903) -- gtx_params.h:67
     AUTHORITATIVE values; no magic numbers in handler body.
     """
-    state = proc.get_state()
+    state = proc.state
     rs1 = state.XPR[insn.rs1]
     rs2 = state.XPR[insn.rs2]
     rows = rs1 & 0xFFFF
@@ -245,7 +245,7 @@ def _fill(npu, proc, insn, xs1, xs2):
     Result address: LSPR_SPM_ADDRR (0x903) -- gtx_params.h:67. AUTHORITATIVE
     constant; no magic number in handler body (LSPR_SPM_ADDRB is NOT used here).
     """
-    state = proc.get_state()
+    state = proc.state
     rs1 = state.XPR[insn.rs1]
     length = rs1 & 0xFFFF
     fill_val = (rs1 >> 16) & 0xFFFF

@@ -43,6 +43,14 @@ class MockState:
 class MockProcessor:
     _state: MockState = field(default_factory=MockState)
 
+    # Plan 04-05 fix: real pybind11 processor_t exposes `state` as a
+    # def_property_readonly (py_module.cc:711), NOT a `get_state()` method.
+    # MockProcessor exposes BOTH so unit tests that already use get_state()
+    # keep passing while production source code uses the real binding (proc.state).
+    @property
+    def state(self) -> MockState:
+        return self._state
+
     def get_state(self) -> MockState:
         return self._state
 

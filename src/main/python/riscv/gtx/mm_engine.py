@@ -86,7 +86,7 @@ def firmware_mm(npu: 'GtxNpu', proc, insn,
 
     Args:
         npu: GtxNpu instance (read npu.warp / npu.lspr / npu.mem / npu._mxe_accum)
-        proc: spike processor_t (read XPR via proc.get_state().XPR[idx])
+        proc: spike processor_t (read XPR via proc.state.XPR[idx])
         insn: rocc_insn_t (read insn.rs1 register INDEX, NOT value -- Pitfall 4)
         is_accumulate: True for MMC family (funct7=0x01), False for MM (funct7=0x00)
         variant: one of 'mm', 'mm_s', 'mm_o', 'mm_v', 'mm_t',
@@ -94,9 +94,9 @@ def firmware_mm(npu: 'GtxNpu', proc, insn,
 
     Returns: 0 (cycle count vestigial in functional model)
     """
-    # Pitfall 4: read register VALUE via proc.get_state().XPR[insn.rs1].
+    # Pitfall 4: read register VALUE via proc.state.XPR[insn.rs1].
     # The xs1 arg from RoCC trampoline is unreliable when xs1 flag is 0.
-    rs1 = proc.get_state().XPR[insn.rs1]
+    rs1 = proc.state.XPR[insn.rs1]
     args = decode_firmware_mm_args(rs1)
 
     # Pitfall G: explicit is_ploop/is_tloop guards (gtx_npu_mm.cc:338-339).

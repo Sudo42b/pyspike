@@ -23,7 +23,7 @@ Four handlers:
   funct7 = 0x00 (gem5-simplified WRSPR) -- collision-aware: insn.rs1!=0 -> P4 MM stub
   funct7 = 0x01 (gem5-simplified RDSPR) -- collision-aware: insn.rs1!=0 -> P4 MMC stub
 
-All four read register values directly via proc.get_state().XPR[insn.rs1] to bypass
+All four read register values directly via proc.state.XPR[insn.rs1] to bypass
 Spike's xs1=0 -> -1 marshalling (CORE-04 / D-05).
 """
 from .._registry import handler
@@ -33,7 +33,7 @@ from ..spr_router import wr_spr, rd_spr
 @handler(kind='custom0', funct7=0x49, mnemonic='wrspr')
 def wrspr_iss(npu, proc, insn, xs1, xs2):
     """ISS-full WRSPR: addr = rs1, val = rs2 (port custom0.cc:107-113)."""
-    state = proc.get_state()
+    state = proc.state
     addr = state.XPR[insn.rs1]
     val = state.XPR[insn.rs2]
     wr_spr(npu, addr & 0xFFFF, val)
@@ -43,7 +43,7 @@ def wrspr_iss(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=0x48, mnemonic='rdspr')
 def rdspr_iss(npu, proc, insn, xs1, xs2):
     """ISS-full RDSPR: addr = rs1, return rd_spr(addr); force-write to rd (port custom0.cc:96-105)."""
-    state = proc.get_state()
+    state = proc.state
     addr = state.XPR[insn.rs1]
     val = rd_spr(npu, addr & 0xFFFF)
     if insn.rd != 0:
@@ -74,7 +74,7 @@ def wrspr_gem5(npu, proc, insn, xs1, xs2):
         if mm_handler is not None:
             return mm_handler(proc, insn, xs1, xs2)
         return 0  # unknown funct3 -> NOP
-    state = proc.get_state()
+    state = proc.state
     val_rs1 = state.XPR[insn.rs1]   # always 0 (x0 hardwired)
     val_rs2 = state.XPR[insn.rs2]
     wr_spr(npu, val_rs1 & 0xFFFF, val_rs2)
@@ -98,6 +98,6 @@ def rdspr_gem5(npu, proc, insn, xs1, xs2):
         if mmc_handler is not None:
             return mmc_handler(proc, insn, xs1, xs2)
         return 0  # unknown funct3 -> NOP
-    state = proc.get_state()
+    state = proc.state
     val_rs1 = state.XPR[insn.rs1]   # always 0 (x0)
     return rd_spr(npu, val_rs1 & 0xFFFF)

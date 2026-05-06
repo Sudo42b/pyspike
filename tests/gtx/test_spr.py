@@ -114,6 +114,11 @@ class _FakeProc:
         from tests.gtx._mocks import MockProcessor
         self._mp = MockProcessor()
 
+    # Plan 04-05 fix: real pybind11 processor_t exposes `state` as property.
+    @property
+    def state(self):
+        return self._mp.state
+
     def get_state(self):
         return self._mp.get_state()
 
