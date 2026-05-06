@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 5
-status: verifying
-last_updated: "2026-05-06T01:55:54.984Z"
+current_plan: Not started
+status: planning
+last_updated: "2026-05-06T02:12:04.210Z"
 progress:
   total_phases: 7
   completed_phases: 4
@@ -34,12 +34,12 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 04 (mm-subsystem) — EXECUTING
-Current Plan: 5
+Current Plan: Not started
 Total Plans in Phase: 5
 
-- **Phase:** 4
+- **Phase:** 07
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
-- **Status:** Phase complete — ready for verification
+- **Status:** Ready to plan
 - **Progress:** [██████████] 100%
 
 ## Performance Metrics
@@ -288,8 +288,10 @@ Open follow-ups (P5/P6/P7):
   is env-var-free per P3 D-09 lock). After this lands,
   test_mm_basic_strict_mode_pass graceful skip turns into hard PASS with
   zero test code changes needed.
+
 - **P6**: Promote `_verify_minimal.compare_hex` to `riscv.gtx._verify`
   with CLI (D-13).
+
 - **P7**: numba `@njit` boundary on gemm_core (3-loop FP32 is JIT-friendly).
 
 ### Resumption Notes
