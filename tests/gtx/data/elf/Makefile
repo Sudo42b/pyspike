@@ -18,11 +18,20 @@ LDFLAGS  = -nostdlib -nostartfiles -static -Wl,-Ttext-segment=0x80000000
 nop_wjoin.elf: nop_wjoin.S
 	$(CC) $(LDFLAGS) -o $@ $<
 
+# P4 mm_basic firmware (D-09 fallback). Pre-built .elf committed (P2 D-22 pattern).
+mm_basic.elf: mm_basic.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
 .PHONY: clean
 clean:
-	rm -f nop_wjoin.elf
+	rm -f nop_wjoin.elf mm_basic.elf
 
 .PHONY: verify
 verify: nop_wjoin.elf
+	@/opt/riscv/bin/riscv64-unknown-elf-readelf -h $< | grep -E 'Entry point|Type'
+	@echo OK
+
+.PHONY: verify-mm
+verify-mm: mm_basic.elf
 	@/opt/riscv/bin/riscv64-unknown-elf-readelf -h $< | grep -E 'Entry point|Type'
 	@echo OK
