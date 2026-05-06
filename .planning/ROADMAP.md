@@ -126,9 +126,9 @@ golden)와 ULP 허용오차 내로 일치한다.
 
 **Plans:** 5 plans (Wave 0 scaffold + 3 parallel Wave 1 compute modules + Wave 2 integration)
 - [x] 04-mm-subsystem/04-01-PLAN.md — Wave 0 scaffold (test scaffolds + _verify_minimal + mm_basic.elf fixture + golden hex) — completed 2026-05-06
-- [ ] 04-mm-subsystem/04-02-PLAN.md — Wave 1 gemm_core.py (explicit 3-loop FP32 accumulate) — MM-01
-- [ ] 04-mm-subsystem/04-03-PLAN.md — Wave 1 mm_engine.py (decode_firmware_mm_args + 5 variant helpers) — MM-03
-- [ ] 04-mm-subsystem/04-04-PLAN.md — Wave 1 ops/mm.py (10 @handlers + Pitfall F NOP-safety) — MM-02 + MM-03
+- [x] 04-mm-subsystem/04-02-PLAN.md — Wave 1 gemm_core.py (explicit 3-loop FP32 accumulate) — MM-01 — completed 2026-05-06
+- [x] 04-mm-subsystem/04-03-PLAN.md — Wave 1 mm_engine.py (decode_firmware_mm_args + 5 variant helpers) — MM-03 — completed 2026-05-06
+- [x] 04-mm-subsystem/04-04-PLAN.md — Wave 1 ops/mm.py (10 @handlers + WRSPR re-dispatch) — MM-02 + MM-03 — completed 2026-05-06
 - [ ] 04-mm-subsystem/04-05-PLAN.md — Wave 2 chain tests + strict-mode .elf regression — MM-04 + MM-05
 **UI hint**: no
 
@@ -193,7 +193,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 | 1. Foundation | 5/5 | Complete   | 2026-05-04 |
 | 2. Skeleton & Disasm | 0/5 | Not started | - |
 | 3. DMA & DDR I/O | 5/5 | Complete   | 2026-05-05 |
-| 4. MM Subsystem | 0/? | Not started | - |
+| 4. MM Subsystem | 4/5 | In Progress | - |
 | 5. VEC/ACT/Pool | 0/? | Not started | - |
 | 6. Verification & Wheel | 0/? | Not started | - |
 

@@ -83,7 +83,7 @@
 
 - [x] **MM-01**: `gemm_core` — `np.matmul`을 `dtype=np.float32`로 호출하고 단일
   `np.float16` cast로 결과 산출
-- [ ] **MM-02**: `exec_mm`, `exec_mm_s`, `exec_mm_o`, `exec_mm_v`, `exec_mm_t`,
+- [x] **MM-02**: `exec_mm`, `exec_mm_s`, `exec_mm_o`, `exec_mm_v`, `exec_mm_t`,
   `exec_mmc`, `exec_mmc_s`, `exec_mmc_o`, `exec_mmc_v`, `exec_mmc_t` 전 변형 동작
 - [x] **MM-03**: `firmware_mm_op` 패킹 인코딩 디코딩 (`colB[63:48] | colA[31:16]
   | rowA[15:0]`, HW 컨벤션 0=65536) + funct3 변형(MM/MMC) 분기

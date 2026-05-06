@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 4
+current_plan: 5
 status: executing
-last_updated: "2026-05-06T00:42:52.881Z"
+last_updated: "2026-05-06T01:34:40.329Z"
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 21
-  completed_plans: 19
-  percent: 90
+  completed_plans: 20
+  percent: 95
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-06 after Phase 4 Plan 02 complete (gemm_core stateless kernel — 3 functions in 150-LOC leaf module; 3 MM-01 scaffolds GREEN-filled; 183 passed/16 skipped/0 failed; Plans 03/04 unblocked for Wave 1b sibling waves)
+**Last updated:** 2026-05-06 after Phase 4 Plan 04 complete (ops/mm @handler shim layer + WRSPR collision re-dispatch; 11 scaffolds GREEN-filled; 195 passed/5 skipped/0 failed; Plan 05 unblocked as final Phase 4 plan)
 
 ## Project Reference
 
@@ -34,13 +34,13 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 04 (mm-subsystem) — EXECUTING
-Current Plan: 4
+Current Plan: 5
 Total Plans in Phase: 5
 
 - **Phase:** 4
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
 - **Status:** Ready to execute
-- **Progress:** [█████████░] 90%
+- **Progress:** [██████████] 95%
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Total Plans in Phase: 5
 | Phase 04-mm-subsystem P01 | 7min | 3 tasks | 10 files |
 | Phase 04-mm-subsystem P02 | 4min | 2 tasks | 2 files |
 | Phase 04-mm-subsystem PP03 | 4min | 2 tasks | 2 files |
+| Phase 04-mm-subsystem PP04 | 44min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -125,6 +126,15 @@ Total Plans in Phase: 5
 2. **`dispatch_iss_opcode` is a TRUE stub in P3.** Every funct7 NOPs and returns 0; OOB nest_id/spu_id silently NOP. The body has a comment block naming exactly which lines Plan 05 will replace with the credit_st_chk flush trigger (`if funct7 == GTX_ISS_F7_CREDIT_ST_CHK and npu.warp.is_sloop: npu.flush_deferred_ddr_stores()`). P4 fills `GTX_OP_MM=0`; P5 fills VEC/ACT (1/2).
 3. **Pitfall 8 dual coverage.** Mode 3 OR-rule covered by (a) `is_load = (sub_op == 0) or (opcode == GTX_OP_DMA)` — three truth-table corner tests, AND (b) `width = op3 & 0xFFFF`, `height = (op3 >> 16) & 0xFFFF` — explicit bitfield assertions in two tests. Single-check coverage would let one piece silently regress.
 4. **Pre-existing failures in `tests/gtx/test_firmware_dma.py` (Plan 02 territory)** documented in `deferred-items.md` and out of Plan 04 scope per executor scope-boundary rules. Plan 04's 72-test adjacency suite (test_dispatch_4mode + test_dispatch + test_dma_engine + test_ddr_modes) all green.
+
+### Phase 4 Plan 04 Decisions (locked during execution)
+
+1. **WRSPR/RDSPR funct7=0x00/0x01 None-key collision discovered + resolved during Task 2 verify** (Rule 3 blocking deviation). The plan's CRITICAL routing semantics block correctly forbade adding a None-key handler at funct7=0x00 (would mask MM funct3 handlers via npu.custom0's None-first precedence), but failed to recognize that Plan 02's `spr.py wrspr_gem5/rdspr_gem5` already occupy the None inner key. Without intervention MM was unreachable. Fix: rs1!=0 branch in spr.py wrspr_gem5/rdspr_gem5 (previously a "P4 stub returning 0", per the docstring's explicit Plan 04 fill marker) re-dispatches into per-funct3 MM/MMC handler via `npu._custom0.get(funct7, {}).get(funct3)`. Surgical, semantics-preserving, matches the existing rs1==0 vs rs1!=0 branching.
+2. **Per-handler `if insn.rs1 == 0: return 0` guard kept inside ops/mm.py despite functional redundancy.** When MM is reached via the wrspr_gem5 re-dispatch (the only normal route), insn.rs1 is guaranteed non-zero. The plan still requires the per-handler guard. Kept for: (a) symmetry argument is sound — a future P5 caller could bypass wrspr_gem5; (b) self-documents the Pitfall F intent at the routing site; (c) one-line per handler so cost negligible.
+3. **test_dispatch.py P2-era test had to be right-sized** (Rule 1 collateral fix). `test_custom0_funct7_collision_rs1_nonzero_returns_zero` passed `XPR[3]=0x900` as packed-rs1 to a funct7=0x00 + rs1!=0 dispatch. Pre-Plan-04 returned 0 immediately (P2 stub). Post-Plan-04 routes to mm_s, decodes 0x900 as `row_A=0x900, col_A=col_B=0` (promoted to 0x10000), tries 2304x65536 FP16 read in pure Python — effectively hung. Fix: rs1_packed = (1 << 48) | (1 << 16) | 1 (1x1x1 dims). Original assertions (rc==0, no SPR mutation) preserved verbatim — they were testing "MM does not mutate SPRs" which still holds.
+4. **test_spr.py _fake_npu shim grew _custom0={}** (Rule 1 collateral; mirrors Phase 3 Plan 05 D-3 _fake_npu growth pattern). Required after spr.py wrspr_gem5/rdspr_gem5 started reading `npu._custom0` for re-dispatch. Empty dict means re-dispatch falls back to `return 0` — exactly the original stub behavior the tests were validating. Production GtxNpu callers unaffected.
+5. **Disasm mnemonic canonicalization (`mm_s` -> `mm.s`).** pyspike's C++ `disasm_insn_t` constructor canonicalizes underscore-separated mnemonics to dot-separated form, matching upstream Spike disasm conventions. test_handler_registry_has_all_10_mm_variants checks both forms (canonical for real binding via `_RISCV_DISASM_AVAILABLE` branch, underscore for offline NamedTuple fallback).
+6. **Mode 4 routing verified via the firmware_mm_op path, NOT dispatch_iss_opcode.** Per RESEARCH finding #4: dispatch_iss_opcode and firmware_mm_op are SEPARATE paths. P4 deliberately does NOT extend the gem5-simplified DISPATCH_MM body in dispatch_iss_opcode (P5/P6 territory). New companion test `test_mode4_firmware_mm_op_routes_to_tmu_curr` asserts `mxe_accum[1, 5]` mutates and other 63 cells unchanged. Original test_mode4_routes_to_tmu_curr preserved as documented-NOP regression to pin dispatch_4mode entry-point shape until P5 promotion.
 
 ### Phase 4 Plan 02 Decisions (locked during execution)
 
@@ -219,42 +229,49 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 04 Wave 1b sub-wave (Plan 02 gemm_core kernel) complete — first
-GREEN of the MM subsystem. **Plan 02** executed in ~4 min with 2 atomic
-commits (normal hooks, no `--no-verify`):
+Phase 04 Wave 1b FINAL sub-wave (Plan 04 ops/mm @handler shim layer) complete —
+MM subsystem now end-to-end live. **Plan 04** executed in ~44 min with 3
+atomic commits (normal hooks, no `--no-verify`):
 
-- `7b2a115` (feat Task 1): `src/main/python/riscv/gtx/gemm_core.py` —
-  150-LOC pure-Python leaf module; 3 functions: `gemm_core` (explicit
-  3-loop FP32 accumulate, NOT np.matmul, port of gtx_npu_mm.cc:73-79),
-  `gemm_reduce_sum_a` (MM_O/MMC_O scalar sum, gtx_npu_mm.cc:200-211),
-  `gemm_dot` (MM_V/MMC_V scalar dot, gtx_npu_mm.cc:262-265). 0 imports
-  from `riscv.gtx.*`; 0 spike deps. P7 numba `@njit` boundary marked.
+- `a5bcc25` (feat Task 1): 5 MM funct3 constants in encoding.py
+  (GTX_F3_MM_S=0, GTX_F3_MM_O=1, GTX_F3_MM=2, GTX_F3_MM_V=3, GTX_F3_MM_T=7
+  per gtx_npu_disasm.inc:39-50; funct3=4..6 reserved fallthrough).
 
-- `13d8a58` (test Task 2): GREEN-fill 3 of 11 scaffolds in
-  `tests/gtx/test_op_mm.py` — `test_gemm_core_explicit_3loop_matches_oracle`
-  (16x16x16 random FP16 GEMM, bit-exact uint16-view compare against in-test
-  3-loop oracle), `test_gemm_core_fp32_internal_not_fp16` (Pitfall 2
-  regression: `[1.0, 1e-4]*1000` as FP16 stays finite ~1000.0), and
-  `test_gemm_core_signature_stateless` (inspect.signature + getsource lock).
-  Other 8 scaffolds untouched (owned by Plans 03/04 — parallel-safe).
+- `edae639` (feat Task 2): ops/mm.py with 10 `@handler` entries
+  (5 MM at funct7=0x00 + 5 MMC at funct7=0x01, all mask_funct3=True; each a
+  2-3 line forwarder to mm_engine.firmware_mm with explicit is_accumulate
+  + variant) + ops/__init__.py mm import + Rule 3 blocking deviation:
+  spr.py wrspr_gem5/rdspr_gem5 rs1!=0 branch wired to MM/MMC re-dispatch
+  (None-key collision discovered at first verify; spr.py docstring named
+  this exact spot as the Plan 04 fill marker for what was previously a
+  P2 "stub returning 0"). Collateral fixes: test_spr.py _fake_npu grew
+  _custom0={}; test_dispatch.py P2-era hung-on-huge-dims test right-sized
+  to 1x1x1.
 
-SUMMARY at `.planning/phases/04-mm-subsystem/04-02-SUMMARY.md`. Self-check
-PASSED: 1 created file + 1 modified file present; both commits in
-`git log`; `pytest tests/gtx/ -q --noconftest -o "addopts="` reports
-**183 passed, 16 skipped, 0 failed** (P4 plan 01 baseline 180/19 + 3
-GREEN converted from skip).
+- `7ee15d6` (test Task 3): 11 scaffold tests GREEN (7 in test_op_mm.py
+  + 3 originals + 1 new `test_mode4_firmware_mm_op_routes_to_tmu_curr` in
+  test_funct7_routing.py). Verifies registry presence, 16x16x16 GEMM
+  bit-exact dispatch, mm_s FP32 ADDRC writeback, mm_o L0 BE / mm_v L0 LE
+  asymmetry, mm_t Pitfall D NxM transposed layout, BE bit-pair compare,
+  WRSPR-collision routing, MMC funct7=0x01 always-routes, Mode 4 NOP
+  dispatch_4mode contract, Mode 4 firmware_mm_op-path isolation.
+
+SUMMARY at `.planning/phases/04-mm-subsystem/04-04-SUMMARY.md`. Self-check
+PASSED: all created/modified files present; all 3 commits in `git log`;
+`pytest tests/gtx/ -q --noconftest -o "addopts="` reports
+**195 passed, 5 skipped, 0 failed** (baseline 184/15 + 11 new green - 1
+new test added). Remaining 5 skips all owned by Plan 05.
 
 ### Next Action
 
-Wave 1b siblings unblocked — Plans 03 (mm_engine) and 04 (ops/mm) will
-spawn next. Plan 03 fills 2 scaffolds (`test_decode_firmware_mm_args` +
-`test_mode4_routes_to_tmu_curr`) and provides `mm_engine.firmware_mm`
-that consumes `from riscv.gtx.gemm_core import gemm_core, gemm_reduce_sum_a,
-gemm_dot`. Plan 04 fills 11 scaffolds (10 `@handler` entry points + funct7
-collision matrix + 4 mm_chain scaffolds) and goes through Plan 03's
-`mm_engine.firmware_mm` rather than calling gemm_core directly. Plan 05
-(Wave 2) wires the subprocess strict-mode regression body in
-`test_regression_fw_mm.py`.
+Wave 2 (Plan 05) is now unblocked — only remaining Phase 4 plan. Plan 05
+wires the strict-mode .elf regression body in `test_regression_fw_mm.py`
+(subprocess pyspike + verify_minimal compare against vendor golden hex)
+plus the 4 `test_mm_chain.py` scaffolds (mm chain ADDRC continuity +
+mxe_accum chain on (1,5) + per-cell isolation + dtype-locked across chain).
+Plan 04 surface guarantees: `from riscv.gtx.mm_engine import firmware_mm`
++ 10 `@handler` MM/MMC entries + WRSPR collision re-dispatch on rs1!=0
+all in place. After Plan 05 completes, Phase 4 enters /gsd:verify-work.
 
 ### Resumption Notes
 
