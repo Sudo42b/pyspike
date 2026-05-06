@@ -87,9 +87,9 @@
   `exec_mmc`, `exec_mmc_s`, `exec_mmc_o`, `exec_mmc_v`, `exec_mmc_t` 전 변형 동작
 - [x] **MM-03**: `firmware_mm_op` 패킹 인코딩 디코딩 (`colB[63:48] | colA[31:16]
   | rowA[15:0]`, HW 컨벤션 0=65536) + funct3 변형(MM/MMC) 분기
-- [ ] **MM-04**: `mxe_accum` per-(NEST,SPU) FP32 영구 상태 — `is_accumulate` 플래그
+- [x] **MM-04**: `mxe_accum` per-(NEST,SPU) FP32 영구 상태 — `is_accumulate` 플래그
   존중, `mm.s → mmc.s → mmc` 체인이 C++과 동일하게 누적
-- [ ] **MM-05**: 첫 .elf 펌웨어 회귀(GEMM 단순) 통과 — DDR dump가
+- [x] **MM-05**: 첫 .elf 펌웨어 회귀(GEMM 단순) 통과 — DDR dump가
   `verify.py --fp16 --ulp 1 --atol 0.001` 통과
 
 ### VEC (Vector ops)
