@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-last_updated: "2026-05-05T15:10:06.110Z"
+status: executing
+last_updated: "2026-05-06T00:19:33.478Z"
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 3
-  total_plans: 16
-  completed_plans: 16
-  percent: 100
+  total_plans: 21
+  completed_plans: 17
+  percent: 81
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-06 after Phase 3 Wave 3 complete (Plan 05 flush-roundtrip — DMA-03 + DMA-05 closed; VALIDATION.md sign-off ready; phase 3 complete pending /gsd:verify-work)
+**Last updated:** 2026-05-06 after Phase 4 Plan 01 complete (Wave 0 MM scaffolds + .elf fixture — 18 named test scaffolds skip cleanly + _verify_minimal BE bit-pair landed + mm_basic.elf pre-built; Wave 1 Plans 02/03/04 unblocked)
 
 ## Project Reference
 
@@ -24,7 +24,7 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 03 — dma-ddr-i-o
+**Current Focus:** Phase 04 — mm-subsystem
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -32,13 +32,14 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-Phase: 03 (dma-ddr-i-o) — COMPLETE (pending /gsd:verify-work 3)
-Plan: ALL 5 plans landed across 3 waves
+Phase: 04 (mm-subsystem) — EXECUTING
+Current Plan: 2
+Total Plans in Phase: 5
 
 - **Phase:** 4
-- **Plan:** Not started
-- **Status:** Ready to plan
-- **Progress:** [██████████] 100%
+- **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
+- **Status:** Executing Phase 04
+- **Progress:** [████████░░] 81%
 
 ## Performance Metrics
 
@@ -61,6 +62,7 @@ Plan: ALL 5 plans landed across 3 waves
 | Phase 03-dma-ddr-i-o P04 | 6m 29s | 1 tasks | 3 files |
 | Phase 03-dma-ddr-i-o P02 | 13min | 3 tasks | 6 files |
 | Phase 03-dma-ddr-i-o P05 | 5m53s | 2 tasks | 7 files |
+| Phase 04-mm-subsystem P01 | 7min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -120,6 +122,16 @@ Plan: ALL 5 plans landed across 3 waves
 2. **`dispatch_iss_opcode` is a TRUE stub in P3.** Every funct7 NOPs and returns 0; OOB nest_id/spu_id silently NOP. The body has a comment block naming exactly which lines Plan 05 will replace with the credit_st_chk flush trigger (`if funct7 == GTX_ISS_F7_CREDIT_ST_CHK and npu.warp.is_sloop: npu.flush_deferred_ddr_stores()`). P4 fills `GTX_OP_MM=0`; P5 fills VEC/ACT (1/2).
 3. **Pitfall 8 dual coverage.** Mode 3 OR-rule covered by (a) `is_load = (sub_op == 0) or (opcode == GTX_OP_DMA)` — three truth-table corner tests, AND (b) `width = op3 & 0xFFFF`, `height = (op3 >> 16) & 0xFFFF` — explicit bitfield assertions in two tests. Single-check coverage would let one piece silently regress.
 4. **Pre-existing failures in `tests/gtx/test_firmware_dma.py` (Plan 02 territory)** documented in `deferred-items.md` and out of Plan 04 scope per executor scope-boundary rules. Plan 04's 72-test adjacency suite (test_dispatch_4mode + test_dispatch + test_dma_engine + test_ddr_modes) all green.
+
+### Phase 4 Plan 01 Decisions (locked during execution)
+
+1. **Test-only `_verify_minimal` — NO CLI / NO argparse / NO `__main__` block** (D-13 lock). `tests/gtx/_verify_minimal.compare_hex(actual, golden, *, ulp, atol, strict) -> (bool, dict)` exposed for `tests.gtx` import only. P6 VRF-01 promotes this to `riscv.gtx._verify` with CLI; conflating helper + production CLI in P4 would create a forward-incompat surface.
+2. **BE bit-pair done MANUALLY via `(byte[0] << 8) | byte[1]`** — not via numpy `>u2` `frombuffer` or `newbyteorder` (Pitfall 1 explicit). Reason: matches `verify.py:235` line-for-line; numpy 2.x deprecates `newbyteorder`; explicit form is bit-exact regardless of host endianness. Verified via round-trip on `np.float16(1.0) = 0x3C00` BE encoding.
+3. **`mm_basic.S` uses ISS-full WRSPR (funct7=0x49)** instead of gem5-simplified (funct7=0x00). Wave 0 ships ELF before MM @handler is wired; using funct7=0x00 for WRSPR would reenter the not-yet-implemented MM dispatch path. ISS-full is the only validated route in pyspike (P2 only registered ISS-full WRSPR at funct7=0x49).
+4. **Zero-init golden hex (Blocker 1 Option B)** — `mm_basic_n1s16.hex` is 32 bytes of `0x00` because `mm_basic.elf` runs against zero-init L1 (firmware does NOT pre-load operands). `gemm_core(zeros @ zeros) = zeros` (FP32 internal then cast to FP16 = `0x0000`). Plumbing-proof: if any @handler crashes during the subprocess run, the .elf never reaches WJOIN, returncode != 0, and the test fails. Non-trivial operand staging is deferred to P6 (which has the operand-fixture infrastructure scope).
+5. **Local `.gitignore` `!mm_basic.elf` override** added (Rule 3 blocking fix). Project-level `.gitignore` line 3 (`*.elf`) masks new ELFs; the existing `tests/gtx/data/elf/.gitignore` only listed `!nop_wjoin.elf`. Mirrors P2 D-22 commit-binary pattern; surgical 2-line edit.
+6. **Wave 0 RED-pass-via-skip discipline** (P3 plan-01 D-5 mirror) — every scaffold body is `pytest.skip("Wave 1: ...")`, NEVER `assert hasattr(...)`. The latter would fail the verify step before downstream Wave 1 plans fill modules; `pytest.skip()` placeholders pass cleanly. `test_verify_minimal_be_fp16_pairs` smoke-imports `compare_hex` (landed in Task 1) before skipping the full BE-pair regression.
+7. **Subprocess pyspike (D-11 fallback as PRIMARY)** — `test_regression_fw_mm.py` mirrors `test_skeleton.py` pattern: `shutil.which("pyspike")` first, fall back to `[sys.executable, "-m", "riscv"]`, timeout=30s. 3-tier skip on `_RISCV_AVAILABLE` / ELF missing / golden missing — never fails. In-process .elf load (D-11 PRIMARY in CONTEXT) was demoted to fallback by RESEARCH; subprocess proven by P2 plan-05 path.
 
 ### Phase 3 Plan 05 Decisions (locked during execution)
 
@@ -197,40 +209,38 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 03 Wave 3 (Plan 05 flush-roundtrip) complete — Phase 3 DONE pending
-`/gsd:verify-work 3`. **Plan 05** executed TDD-RED-then-GREEN with 3 atomic
-`--no-verify` commits:
+Phase 04 Wave 0 (Plan 01 scaffold + .elf fixture) complete — TDD-RED gate
+landed. **Plan 01** executed sequentially (Wave 1a) with 3 atomic commits
+(normal hooks, no `--no-verify`):
 
-- `542ef53` (test Task 1 RED): 11 deferred-store dual-trigger tests; 6 pass
-  already (queue/flush/Pitfall-7/!wsplit-seen-suppression/dispatch-no-flush),
-  5 fail awaiting wiring.
+- `26b8262` (feat Task 1): `tests/gtx/_verify_minimal.py` — `compare_hex`
+  BE FP16 bit-pair compare per `verify.py:235`; signed-magnitude ULP
+  fallback; verified by round-trip on `np.float16(1.0) = 0x3C00`.
 
-- `1fc5eb0` (feat Task 1 GREEN): wired `_do_endp` flush when `!wsplit_seen`,
-  `wsplit`/`wsplit_custom0` set `wsplit_seen=True`, `_credit_st_chk` flush when
-  `is_sloop`, `dispatch_iss_opcode` flush when funct7==CREDIT_ST_CHK and
-  is_sloop. Bumped `test_warp.py:_fake_npu` shim to expose
-  `flush_deferred_ddr_stores=lambda: None` + `deferred_ddr_stores=[]`
-  (Rule 1 fix for now-required API on stub fakes). All 11 deferred-store
-  tests + 16 test_warp tests green.
+- `3b95f38` (feat Task 2): `tests/gtx/data/elf/mm_basic.{S,elf}` +
+  `Makefile` rule + `.gitignore` `!mm_basic.elf` override (Rule 3 blocking
+  fix). Pre-built RV64 ELF entry 0x800000b0; objdump confirms instruction
+  `0x0000a50b` = custom0 funct7=0x00 funct3=2 rs1=x1 rd=x10 (mm op).
 
-- `d321c19` (feat Task 2 + sign-off): 3 round-trip integration tests
-  (LTR, REVERSED, L1->L1 ancillary copy) + VALIDATION.md frontmatter +
-  Approval flip. All 3 tests passed on first run because Plans 01-04 had
-  already shipped a complete data plane.
+- `2a03451` (test Task 3): 4 test scaffold files (test_op_mm 11 + test_mm_chain
+  4 + test_funct7_routing 3 + test_regression_fw_mm 1+1) covering all 18
+  VALIDATION-named MM tests + zero-init golden hex (32 bytes of 0x00 from
+  `gemm_core(zeros @ zeros)` explicit 3-loop FP32).
 
-SUMMARY at `.planning/phases/03-dma-ddr-i-o/03-05-flush-roundtrip-SUMMARY.md`.
-Self-check PASSED: all 9 must_haves.truths + all 4 key_links satisfied;
-179/179 P3 tests green (no skips). DMA-03 + DMA-05 requirements closed.
-VALIDATION.md `nyquist_compliant: true`, `wave_0_complete: true`,
-`Approval: ready` with 4-bullet sign-off justification.
+SUMMARY at `.planning/phases/04-mm-subsystem/04-01-SUMMARY.md`. Self-check
+PASSED: all 8 created files exist; `pytest tests/gtx/ -q --noconftest -o
+"addopts="` reports **180 passed, 19 skipped, 0 failed** (P3 baseline 179
++ new fixture-present 1; 18 named scaffolds + 1 fixture-present + 1 strict-
+mode subprocess scaffold all skip cleanly via `pytest.skip(...)`).
 
 ### Next Action
 
-Phase 3 complete. Run `/gsd:verify-work 3` to verify all 6 P3 requirement IDs
-(DMA-01..05, DISP-03) and confirm sign-off. Then `/gsd:transition` to Phase 4
-(MM subsystem) — the project's value-driver phase. Phase 4 inherits a fully
-working DMA + dispatch surface; `dispatch_iss_opcode` is the well-defined
-extension point for `funct7=GTX_OP_MM=0` (P4) and VEC/ACT (P5).
+Wave 1 unblocked — Plans 02 (gemm_core), 03 (mm_engine), 04 (ops/mm) can
+now begin in parallel (D-01 3-way module split). Plan 02 fills 3 RED
+scaffolds (`test_gemm_core_*` in test_op_mm.py); Plan 03 fills 2 (decode +
+Mode 4 routing); Plan 04 fills 11 (10 @handler entry points + funct7
+collision matrix + 4 mm_chain scaffolds). Plan 05 (Wave 2) then wires
+the strict-mode subprocess regression body in `test_regression_fw_mm.py`.
 
 ### Resumption Notes
 

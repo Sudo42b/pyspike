@@ -209,11 +209,11 @@
 | DMA-03 | Phase 3 | Complete |
 | DMA-04 | Phase 3 | Complete |
 | DMA-05 | Phase 3 | Complete |
-| MM-01 | Phase 4 | Pending |
-| MM-02 | Phase 4 | Pending |
-| MM-03 | Phase 4 | Pending |
-| MM-04 | Phase 4 | Pending |
-| MM-05 | Phase 4 | Pending |
+| MM-01 | Phase 4 | In Progress (Wave 0 scaffold landed; Wave 1 Plan 02 GREEN) |
+| MM-02 | Phase 4 | In Progress (Wave 0 scaffold landed; Wave 1 Plan 04 GREEN) |
+| MM-03 | Phase 4 | In Progress (Wave 0 scaffold landed; Wave 1 Plan 03/04 GREEN) |
+| MM-04 | Phase 4 | In Progress (Wave 0 scaffold landed; Wave 1 Plan 04 GREEN) |
+| MM-05 | Phase 4 | In Progress (Wave 0 scaffold + .elf fixture landed; Wave 2 Plan 05 GREEN) |
 | VEC-01 | Phase 5 | Pending |
 | VEC-02 | Phase 5 | Pending |
 | VEC-03 | Phase 5 | Pending |
