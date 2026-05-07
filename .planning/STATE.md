@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: Not started
-status: planning
-last_updated: "2026-05-07T13:00:00.000Z"
+current_plan: 2
+status: executing
+last_updated: "2026-05-07T13:24:13.538Z"
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 27
-  completed_plans: 27
-  percent: 100
+  total_plans: 32
+  completed_plans: 28
+  percent: 88
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -25,7 +25,7 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 06 — verification-wheel (CONTEXT gathered, ready to plan)
+**Current Focus:** Phase 06 — verification-wheel
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -33,15 +33,15 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-Phase: 06 (verification-wheel) — CONTEXT GATHERED
-Plan: 0 of 5 (5 plans / 3 waves planned in CONTEXT D-16)
-Current Plan: Not started
+Phase: 06 (verification-wheel) — EXECUTING
+Plan: 2 of 5
+Current Plan: 2
 Total Plans in Phase: 5
 
 - **Phase:** 06
 - **Plan:** 0 of 5 (CONTEXT.md committed; PLAN.md TBD)
-- **Status:** Ready to plan
-- **Progress:** [████████████████████] 100% (5 of 6 phases complete in milestone v1.0)
+- **Status:** Ready to execute
+- **Progress:** [█████████░] 88%
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Total Plans in Phase: 5
 | Phase 05-vec-act-pool P04 | 14min | 3 tasks | 5 files |
 | Phase 05-vec-act-pool P05 | 5min | 2 tasks | 2 files |
 | Phase 05-vec-act-pool PP06 | 10min | 2 tasks | 1 files |
+| Phase 06-verification-wheel P01 | 22min | 2 tasks | 7 files |
 
 ## Accumulated Context
 

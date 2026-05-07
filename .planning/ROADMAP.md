@@ -177,12 +177,12 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `cibuildwheel` matrix builds green for **cp310–cp312** manylinux2014_x86_64 (Phase 1 D-08; cp38/cp39 dropped) with no regressions vs the pre-GTX baseline; wheel size is ≤50MB (or split into `spike[gtx-regression]` extra if exceeded).
   5. `pyspike --extlib=riscv.gtx tests/gtx/data/elf/<any>.elf` from a `pip install`-ed wheel produces a DDR dump that the bundled `pyspike-verify` console script accepts as strict-mode PASS — proving the user's "한 줄 실행" path works end-to-end.
 
-**Plans:** 5 plans
-- [ ] 02-skeleton-disasm/02-01-PLAN.md — Wave 0 scaffold (package skeleton + test infra + nop_wjoin.elf fixture)
-- [ ] 02-skeleton-disasm/02-02-PLAN.md — SPR routing + WRSPR/RDSPR handlers (Wave 1)
-- [ ] 02-skeleton-disasm/02-03-PLAN.md — Loop state machine + custom1 + WJOIN (Wave 1)
-- [ ] 02-skeleton-disasm/02-04-PLAN.md — Disasm registration (Wave 1)
-- [x] 02-skeleton-disasm/02-05-PLAN.md — Skeleton tests + integration (Wave 2)
+**Plans:** 1/5 plans executed
+- [ ] 06-verification-wheel/06-01-PLAN.md — VRF-01: riscv.gtx._verify production module + pyspike-verify console_script + 7 RED test scaffolds (Wave 1a)
+- [ ] 06-verification-wheel/06-02-PLAN.md — GTX_DDR_DUMP atexit hook (P5 deferred infra; closes test_regression_fw_act tier #5 → hard PASS) (Wave 1a)
+- [ ] 06-verification-wheel/06-03-PLAN.md — VRF-03: 9 hand-written .S kernels + .elf pre-builds + golden hex from vendor _ref.txt + import_vendor_golden.py converter (Wave 1a)
+- [ ] 06-verification-wheel/06-04-PLAN.md — VRF-04: parametrized strict-mode regression matrix (test_regression_fw_full.py) (Wave 1b)
+- [ ] 06-verification-wheel/06-05-PLAN.md — PKG-01/03/04: setup.py build_py asset copy + pyproject.toml package-data + cibuildwheel test-command + manual venv smoke (Wave 2)
 **UI hint**: no
 
 ---
@@ -196,7 +196,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 | 3. DMA & DDR I/O | 5/5 | Complete   | 2026-05-05 |
 | 4. MM Subsystem | 4/5 | In Progress | - |
 | 5. VEC/ACT/Pool | 2/6 | In Progress | - |
-| 6. Verification & Wheel | 0/? | Not started | - |
+| 6. Verification & Wheel | 1/5 | In Progress|  |
 
 ---
 
