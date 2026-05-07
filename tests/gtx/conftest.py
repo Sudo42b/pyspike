@@ -41,3 +41,48 @@ def proc():
 def insn_factory():
     from ._mocks import MockInsn
     return MockInsn
+
+
+@pytest.fixture
+def proc_with_addra_addrr_seeded():
+    """Pre-seed distinct FP16 patterns at L1 ADDRA and ADDRR to prove activation
+    direction asymmetry (RESEARCH Pitfall 3 / ROADMAP P5 success #2).
+
+    Returns a callable: seed(npu, *, nest=0, spu=0, length=16,
+                             addra_pattern, addrr_pattern)
+    that writes addra_pattern (np.float16 array) at L1[ADDRA] and addrr_pattern
+    at L1[ADDRR] and returns dict(addra=ndarray_view, addrr=ndarray_view) for
+    after-call assertions.
+
+    Implementations of activations (Plan 03) MUST overwrite ONE of these regions
+    based on `is_reversed`; tests use this fixture to verify which buffer changed.
+
+    Example usage (Plan 03 wave 1b GREEN tests will fill):
+        def test_relu_forward_direction(proc_with_addra_addrr_seeded, ...):
+            # forward = ADDRA -> ADDRR; only addrr region should change.
+            seed = proc_with_addra_addrr_seeded
+            seeded = seed(npu, addra_pattern=[1.0]*16, addrr_pattern=[-99.0]*16)
+            ... run RELU ...
+            # ADDRA region must be unchanged.
+    """
+    import numpy as np
+
+    def seed(npu, *, nest: int = 0, spu: int = 0, length: int = 16,
+             addra_pattern, addrr_pattern):
+        from riscv.gtx.encoding import LSPR_SPM_ADDRA, LSPR_SPM_ADDRR
+        addra = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
+        addrr = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+        l1_f16 = npu.mem.l1_f16(nest, spu)
+        addra_off = addra // 2
+        addrr_off = addrr // 2
+        l1_f16[addra_off:addra_off + length] = np.array(addra_pattern, dtype=np.float16)
+        l1_f16[addrr_off:addrr_off + length] = np.array(addrr_pattern, dtype=np.float16)
+        return {
+            "addra": l1_f16[addra_off:addra_off + length].copy(),
+            "addrr": l1_f16[addrr_off:addrr_off + length].copy(),
+            "l1_f16": l1_f16,
+            "addra_off": addra,
+            "addrr_off": addrr,
+        }
+
+    return seed
