@@ -108,9 +108,16 @@ GTX_F3_MM_T: int = 7      # mm_t / mmc_t -- transposed C^T to ADDRR (NxM layout!
 # Source: vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:67-142
 # =========================================================================
 GTX_F7_VEC_SASMD: int = 0x10        # SASMD scalar arith (add/sub/mul/div x VS/IS)
-GTX_F7_VEC_FMADD: int = 0x11        # fmadd_vss (Plan 02 stub; lower priority)
-GTX_F7_VEC_DOT_SUM: int = 0x13      # vsum + dot funct3=0/1 (gtx_npu_vec.cc:102/251)
+GTX_F7_VEC_FMADD: int = 0x11        # fmadd_vss / fmadd_iss (P5 stub; lower priority)
+GTX_F7_VEC_MINMAX: int = 0x13       # max_vs / min_vs / max_is / min_is (disasm.inc:80-84)
 GTX_F7_VEC_ARITH: int = 0x18        # SASMD vector arith (add/sub/mul/div x VV/II)
+# AUTHORITATIVE CORRECTION (Plan 05-02 deviation Rule 1):
+# Plan 01 seeded GTX_F7_VEC_DOT_SUM=0x13 from a draft note; vendor
+# `gtx_npu.h:308` defines GTX_ISS_F7_DOT_SUM = 0b0011010 = 0x1A. funct7=0x13
+# is actually MIN/MAX scalar arith (disasm.inc:80-84). DOT/SUM lives at
+# 0x1A with `dot_vvs` at funct3=0 and `sum_vs` (vsum) at funct3=1
+# (disasm.inc:101-104; firmware_vec_op.cc:632-637).
+GTX_F7_VEC_DOT_SUM: int = 0x1A      # dot funct3=0, vsum funct3=1 (gtx_npu_vec.cc:632-637)
 GTX_F7_VEC_FMADD_VV: int = 0x19     # vector fmadd (P5 stub; lower priority)
 GTX_F7_VEC_MATH: int = 0x1C         # sqrt/exp/log
 GTX_F7_VEC_SIGN: int = 0x1D         # abs/neg/sgn/step
