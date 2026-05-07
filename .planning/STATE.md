@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 6
-status: verifying
-last_updated: "2026-05-07T05:03:51.137Z"
+current_plan: Not started
+status: planning
+last_updated: "2026-05-07T05:13:37.858Z"
 progress:
   total_phases: 7
   completed_phases: 5
@@ -35,12 +35,12 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 Phase: 05 (vec-act-pool) — EXECUTING
 Plan: 6 of 6
-Current Plan: 6
+Current Plan: Not started
 Total Plans in Phase: 6
 
 - **Phase:** 07
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
-- **Status:** Phase complete — ready for verification
+- **Status:** Ready to plan
 - **Progress:** [██████████] 100%
 
 ## Performance Metrics
