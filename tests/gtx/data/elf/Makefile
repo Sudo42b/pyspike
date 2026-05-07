@@ -22,9 +22,13 @@ nop_wjoin.elf: nop_wjoin.S
 mm_basic.elf: mm_basic.S
 	$(CC) $(LDFLAGS) -o $@ $<
 
+# P5 activation_relu_gelu firmware (D-04). Pre-built .elf committed.
+activation_relu_gelu.elf: activation_relu_gelu.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
 .PHONY: clean
 clean:
-	rm -f nop_wjoin.elf mm_basic.elf
+	rm -f nop_wjoin.elf mm_basic.elf activation_relu_gelu.elf
 
 .PHONY: verify
 verify: nop_wjoin.elf
@@ -33,5 +37,10 @@ verify: nop_wjoin.elf
 
 .PHONY: verify-mm
 verify-mm: mm_basic.elf
+	@/opt/riscv/bin/riscv64-unknown-elf-readelf -h $< | grep -E 'Entry point|Type'
+	@echo OK
+
+.PHONY: verify-act
+verify-act: activation_relu_gelu.elf
 	@/opt/riscv/bin/riscv64-unknown-elf-readelf -h $< | grep -E 'Entry point|Type'
 	@echo OK

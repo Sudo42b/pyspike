@@ -1,9 +1,10 @@
-# nop_wjoin.elf and mm_basic.elf are intentionally committed (D-22, P4 D-09) --
-# pre-built binaries for tests. Override the project-level gitignore (../../../
-# .gitignore patterns *.elf and Makefile) so these fixtures and the build recipe
-# land in the repo.
+# nop_wjoin.elf, mm_basic.elf, activation_relu_gelu.elf are intentionally
+# committed (D-22, P4 D-09, P5 D-04) -- pre-built binaries for tests.
+# Override the project-level gitignore (../../../.gitignore patterns *.elf
+# and Makefile) so these fixtures and the build recipe land in the repo.
 !nop_wjoin.elf
 !mm_basic.elf
+!activation_relu_gelu.elf
 !Makefile
 
 # Build artifacts from `make` other than nop_wjoin.elf:
