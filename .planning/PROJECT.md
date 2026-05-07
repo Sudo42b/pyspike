@@ -50,6 +50,29 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   NumPy + mm_engine.py 342 LOC + ops/mm.py 10 @handlers + WRSPR funct7=0x00 collision
   re-dispatch + mm_basic.elf strict-mode regression returncode=0; 199/200 P4 tests pass,
   1 graceful-skip on P6-deferred GTX_DDR_DUMP atexit hook)
+- ✓ **GTX-VEC-01**: VEC 서브시스템 (SASMD add/sub/mul/div IS+VS, DOT, VSUM mode-A/B,
+  CLAMP single funct7=0x1F 4모드, accum_v / arange_v, L0/L1 분기) 구현 — VSUM/DOT
+  FP32-internal-accumulate-with-single-FP16-cast 정밀도 규약 적용 — **Validated in
+  Phase 5: VEC/ACT/Pool** (VEC-01..05 closed; vec_core.py 7 stateless 커널 + vec_engine.py
+  firmware_vec_op packed-rs1 디스패치 + ops/vec.py 22 @handlers; 15 GREEN VEC unit tests
+  + 5 GREEN VSUM precision anti-pattern tests with `[1024.0]+5000*[0.4]` long-tail input
+  proving FP32-internal vs FP16-naive divergence)
+- ✓ **GTX-ACT-01**: ACT 서브시스템 (RELU/SOFTMAX/ESUM forward, PRELU/GELU/TANH/SIGM
+  reversed, pool max/avg with -0.0 → +0.0 canon, format_cvt 7방향 incl. FP64↔FP16) 구현
+  — **Validated in Phase 5: VEC/ACT/Pool** (ACT-01..05 closed; act_core.py 7 activation
+  + 2 pool + 9 cvt 커널 + FP8 LUTs (256-byte FP8→FP16 + 64KB FP16→FP8 precomputed at
+  module import) + act_engine.py firmware_act 단일 if/else direction asymmetry consulting
+  ACT_OPS_REVERSED frozenset + firmware_act_imm/firmware_softmax_imm separate L0 entries
+  + ops/act.py 19 @handlers; ESUM forward writes FP16 scalar to L0 at
+  `(GSPR_OPERAND3 & 0x1F) * 32`; activation_relu_gelu.elf strict-mode regression
+  subprocess returncode=0 with 5-tier graceful-skip)
+- ✓ **GTX-VERIFY-02**: `verify_ref.py` 32-op host-side scalar 검증을 Python NPU 단위
+  테스트로 흡수 — **Validated in Phase 5: VEC/ACT/Pool** (VRF-02 closed; tests/gtx/_oracles.py
+  exports DIRECT_MAPPED_ORACLES (20 directly-mapped, line-for-line port of vendor
+  verify_ref.py:185-226) + DEFERRED_REASONS (12 deferred ops with documented skip
+  reasons: scipy ban for GELU_ERF, composites, unsupported HW); 21 parametrized parity
+  tests with delta_ulp=0 across 1344 element comparisons — bit-exact, ULP-1 tolerance
+  not consumed)
 
 ### Active
 
@@ -61,24 +84,26 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   워프 루프 상태머신(4-mode 라우팅) 구현
 <!-- GTX-MM-01 → Validated in Phase 4 (moved above) -->
 <!-- GTX-DMA-01 → Validated in Phase 3 (moved above) -->
-- [ ] **GTX-VEC-01**: VEC 서브시스템 (SASMD add/sub/mul/div, DOT/VSUM, CLAMP,
-  L1/L0 분기) 구현 — VSUM FP32 누적 정밀도 규약 포함
-- [ ] **GTX-ACT-01**: ACT 서브시스템 (RELU/SOFTMAX/ESUM 정방향, PRELU/GELU/TANH/SIGM
-  역방향, pooling, format_cvt) 구현
+<!-- GTX-VEC-01 → Validated in Phase 5 (moved above) -->
+<!-- GTX-ACT-01 → Validated in Phase 5 (moved above) -->
+<!-- GTX-VERIFY-02 → Validated in Phase 5 (moved above) -->
+<!-- VEC/ACT-related Active items consolidated under GTX-VEC-01/GTX-ACT-01/GTX-VERIFY-02 above -->
 - [ ] **GTX-SPR-01**: GSPR(0x000–0x3FF) / NSPR(0x400–0x7FF) / LSPR(0x800–0xBFF)
   읽기·쓰기 (`wr_spr`, `rd_spr`, `RDSPR` writeback) 구현
 - [ ] **GTX-DISP-01**: 통합 오피코드 라우터 `dispatch_iss_opcode` (0=MM, 1=VEC,
   2=ACT, 3=DMA) + gem5 간소화(0x04–0x07) / ISS full(0x00–0x7F) 양 인코딩 공존
   — Phase 3 부분 진행: 4-mode 라우터(`dispatch_4mode`) + DMA-only `dispatch_iss_opcode`
   스텁 land (DISP-03). Phase 4 추가: MM funct7=0x00/0x01 fillers + WRSPR collision
-  re-dispatch land (ops/mm.py 10 @handlers + ops/spr.py rs1!=0 fallback). VEC/ACT
-  funct7 fillers는 P5 잔여
+  re-dispatch land (ops/mm.py 10 @handlers + ops/spr.py rs1!=0 fallback). Phase 5 추가:
+  VEC funct7 fillers (ops/vec.py 22 @handlers covering SASMD IS/VS L0/L1, DOT, VSUM,
+  CLAMP funct7=0x1F, accum_v / arange_v) + ACT funct7 fillers (ops/act.py 19 @handlers
+  covering 7 activations × forward/reversed direction + pool max/avg + 7 cvt directions
+  incl. FP64↔FP16 + L0 _imm paths). 잔여: 통합 라우터 dispatch_iss_opcode 본체 — P6+ 검토
 - [ ] **GTX-DISASM-01**: `gtx_npu_disasm.inc`에 대응하는 `disasm_insn_t` 테이블을
   Python `get_disasms()`로 노출
 - [ ] **GTX-VERIFY-01**: 기존 `verify.py` (DDR FP16 ULP/atol 비교) 자산을 pyspike에
   동봉하고 Python NPU 결과 ↔ C++ libgtx_npu.so 결과 비교 회귀 셋 통과
-- [ ] **GTX-VERIFY-02**: `verify_ref.py`(32개 op host-side scalar 검증)을 Python
-  NPU 단위 테스트로 흡수해 op별 ULP 일치 확인
+<!-- GTX-VERIFY-02 → Validated in Phase 5 (moved above) -->
 - [ ] **GTX-FW-01**: 기존 펌웨어 회귀 (`run_tests_n1s16.sh`,
   `run_llext_tests.sh`에 대응되는 .elf 시퀀스)를 pyspike+Python NPU 환경에서 100% 통과
   — Phase 4 부분 진행: `mm_basic.elf` strict-mode 회귀가 subprocess returncode=0으로
@@ -191,4 +216,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-06 after Phase 4 complete (MM Subsystem: gemm_core 3-loop FP32-accumulate + mm_engine 5 variant helpers + ops/mm 10 @handlers + WRSPR funct7=0x00 collision re-dispatch + mm_basic.elf strict-mode subprocess regression returncode=0; MM-01..05 closed; 199/200 P4 tests pass with 1 graceful-skip on P6-deferred GTX_DDR_DUMP atexit)*
+*Last updated: 2026-05-07 after Phase 5 complete (VEC/ACT/Pool: vec_core 7 stateless kernels with FP32-internal-accumulate-with-single-FP16-cast precision rule + vec_engine firmware_vec_op + ops/vec 22 @handlers + act_core 7 activations + 2 pool + 9 cvt kernels + FP8 LUTs + act_engine firmware_act direction asymmetry consulting ACT_OPS_REVERSED frozenset + firmware_act_imm/firmware_softmax_imm separate L0 entries + ops/act 19 @handlers + 20 directly-mapped oracle parity (delta_ulp=0 over 1344 element comparisons) + activation_relu_gelu.elf strict-mode subprocess returncode=0 with 5-tier graceful-skip; VEC-01..05 + ACT-01..05 + VRF-02 closed; 264/266 P3+P4+P5 tests pass with 2 graceful-skips on P6-deferred GTX_DDR_DUMP atexit)*
