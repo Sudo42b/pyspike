@@ -101,3 +101,93 @@ GTX_F3_MM_O: int = 1      # mm_o / mmc_o -- scalar sum(A) to L0 BE + mxe_accum
 GTX_F3_MM:   int = 2      # mm   / mmc   -- basic GEMM, ADDRC FP32 bias staging
 GTX_F3_MM_V: int = 3      # mm_v / mmc_v -- scalar dot(A,B) to L0 LE + mxe_accum
 GTX_F3_MM_T: int = 7      # mm_t / mmc_t -- transposed C^T to ADDRR (NxM layout!)
+
+
+# =========================================================================
+# Phase 5: VEC funct7 constants
+# Source: vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:67-142
+# =========================================================================
+GTX_F7_VEC_SASMD: int = 0x10        # SASMD scalar arith (add/sub/mul/div x VS/IS)
+GTX_F7_VEC_FMADD: int = 0x11        # fmadd_vss (Plan 02 stub; lower priority)
+GTX_F7_VEC_DOT_SUM: int = 0x13      # vsum + dot funct3=0/1 (gtx_npu_vec.cc:102/251)
+GTX_F7_VEC_ARITH: int = 0x18        # SASMD vector arith (add/sub/mul/div x VV/II)
+GTX_F7_VEC_FMADD_VV: int = 0x19     # vector fmadd (P5 stub; lower priority)
+GTX_F7_VEC_MATH: int = 0x1C         # sqrt/exp/log
+GTX_F7_VEC_SIGN: int = 0x1D         # abs/neg/sgn/step
+GTX_F7_VEC_ROUND: int = 0x1E        # ceil/trunc/floor/rne
+GTX_F7_VEC_CLAMP: int = 0x1F        # clamp_min_v/clamp_max_v/accum_v/arange_v + bitwise
+
+# =========================================================================
+# Phase 5: format_cvt funct7 constants (RESEARCH Adjustment 1: include FP64<->FP16)
+# Source: vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:144-148
+# =========================================================================
+GTX_F7_SCVT_QH: int = 0x20          # FP16<->FP8  (sub_op&1 selects direction)
+GTX_F7_SCVT_IH: int = 0x21          # FP16<->INT8 (sub_op&1 selects direction)
+GTX_F7_SCVT_HN: int = 0x22          # INT32->FP16 normalize (1-direction only)
+GTX_F7_FCVT_SH: int = 0x24          # FP16<->FP32
+GTX_F7_FCVT_DH: int = 0x25          # FP16<->FP64
+
+# =========================================================================
+# Phase 5: ACT funct7 constants (8 ISS activations split across 5 funct7 values)
+# Source: vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:152-157
+# =========================================================================
+GTX_F7_ACT_PRELU: int = 0x28        # prelu funct3=3 / prelu_i funct3=7
+GTX_F7_ACT_GELU: int = 0x2A         # gelu funct3=0 / gelu_i funct3=4
+GTX_F7_ACT_TANH: int = 0x2C         # tanh funct3=0 / tanh_i funct3=4
+GTX_F7_ACT_SIGM: int = 0x2D         # sigm funct3=0 / sigm_i funct3=4
+GTX_F7_ACT_SOFTMAX: int = 0x2F      # esum funct3=1, softmax funct3=2; _imm at funct3=5/6
+
+# =========================================================================
+# Phase 5: POOL funct7 constants
+# Source: vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:160-161
+# =========================================================================
+GTX_F7_POOL_MAX: int = 0x30         # pool_m
+GTX_F7_POOL_AVG: int = 0x31         # pool_a
+
+# =========================================================================
+# Phase 5: GTX_ACT_* enum values (op_id passed to firmware_act + act_core)
+# Source: vendor/gtx_cpp_reference/gtx/gtx_npu.h:371-377 (verified verbatim)
+# =========================================================================
+GTX_ACT_RELU: int = 0
+GTX_ACT_TANH: int = 1
+GTX_ACT_SOFTMAX: int = 2
+GTX_ACT_GELU: int = 3
+GTX_ACT_SIGMOID: int = 4
+GTX_ACT_PRELU: int = 5
+GTX_ACT_ESUM: int = 6
+
+# Set of activation op_ids whose direction is REVERSED (read ADDRR, write ADDRA).
+# Engine-internal CONSISTENCY CHECK only. The @handler-entry `is_reversed` literal
+# is the source-of-truth (CONTEXT D-06). Do NOT use this as a routing primary.
+ACT_OPS_REVERSED: frozenset = frozenset({GTX_ACT_TANH, GTX_ACT_GELU,
+                                          GTX_ACT_SIGMOID, GTX_ACT_PRELU})
+
+# =========================================================================
+# Phase 5: GTX_VEC_* enum values (vec_op passed to vec_engine + vec_core)
+# Source: vendor/gtx_cpp_reference/gtx/gtx_npu.h:382-405 (verified verbatim)
+# Plan-stage draft used 0..9; vendor lock-in is 0..23 with full op list.
+# =========================================================================
+GTX_VEC_ADD: int = 0
+GTX_VEC_SUB: int = 1
+GTX_VEC_MUL: int = 2
+GTX_VEC_DIV: int = 3
+GTX_VEC_FMADD: int = 4
+GTX_VEC_VSUM: int = 5
+GTX_VEC_VEXP: int = 6
+GTX_VEC_VSQRT: int = 7
+GTX_VEC_VLN: int = 8
+GTX_VEC_VABS: int = 9
+GTX_VEC_VNEG: int = 10
+GTX_VEC_MAX: int = 11
+GTX_VEC_MIN: int = 12
+GTX_VEC_SIGN: int = 13
+GTX_VEC_STEP: int = 14
+GTX_VEC_CEIL: int = 15
+GTX_VEC_TRUNC: int = 16
+GTX_VEC_FLOOR: int = 17
+GTX_VEC_RNE: int = 18
+GTX_VEC_ACCUM: int = 19
+GTX_VEC_CLAMP_MAX: int = 20
+GTX_VEC_CLAMP_MIN: int = 21
+GTX_VEC_ARANGE: int = 22
+GTX_VEC_DOT: int = 23
