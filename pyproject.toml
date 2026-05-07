@@ -97,6 +97,9 @@ dev = [
   "wheel"
 ]
 
+[project.scripts]
+pyspike-verify = "riscv.gtx._verify:main"
+
 [tool.setuptools]
 script-files = [
   "scripts/spike",
