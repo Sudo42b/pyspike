@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 4
+current_plan: 5
 status: executing
-last_updated: "2026-05-07T04:28:32.213Z"
+last_updated: "2026-05-07T04:45:09.611Z"
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 24
-  percent: 89
+  completed_plans: 25
+  percent: 93
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -34,14 +34,14 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 05 (vec-act-pool) — EXECUTING
-Plan: 4 of 6
-Current Plan: 4
+Plan: 5 of 6
+Current Plan: 5
 Total Plans in Phase: 6
 
 - **Phase:** 07
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
 - **Status:** Ready to execute
-- **Progress:** [█████████░] 89%
+- **Progress:** [█████████░] 93%
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Total Plans in Phase: 6
 | Phase 05-vec-act-pool P01 | 13min | 3 tasks | 22 files |
 | Phase 05-vec-act-pool P02 | 16min | 3 tasks | 6 files |
 | Phase 05 P03 | 12min | 3 tasks | 4 files |
+| Phase 05-vec-act-pool P04 | 14min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -155,6 +156,20 @@ Total Plans in Phase: 6
 4. **L0 result-reg source = GSPR_OPERAND3 with insn.rd fallback.** Vendor `exec_scalar_imm` takes result_reg as a parameter; the dispatch upstream reads from `gspr[GSPR_GTX_OPERAND3] & 0x1F`. vec_engine reads OPERAND3 first, falls back to `insn.rd & 0x1F` if OPERAND3 not set -- mirrors vendor `gtx_npu_vec.cc:659` "if op3_raw <= 0x1F use it, else use input_reg" pattern.
 
 5. **DOT/VSUM scalar writeback is LE bytes at L0[0..1].** gtx_npu_vec.cc:108-110 and :258-260 use `l0[0] = r16 & 0xFF; l0[1] = (r16 >> 8) & 0xFF` -- LE byte order. MM_O writes BE, MM_V writes LE; VEC writes LE. Documented asymmetry preserved.
+
+### Phase 5 Plan 04 Decisions (locked during execution)
+
+1. **FP8 codec LUTs precomputed at module import (D-14, D-15).** `_build_fp8_to_fp16_lut` (256 entries, ~0.2 ms) + `_build_fp16_to_fp8_lut` (65536 entries, ~30 ms) build once and stay alive for module lifetime. The LUT IS the spec; per-call hot path is one-line `LUT[arr.view(uint16).astype(intp)]` (NumPy 2.x fancy index). Replaces Plan 01 zeros placeholder.
+
+2. **FP8 inf encoding NOT sign-preserving (vendor bug pattern; documented divergence).** Vendor `gtx_fp16_to_8` does `return h_frac ? (sign8 | 0xF8 | 0x01) : (sign8 | 0xF8);` -- the OR with 0xF8 forces sign=1 regardless of input. So FP16 +inf (0x7C00) re-encodes to FP8 0xF8 (=-inf decode), NOT 0x78. test_fp8_roundtrip_identity skips inf bytes (alongside NaN bytes) and adds explicit divergence assertions `fp16_to_fp8[0x7C00] == 0xF8` + `fp16_to_fp8[0xFC00] == 0xF8`.
+
+3. **Avg-pool signed-zero canonicalization via `avg += np.float32(0.0)` AFTER division.** Vendor cc:211. IEEE 754 says `(-0.0) + (+0.0) = +0.0`. Without canon, `pool_avg([0.0, -0.0])` produces FP16 `-0.0` (bit pattern 0x8000); with canon it's `+0.0` (0x0000). Mandatory for golden-hex matching. test_avg_pool_signed_zero_canon directly asserts the bit pattern.
+
+4. **5 cvt @handlers (NOT 9) at distinct funct7 values; sub_op&1 dispatch at handler entry.** SCVT_QH/HQ share funct7=0x20; SCVT_IH/HI share 0x21; FCVT_SH/HS share 0x24; FCVT_DH/HD share 0x25; SCVT_HN at 0x22 (1-direction only). Each handler does `if (npu.gspr[GSPR_OPCODE] & 0xFF) & 1: ... else: ...`. Plan body's "9 @handlers" delivered as 7 unique disasm mnemonics: scvt.qh, scvt.ih, scvt.hn, fcvt.sh, fcvt.dh, pool.m, pool.a (5 cvt-dispatch + 2 pool). collect_disasms() returns 85 entries (was 78 = +7).
+
+5. **kernel_size=0 silently NOPs in firmware_pool (vendor mirror).** Plan body suggested defaulting `kernel_size=0` to 1; vendor `gtx_npu_act.cc:175` instead has outer guard `if (... && kernel_size > 0) { ... }` that silently NOPs. Mirror exactly: `if kernel_size == 0: return 0` before any L1 view or kernel call.
+
+6. **scale/offset asymmetry: applied for FP16<->{FP8,INT8,INT32}; NOT applied for FP16<->{FP32,FP64}.** firmware_format dispatch table has 5 routes that pass scale+offset to cvt_qh/hq/ih/hi/hn, and 4 routes that call cvt_sh/hs/dh/hd WITHOUT scale/offset (bit-pattern preserving). test_fp32_fp16_no_scale + test_fp64_fp16_no_scale set scale=99.0, offset=50.0 and assert they are IGNORED for these directions.
 
 ### Phase 4 Plan 05 Decisions (locked during execution)
 
@@ -265,7 +280,56 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 05 Plan 02 (Wave 1b VEC GREEN-fill) complete — VEC subsystem
+Phase 05 Plan 04 (Wave 1b ACT pool + format_cvt GREEN-fill) complete —
+last critical compute primitive in Phase 5 landed. **Plan 04** executed
+in ~14 min with 4 atomic commits (TDD RED-then-GREEN):
+
+- `7be0371` (Task 1 prep, RED): 11 tests upgraded from pytest.skip stubs
+  to executable assertions (3 test_pooling + 8 test_op_format). All 11
+  fail RED before kernel impl lands.
+
+- `ae7ad83` (Task 1 GREEN, feat): act_core.py +159 LOC. pool_max + pool_avg
+  with FP32 explicit-loop accumulator + signed-zero canon (`avg += 0.0`
+  after divide; vendor cc:211). 9 cvt kernels (cvt_qh/hq/ih/hi/hn apply
+  scale+offset; cvt_sh/hs/dh/hd bit-pattern preserving incl. FP64 per
+  RESEARCH Adjustment 1). _build_fp8_to_fp16_lut (256 entries, ~0.2 ms)
+  + _build_fp16_to_fp8_lut (65536 entries, ~30 ms) build at module import.
+  FP8_TO_FP16_LUT[0x00]=+0; [0x80]=-0 (preserved); [0x78]=+inf; [0xF8]=-inf;
+  [0x7F]/[0xFF]=NaN. 5/11 tests GREEN at this point (kernel-level only).
+  [Rule 1 deviation] test_fp8_roundtrip_identity loosened to skip inf
+  bytes -- vendor `sign8|0xF8` forces -inf byte regardless of input sign;
+  FP16 +inf 0x7C00 re-encodes to FP8 0xF8 NOT 0x78. Documented divergence
+  with explicit lock assertions.
+
+- `4dc80cc` (Task 2 GREEN, feat): act_engine.py +104 LOC. firmware_pool
+  full body (length from GSPR_OPERAND1 & 0xFFFF; kernel_size from
+  GSPR_OPERAND2 & 0xFFFF; output_len = length // kernel_size; vendor
+  guard kernel_size>0 mirrored as silent NOP). firmware_format full body
+  with 9 (src,dst) routes covering 7 cvt directions; scale = OP2 & 0xFFFF
+  (Pitfall 6 lock); offset = (OP2 >> 16) & 0xFFFF. _BYTES_PER_ELEM dict
+  for clean src/dst byte-size lookup. 11/11 tests GREEN. proc.state used
+  (Pitfall 4); 0 proc.get_state() in production code.
+
+- `a496f0d` (Task 3, feat): ops/act.py +88 LOC. 7 new @handlers (5 cvt-
+  dispatch + 2 pool). Each cvt-dispatch handler inspects `npu.gspr
+  [GSPR_OPCODE] & 1` per vendor cc:245 (RESEARCH §format_cvt sub-op
+  direction discrimination authoritative). funct7 in {0x20, 0x21, 0x22,
+  0x24, 0x25, 0x30, 0x31} -- zero collision with Plan 03's 12 ACT
+  @handlers (funct7 in {0x28, 0x2A, 0x2C, 0x2D, 0x2F}). collect_disasms()
+  returns 85 entries (+7 over Plan 03's 78); mnemonics canonicalized to
+  dot-form: scvt.qh, scvt.ih, scvt.hn, fcvt.sh, fcvt.dh, pool.m, pool.a.
+
+SUMMARY at `.planning/phases/05-vec-act-pool/05-04-SUMMARY.md`. Self-check
+PASSED: all 5 files (3 src/main + 2 tests) modified; all 4 commits in
+`git log -5`; full P3+P4+P5 suite reports **242 passed / 3 skipped / 0
+failed** (was 231/14/0 post-Plan-03 baseline; +11 new GREEN test_pooling
+[3] + test_op_format [8]; -11 skipped; 0 regressions).
+
+Requirements marked complete: ACT-03, ACT-04.
+
+---
+
+(Earlier) Phase 05 Plan 02 (Wave 1b VEC GREEN-fill) complete — VEC subsystem
 core landed. **Plan 02** executed in ~16 min with 5 atomic commits
 (normal hooks; TDD RED-then-GREEN per task):
 
@@ -316,30 +380,35 @@ Requirements marked complete: VEC-01, VEC-02, VEC-03, VEC-04, VEC-05.
 
 ### Next Action
 
-Phase 5 Plan 03 (act) unblocked — `/gsd:execute-plan 5 03` GREEN-fills
-act_core kernels (relu/prelu/gelu/tanh/sigmoid/softmax/esum) + 16
-activation @handlers in ops/act.py + 11 test_op_act.py scaffolds.
+Phase 5 Wave 2 unblocked — full ACT/VEC/POOL/FORMAT compute surface
+now GREEN at unit-test level. Plans 05 and 06 can land in parallel.
 
-Wave 1b parallel-development still active:
+- **Plan 05 (oracle parity, Wave 2):** `_oracles.py` 32-op host-side
+  parity tests + `test_oracle_parity.py` (1 RED -> 20 parametrized).
+  All ACT kernels (relu/prelu/gelu/tanh/sigmoid/softmax/esum) + format_cvt
+  (FP16<->FP8/INT8/INT32, FP32<->FP16, FP64<->FP16) + pool (max/avg) are
+  now callable; oracle parity test against `verify_ref.py` (29 portable
+  ops; skip GELU_ERF per CLAUDE.md scipy ban) is plumbing-ready.
 
-- Plan 03 (act) owns: act_core.py {act+esum kernels only} + ops/act.py
-  {16 activation @handlers} + test_op_act.py (11 RED)
-  Recommended pattern handoff: reuse vec_engine.py's `_l0_block_view`
-
-  + `_l1_view_addr` helpers for analogous L0/L1 byte-offset addressing
-  in act_engine.firmware_act.
-
-- Plan 04 (pool/format) owns: act_core.py {pool + cvt + FP8 LUTs} +
-  act_engine.py {firmware_pool + firmware_format} + ops/act.py {7 cvt +
-  2 pool @handlers} + test_op_format.py (8 RED) + test_pooling.py (3 RED)
-
-- Plan 05 (oracle, wave 2): _oracles.py {20 portable bodies} +
-  DIRECT_MAPPED_ORACLES dict + test_oracle_parity.py (1 RED -> 20
-  parametrized).
-
-- Plan 06 (regression, wave 2): test_regression_fw_act.py body
+- **Plan 06 (regression, Wave 2):** `test_regression_fw_act.py` body
   (subprocess + 4-tier graceful skip + strict compare against
-  activation_relu_gelu.hex).
+  `activation_relu_gelu.hex`). RELU forward + GELU reversed wired by
+  Plan 03; pool + format_cvt wired by Plan 04. End-to-end .elf
+  regression via `_verify_minimal.compare_hex(strict=True)` is now
+  plumbing-ready.
+
+**Pattern handoff for Plan 05:**
+- The `_BYTES_PER_ELEM` table in act_engine.py is a clean source-of-truth
+  for any oracle that needs to match firmware_format byte counts.
+- All cvt + pool kernels obey the FP32-internal-then-FP16-cast discipline
+  established in Plan 02/03; oracle comparisons can use the same pattern.
+
+**Pattern handoff for Plan 06:**
+- The FP8/FP16 LUT-based round-trip pattern (`LUT[arr.view(uint16)]`) is
+  numba-friendly fancy-index that should JIT cleanly in P7 if profiling
+  identifies cvt as a hot path.
+- LUT build at module import (~30 ms one-time) is bounded; no per-call
+  cost in the hot path.
 
 Open follow-ups (P5/P6/P7):
 
