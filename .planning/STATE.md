@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: Not started
-status: planning
-last_updated: "2026-05-06T02:12:04.210Z"
+current_plan: 2
+status: executing
+last_updated: "2026-05-07T03:40:00.402Z"
 progress:
   total_phases: 7
   completed_phases: 4
-  total_plans: 21
-  completed_plans: 21
-  percent: 100
+  total_plans: 27
+  completed_plans: 22
+  percent: 81
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-06 after Phase 4 Plan 05 complete (mm chain integration + strict-mode .elf regression; 4 chain scaffolds GREEN-filled; cross-cutting Rule 1 fix proc.get_state() -> proc.state across 27 sites in 5 source files; 199 passed/1 skipped/0 failed; Phase 4 ready for /gsd:verify-work)
+**Last updated:** 2026-05-07 after Phase 5 Plan 01 complete (Wave 1a scaffold landing: 6 importable source-module stubs + 7 RED test scaffolds + 30-oracle skeleton + activation_relu_gelu.elf RV64 firmware fixture + zero-init golden hex; 21 funct7 + 7 GTX_ACT_* + 24 GTX_VEC_* + ACT_OPS_REVERSED frozenset added to encoding.py; vendor-verbatim GTX_VEC_* enum; 199 passed/45 skipped/0 failed -- matches P4 baseline; Plans 02-06 unblocked for parallel GREEN-fill)
 
 ## Project Reference
 
@@ -25,7 +25,7 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 04 — mm-subsystem
+**Current Focus:** Phase 05 — vec-act-pool
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -33,14 +33,15 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-Phase: 04 (mm-subsystem) — EXECUTING
-Current Plan: Not started
-Total Plans in Phase: 5
+Phase: 05 (vec-act-pool) — EXECUTING
+Plan: 2 of 6
+Current Plan: 2
+Total Plans in Phase: 6
 
 - **Phase:** 07
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
-- **Status:** Ready to plan
-- **Progress:** [██████████] 100%
+- **Status:** Ready to execute
+- **Progress:** [████████░░] 81%
 
 ## Performance Metrics
 
@@ -68,6 +69,7 @@ Total Plans in Phase: 5
 | Phase 04-mm-subsystem PP03 | 4min | 2 tasks | 2 files |
 | Phase 04-mm-subsystem PP04 | 44min | 3 tasks | 7 files |
 | Phase 04-mm-subsystem PP05 | 10min | 2 tasks | 11 files |
+| Phase 05-vec-act-pool P01 | 13min | 3 tasks | 22 files |
 
 ## Accumulated Context
 
@@ -127,6 +129,18 @@ Total Plans in Phase: 5
 2. **`dispatch_iss_opcode` is a TRUE stub in P3.** Every funct7 NOPs and returns 0; OOB nest_id/spu_id silently NOP. The body has a comment block naming exactly which lines Plan 05 will replace with the credit_st_chk flush trigger (`if funct7 == GTX_ISS_F7_CREDIT_ST_CHK and npu.warp.is_sloop: npu.flush_deferred_ddr_stores()`). P4 fills `GTX_OP_MM=0`; P5 fills VEC/ACT (1/2).
 3. **Pitfall 8 dual coverage.** Mode 3 OR-rule covered by (a) `is_load = (sub_op == 0) or (opcode == GTX_OP_DMA)` — three truth-table corner tests, AND (b) `width = op3 & 0xFFFF`, `height = (op3 >> 16) & 0xFFFF` — explicit bitfield assertions in two tests. Single-check coverage would let one piece silently regress.
 4. **Pre-existing failures in `tests/gtx/test_firmware_dma.py` (Plan 02 territory)** documented in `deferred-items.md` and out of Plan 04 scope per executor scope-boundary rules. Plan 04's 72-test adjacency suite (test_dispatch_4mode + test_dispatch + test_dma_engine + test_ddr_modes) all green.
+
+### Phase 5 Plan 01 Decisions (locked during execution)
+
+1. **GTX_VEC_* enum uses vendor 0..23 verbatim, NOT plan draft 0..9.** Plan draft listed 10 entries (`GTX_VEC_ADD..GTX_VEC_ARANGE` = 0..9, abbreviated); vendor `gtx_npu.h:382-405` defines 24 entries (0..23, full op list including FMADD/VEXP/VSQRT/VLN/VABS/VNEG/MAX/MIN/SIGN/STEP/CEIL/TRUNC/FLOOR/RNE/ACCUM/CLAMP_MAX/CLAMP_MIN/ARANGE/DOT). Plan note explicitly authorized this resolution: "if vendor `gtx_npu.h:382-405` GTX_VEC_* enum values differ from the draft above, USE the vendor numbers verbatim." encoding.py docstring documents the divergence.
+
+2. **`@`-prefixed line in golden hex is informative metadata.** Plan draft showed `@370000000` as the line content, suggesting it was an address marker the verifier reads. Resolution: `_verify_minimal._parse_hex` line 15 silently skips lines starting with `@` (and `#`), so the marker is purely human-readable metadata. The `mm_basic_n1s16.hex` precedent uses no `@` line at all (just a flat hex line). Self-compare via `compare_hex(strict=True)` returns `total_fp16=16, exact_matches=16` — golden is parseable.
+
+3. **FP8/FP16 LUT zero-filled placeholders are intentional Wave 0 scaffolding, NOT silent stubs.** `act_core.FP8_TO_FP16_LUT = np.zeros(256, ...)` and `FP16_TO_FP8_LUT = np.zeros(65536, ...)` are shipped so `from .act_core import FP8_TO_FP16_LUT` succeeds in any downstream test. Plan 04 wave 1b will replace them with import-time-built LUTs derived from `gtx_npu.h:154-179, 182-221`. Documented in SUMMARY's Known Stubs table.
+
+4. **Wave 0 RED-via-pytest.skip discipline (P3 plan-01 D-5 lock).** Every test body is `pytest.skip("Wave 1b plan NN GREEN-fills: ...")`. Quick suite reports 43 skipped, 0 failed; full P3+P4+P5 suite reports 199 passed (matches P4 baseline) / 45 skipped / 0 failed. No regression introduced by Wave 1a scaffold landing.
+
+5. **No requirements marked complete.** This plan is scaffold-only (no GREEN tests). Per RESEARCH adjustment + P4 04-01 deviation pattern: VEC-01..05 / ACT-01..05 / VRF-02 acceptance criteria require GREEN tests, which Wave 1b plans 02-04 + Wave 2 plan 05 + Wave 2 plan 06 will land in subsequent commits. `requirements-completed: []` in SUMMARY frontmatter.
 
 ### Phase 4 Plan 05 Decisions (locked during execution)
 
@@ -237,50 +251,68 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 04 Wave 2 FINAL plan (Plan 05 mm chain integration + strict-mode .elf
-regression) complete — MM subsystem end-to-end acceptance gate satisfied.
-**Plan 05** executed in ~10 min with 2 atomic commits (normal hooks):
+Phase 05 Plan 01 (Wave 1a scaffold) complete — VEC/ACT/Pool subsystem
+scaffold landed. **Plan 01** executed in ~13 min with 3 atomic commits
+(normal hooks):
 
-- `d4495b2` (test Task 1): 4 mm chain tests GREEN-filled in test_mm_chain.py.
-  ADDRC FP32 staging chain (mm.s -> mmc.s -> mmc on (0, 0)) verifies final
-  FP16 result matches explicit FP32 3-loop oracle AND mxe_accum unchanged
-  (Pitfall B dual-assertion). mxe_accum chain (mm.o -> mmc.o on (1, 5))
-  verifies 10.0 then 36.0 cumulative sum + L0 BE bytes [0x50, 0x80] =
-  FP16(36.0) (Warning 5 fix). Per-cell isolation via np.delete(flat, 21).
-  dtype-lock: np.float32 preserved across chain.
+- `b632b4e` (Task 1): VEC/ACT/SCVT/POOL encoding + 6 source-module stubs.
+  Appended 21 funct7 + 7 GTX_ACT_* + 24 GTX_VEC_* + ACT_OPS_REVERSED
+  frozenset to encoding.py. Created vec_core.py + vec_engine.py +
+  act_core.py + act_engine.py + ops/vec.py + ops/act.py with
+  NotImplementedError kernel stubs and return-0 engine stubs. Patched
+  ops/__init__.py to import vec + act. Vendor-verbatim GTX_VEC_*
+  (gtx_npu.h:382-405 has 24 entries 0..23, plan draft had 10
+  entries 0..9; plan note explicitly authorized vendor-verbatim
+  resolution).
 
-- `ad70694` (test + source Task 2): test_mm_basic_strict_mode_pass body
-  fully populated in test_regression_fw_mm.py — subprocess pyspike + 90s
-  timeout + GTX_DDR_DUMP env + 4-tier graceful skip + compare_hex strict.
-  Discovered + fixed cross-cutting Wave 1 bug [Rule 1 - PHASE-CRITICAL]:
-  proc.get_state() -> proc.state mechanical rename across 27 sites in 5
-  source files (mm_engine, npu, ops/spr, ops/control, ops/dma). The C++
-  pybind11 binding (py_module.cc:711) exposes state as def_property_readonly
-  -- there is NO get_state() method. Bug 100% masked by MockProcessor +
-  3 _FakeProc classes that defined get_state(). MockProcessor + 3 _FakeProc
-  gain `state` @property alongside existing get_state() -- 0 unit-test
-  breakage; all 199 tests still pass.
+- `e4e6269` (Task 2): 7 RED test scaffolds + _oracles.py + addra/addrr
+  fixture. Created test_op_vec.py (15 RED), test_op_act.py (11 RED),
+  test_op_format.py (8 RED), test_pooling.py (3 RED),
+  test_vsum_precision.py (5 RED via parametrize), test_oracle_parity.py
+  (1 RED placeholder), test_regression_fw_act.py (1 RED). _oracles.py
+  contains 30 oracle stubs (20 portable raise NotImplementedError,
+  9 composed/missing raise NotImplementedError("DEFERRED:..."),
+  GELU_ERF body uses pytest.skip per CLAUDE.md scipy ban). conftest.py
+  appended proc_with_addra_addrr_seeded fixture.
 
-SUMMARY at `.planning/phases/04-mm-subsystem/04-05-SUMMARY.md`. Self-check
-PASSED: all 12 created/modified files present; both commits in `git log`;
-`pytest tests/gtx/ -q --noconftest -o "addopts="` reports **199 passed,
-1 skipped, 0 failed** (was 195/5; +4 chain tests new green; the 1 remaining
-skip is `test_mm_basic_strict_mode_pass` entering its documented graceful
-degradation -- subprocess clean-exits proving end-to-end plumbing works,
-but dump compare gates on P6-deferred atexit hook).
+- `efc6b7c` (Task 3): activation_relu_gelu firmware fixture committed.
+  Hand-written .S mirroring mm_basic.S P4 04-01 D-3 (ISS-full WRSPR
+  funct7=0x49 for ADDRA/ADDRR; firmware DISPATCH_ACT funct7=0x06 for
+  RELU forward; ISS-direct funct7=0x2A for GELU reversed; WJOIN custom1
+  funct3=0b101). Pre-built RV64 ELF (entry 0x800000b0) committed.
+  Makefile rule + verify-act target. .gitignore allow-list extended.
+  Golden hex: 32 bytes BE FP16 zeros (16 FP16 values; matches
+  mm_basic_n1s16.hex precedent). Self-compare strict-PASS verified.
 
-ROADMAP P4 success criteria 1-5 ALL satisfied (4 hard PASS + 1 logical PASS).
-REQUIREMENTS MM-04 + MM-05 marked complete (via gsd-tools requirements
-mark-complete). Phase 4 now enters /gsd:verify-work 4.
+SUMMARY at `.planning/phases/05-vec-act-pool/05-01-SUMMARY.md`. Self-check
+PASSED: all 17 created files + 5 modified files present; all 3 commits in
+`git log`; quick suite reports **43 skipped, 0 failed** (RED-via-skip per
+P3 plan-01 D-5); full P3+P4+P5 suite reports **199 passed (matches P4
+baseline) / 45 skipped / 0 failed** -- no regression introduced.
+
+NO requirements marked complete (Wave 1a is scaffold-only by design;
+VEC-01..05 / ACT-01..05 / VRF-02 close in Plans 02-06 GREEN-fill).
 
 ### Next Action
 
-`/gsd:verify-work 4` is now unblocked — orchestrator runs the regression
-gate, gsd-verifier, and roadmap close per the sequential Wave 2 contract.
-After verification closes Phase 4, Phase 5 (vec-act-subsystem) is unblocked.
-Phase 5 ops can use the established `proc.state.XPR[insn.rs1]` pattern
-(no MockProcessor ambiguity — Plan 05 Rule 1 fix permanently aligned the
-production code with the real C++ pybind11 binding).
+Phase 5 Plan 02 (vec) unblocked — `/gsd:execute-plan 5 02` will GREEN-fill
+vec_core kernels + ops/vec.py @handler entries + test_op_vec.py +
+test_vsum_precision.py.
+
+Wave 1b parallel-development paths:
+- Plan 02 (vec) owns: vec_core.py + vec_engine.py + ops/vec.py +
+  test_op_vec.py (15 RED) + test_vsum_precision.py (5 RED)
+- Plan 03 (act) owns: act_core.py {act+esum kernels only} + ops/act.py
+  {16 activation @handlers} + test_op_act.py (11 RED)
+- Plan 04 (pool/format) owns: act_core.py {pool + cvt + FP8 LUTs} +
+  act_engine.py {firmware_pool + firmware_format} + ops/act.py {7 cvt +
+  2 pool @handlers} + test_op_format.py (8 RED) + test_pooling.py (3 RED)
+- Plan 05 (oracle, wave 2): _oracles.py {20 portable bodies} +
+  DIRECT_MAPPED_ORACLES dict + test_oracle_parity.py (1 RED -> 20
+  parametrized)
+- Plan 06 (regression, wave 2): test_regression_fw_act.py body
+  (subprocess + 4-tier graceful skip + strict compare against
+  activation_relu_gelu.hex)
 
 Open follow-ups (P5/P6/P7):
 
