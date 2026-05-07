@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 3
+current_plan: 4
 status: executing
-last_updated: "2026-05-07T04:04:05.061Z"
+last_updated: "2026-05-07T04:28:32.213Z"
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 23
-  percent: 85
+  completed_plans: 24
+  percent: 89
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -34,14 +34,14 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 05 (vec-act-pool) — EXECUTING
-Plan: 3 of 6
-Current Plan: 3
+Plan: 4 of 6
+Current Plan: 4
 Total Plans in Phase: 6
 
 - **Phase:** 07
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
 - **Status:** Ready to execute
-- **Progress:** [█████████░] 85%
+- **Progress:** [█████████░] 89%
 
 ## Performance Metrics
 
@@ -71,6 +71,7 @@ Total Plans in Phase: 6
 | Phase 04-mm-subsystem PP05 | 10min | 2 tasks | 11 files |
 | Phase 05-vec-act-pool P01 | 13min | 3 tasks | 22 files |
 | Phase 05-vec-act-pool P02 | 16min | 3 tasks | 6 files |
+| Phase 05 P03 | 12min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -293,6 +294,7 @@ core landed. **Plan 02** executed in ~16 min with 5 atomic commits
   [Rule 1 deviation] GTX_F7_VEC_DOT_SUM corrected 0x13→0x1A.
   vendor disasm.inc:80-84 has scalar MIN/MAX (max_vs/min_vs/max_is/
   min_is) at funct7=0x13; DOT/SUM lives at 0x1A per disasm.inc:101-104
+
   + gtx_npu_vec.cc:632-637. Plan body's "vsum funct3=0, dot funct3=1"
   was also reversed -- vendor: case 0:DOT, case 1:VSUM. Implementation
   follows vendor. 15/15 test_op_vec tests GREEN.
@@ -323,6 +325,7 @@ Wave 1b parallel-development still active:
 - Plan 03 (act) owns: act_core.py {act+esum kernels only} + ops/act.py
   {16 activation @handlers} + test_op_act.py (11 RED)
   Recommended pattern handoff: reuse vec_engine.py's `_l0_block_view`
+
   + `_l1_view_addr` helpers for analogous L0/L1 byte-offset addressing
   in act_engine.firmware_act.
 

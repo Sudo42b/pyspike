@@ -104,12 +104,12 @@
 
 ### ACT (Activation / Pooling / Format)
 
-- [ ] **ACT-01**: 정방향 활성화 (RELU/SOFTMAX/ESUM): ADDRA → ADDRR
-- [ ] **ACT-02**: 역방향 활성화 (PRELU/GELU/TANH/SIGM): ADDRR → ADDRA — 비대칭
+- [x] **ACT-01**: 정방향 활성화 (RELU/SOFTMAX/ESUM): ADDRA → ADDRR
+- [x] **ACT-02**: 역방향 활성화 (PRELU/GELU/TANH/SIGM): ADDRR → ADDRA — 비대칭
   방향 테이블 명시적으로 구현
 - [ ] **ACT-03**: Pooling (`exec_pooling`) 전체
 - [ ] **ACT-04**: Format conversion (`exec_format_cvt`) — FP16/FP32/FP8 + scale/offset
-- [ ] **ACT-05**: `_imm` 변형 활성화 (L0 경로, funct7=0x28/0x2A/0x2C/0x2D & 4)
+- [x] **ACT-05**: `_imm` 변형 활성화 (L0 경로, funct7=0x28/0x2A/0x2C/0x2D & 4)
 
 ### Verification (Op-level + .elf regression)
 
@@ -219,11 +219,11 @@
 | VEC-03 | Phase 5 | Complete |
 | VEC-04 | Phase 5 | Complete |
 | VEC-05 | Phase 5 | Complete |
-| ACT-01 | Phase 5 | Pending |
-| ACT-02 | Phase 5 | Pending |
+| ACT-01 | Phase 5 | Complete |
+| ACT-02 | Phase 5 | Complete |
 | ACT-03 | Phase 5 | Pending |
 | ACT-04 | Phase 5 | Pending |
-| ACT-05 | Phase 5 | Pending |
+| ACT-05 | Phase 5 | Complete |
 | VRF-01 | Phase 6 | Pending |
 | VRF-02 | Phase 5 | Pending |
 | VRF-03 | Phase 6 | Pending |
