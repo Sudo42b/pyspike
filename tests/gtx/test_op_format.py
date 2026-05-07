@@ -115,9 +115,12 @@ def test_fp8_roundtrip_identity():
 
     failures = []
     for byte in range(256):
-        # Skip NaN bytes -- multiple FP16 NaNs may collapse to a single FP8 NaN sentinel.
+        # Skip NaN bytes (multiple FP16 NaNs may collapse to a single FP8 NaN
+        # sentinel) and inf bytes (vendor `gtx_fp16_to_8` does `sign8 | 0xF8`
+        # which forces the inf-byte to `0xF8` regardless of input sign;
+        # +inf 0x78 decodes to FP16 +inf which re-encodes to 0xF8, NOT 0x78).
         decoded = fp8_to_fp16[byte]
-        if np.isnan(decoded):
+        if np.isnan(decoded) or np.isinf(decoded):
             continue
         # Re-encode: take the FP16 bit pattern, look up FP8 byte
         decoded_u16 = int(decoded.view(np.uint16))
@@ -126,6 +129,13 @@ def test_fp8_roundtrip_identity():
             failures.append((byte, decoded_u16, re_encoded))
 
     assert not failures, f"Round-trip failures: {failures[:5]}"
+
+    # Inf round-trip is NOT identity (vendor bug pattern by design):
+    # FP8 byte 0x78 (+inf) decodes to FP16 0x7C00 (+inf); re-encoding via
+    # `sign8 | 0xF8` forces the result to 0xF8 (-inf in FP8 decode).
+    # Document the divergence.
+    assert int(fp16_to_fp8[0x7C00]) == 0xF8  # FP16 +inf -> FP8 -inf byte
+    assert int(fp16_to_fp8[0xFC00]) == 0xF8  # FP16 -inf -> FP8 -inf byte
 
 
 # =========================================================================
