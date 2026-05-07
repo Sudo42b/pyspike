@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 2
+current_plan: 3
 status: executing
-last_updated: "2026-05-07T03:40:00.402Z"
+last_updated: "2026-05-07T04:04:05.061Z"
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 22
-  percent: 81
+  completed_plans: 23
+  percent: 85
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-07 after Phase 5 Plan 01 complete (Wave 1a scaffold landing: 6 importable source-module stubs + 7 RED test scaffolds + 30-oracle skeleton + activation_relu_gelu.elf RV64 firmware fixture + zero-init golden hex; 21 funct7 + 7 GTX_ACT_* + 24 GTX_VEC_* + ACT_OPS_REVERSED frozenset added to encoding.py; vendor-verbatim GTX_VEC_* enum; 199 passed/45 skipped/0 failed -- matches P4 baseline; Plans 02-06 unblocked for parallel GREEN-fill)
+**Last updated:** 2026-05-07 after Phase 5 Plan 02 complete (Wave 1b VEC GREEN-fill: vec_core.py 7 stateless FP32-internal kernels + vec_engine.firmware_vec_op full body with L0/L1 path branch + ops/vec.py 22 @handler entries + 15 GREEN op-level tests + 5 GREEN VSUM precision tests; GTX_F7_VEC_DOT_SUM corrected 0x13→0x1A vendor-authoritative; 219 passed/25 skipped/0 failed -- 0 regressions, +20 over P5-P01 baseline; Plans 03-06 still parallel-development-ready)
 
 ## Project Reference
 
@@ -34,14 +34,14 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 05 (vec-act-pool) — EXECUTING
-Plan: 2 of 6
-Current Plan: 2
+Plan: 3 of 6
+Current Plan: 3
 Total Plans in Phase: 6
 
 - **Phase:** 07
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
 - **Status:** Ready to execute
-- **Progress:** [████████░░] 81%
+- **Progress:** [█████████░] 85%
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Total Plans in Phase: 6
 | Phase 04-mm-subsystem PP04 | 44min | 3 tasks | 7 files |
 | Phase 04-mm-subsystem PP05 | 10min | 2 tasks | 11 files |
 | Phase 05-vec-act-pool P01 | 13min | 3 tasks | 22 files |
+| Phase 05-vec-act-pool P02 | 16min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -141,6 +142,18 @@ Total Plans in Phase: 6
 4. **Wave 0 RED-via-pytest.skip discipline (P3 plan-01 D-5 lock).** Every test body is `pytest.skip("Wave 1b plan NN GREEN-fills: ...")`. Quick suite reports 43 skipped, 0 failed; full P3+P4+P5 suite reports 199 passed (matches P4 baseline) / 45 skipped / 0 failed. No regression introduced by Wave 1a scaffold landing.
 
 5. **No requirements marked complete.** This plan is scaffold-only (no GREEN tests). Per RESEARCH adjustment + P4 04-01 deviation pattern: VEC-01..05 / ACT-01..05 / VRF-02 acceptance criteria require GREEN tests, which Wave 1b plans 02-04 + Wave 2 plan 05 + Wave 2 plan 06 will land in subsequent commits. `requirements-completed: []` in SUMMARY frontmatter.
+
+### Phase 5 Plan 02 Decisions (locked during execution)
+
+1. **[Rule 1 - vendor-truth correction] GTX_F7_VEC_DOT_SUM corrected from 0x13 to 0x1A.** Plan 01 seeded `GTX_F7_VEC_DOT_SUM = 0x13` from a draft note; vendor `gtx_npu.h:308` (`GTX_ISS_F7_DOT_SUM = 0b0011010`), `gtx_npu_disasm.inc:101-104` (`dot_vvs/sum_vs/dot_iis/sum_is`), and `gtx_npu_vec.cc:632-637` (DOT/SUM dispatch case) all confirm the correct value is 0x1A. funct7=0x13 is actually scalar MIN/MAX (`max_vs/min_vs/max_is/min_is` per disasm.inc:80-84). Added `GTX_F7_VEC_MINMAX = 0x13` for future plan reference. Plan body's "vsum funct3=0, dot funct3=1" was also reversed; vendor ordering: `case 0: GTX_VEC_DOT; case 1: GTX_VEC_VSUM;` -- implementation follows vendor.
+
+2. **[Rule 1 - test design] VSUM anti-pattern test input swapped.** Plan body used `[1.0, 1e-4]*1000` as the divergent input but both naive-FP16 and FP32-internal paths round to identical FP16 1000.0 (FP16 has only ~3 decimal digits at 1000-magnitude; the FP32 sum 1000.10004 → FP16 cast = 1000.0). Replaced with `[1024.0] + 5000*[0.4]` which genuinely diverges: explicit-FP16-cumulative=1024.0 (small additions absorbed by FP16 ULP at 1024+), FP32-internal=3024.0 (preserves all 5000*0.4 contribution). Test asserts both `actual==expected` AND `actual!=naive_fp16` so the test fails LOUDLY if kernel silently regresses to naive accumulate.
+
+3. **firmware_vec_op unifies SASMD funct7=0x10 dispatch.** In C++ the SASMD scalar arith family at funct7=0x10 is dispatched via `dispatch_iss_opcode` (separate path) -- NOT `firmware_vec_op` which only handles funct7={0x18,0x19,0x1A,0x1C-0x1F}. In pyspike the @handler funct7-routing layer hits a single Python entry point uniformly, so vec_engine.firmware_vec_op was extended to also handle 0x10. No semantic divergence from C++; just a Python-side plumbing collapse for clean dispatch.
+
+4. **L0 result-reg source = GSPR_OPERAND3 with insn.rd fallback.** Vendor `exec_scalar_imm` takes result_reg as a parameter; the dispatch upstream reads from `gspr[GSPR_GTX_OPERAND3] & 0x1F`. vec_engine reads OPERAND3 first, falls back to `insn.rd & 0x1F` if OPERAND3 not set -- mirrors vendor `gtx_npu_vec.cc:659` "if op3_raw <= 0x1F use it, else use input_reg" pattern.
+
+5. **DOT/VSUM scalar writeback is LE bytes at L0[0..1].** gtx_npu_vec.cc:108-110 and :258-260 use `l0[0] = r16 & 0xFF; l0[1] = (r16 >> 8) & 0xFF` -- LE byte order. MM_O writes BE, MM_V writes LE; VEC writes LE. Documented asymmetry preserved.
 
 ### Phase 4 Plan 05 Decisions (locked during execution)
 
@@ -251,68 +264,79 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 05 Plan 01 (Wave 1a scaffold) complete — VEC/ACT/Pool subsystem
-scaffold landed. **Plan 01** executed in ~13 min with 3 atomic commits
-(normal hooks):
+Phase 05 Plan 02 (Wave 1b VEC GREEN-fill) complete — VEC subsystem
+core landed. **Plan 02** executed in ~16 min with 5 atomic commits
+(normal hooks; TDD RED-then-GREEN per task):
 
-- `b632b4e` (Task 1): VEC/ACT/SCVT/POOL encoding + 6 source-module stubs.
-  Appended 21 funct7 + 7 GTX_ACT_* + 24 GTX_VEC_* + ACT_OPS_REVERSED
-  frozenset to encoding.py. Created vec_core.py + vec_engine.py +
-  act_core.py + act_engine.py + ops/vec.py + ops/act.py with
-  NotImplementedError kernel stubs and return-0 engine stubs. Patched
-  ops/__init__.py to import vec + act. Vendor-verbatim GTX_VEC_*
-  (gtx_npu.h:382-405 has 24 entries 0..23, plan draft had 10
-  entries 0..9; plan note explicitly authorized vendor-verbatim
-  resolution).
+- `7186e23` (Task 1 prep, RED): 5 VSUM precision tests upgraded from
+  pytest.skip stubs to executable assertions. RED before kernel landed.
 
-- `e4e6269` (Task 2): 7 RED test scaffolds + _oracles.py + addra/addrr
-  fixture. Created test_op_vec.py (15 RED), test_op_act.py (11 RED),
-  test_op_format.py (8 RED), test_pooling.py (3 RED),
-  test_vsum_precision.py (5 RED via parametrize), test_oracle_parity.py
-  (1 RED placeholder), test_regression_fw_act.py (1 RED). _oracles.py
-  contains 30 oracle stubs (20 portable raise NotImplementedError,
-  9 composed/missing raise NotImplementedError("DEFERRED:..."),
-  GELU_ERF body uses pytest.skip per CLAUDE.md scipy ban). conftest.py
-  appended proc_with_addra_addrr_seeded fixture.
+- `bd0256e` (Task 1 GREEN, feat): vec_core.py 7 stateless FP32-internal
+  kernels (sasmd_kernel, dot_kernel, vsum_kernel, clamp_min_kernel,
+  clamp_max_kernel, accum_kernel, arange_kernel). Explicit Python
+  for-loop FP32 accumulator for vsum/dot (NEVER np.sum/np.dot/np.matmul
+  -- pairwise summation drifts vs C++ scalar order; RESEARCH Pitfall 2).
+  [Rule 1 deviation] Anti-pattern test input swapped from
+  `[1.0, 1e-4]*1000` to `[1024.0]+5000*[0.4]` -- the original input
+  rounds identically in FP16 across both naive and FP32-internal paths
+  (FP16 has only ~3 decimal digits at 1000-magnitude). New input
+  genuinely diverges (1024.0 vs 3024.0). 5/5 vsum precision tests GREEN.
 
-- `efc6b7c` (Task 3): activation_relu_gelu firmware fixture committed.
-  Hand-written .S mirroring mm_basic.S P4 04-01 D-3 (ISS-full WRSPR
-  funct7=0x49 for ADDRA/ADDRR; firmware DISPATCH_ACT funct7=0x06 for
-  RELU forward; ISS-direct funct7=0x2A for GELU reversed; WJOIN custom1
-  funct3=0b101). Pre-built RV64 ELF (entry 0x800000b0) committed.
-  Makefile rule + verify-act target. .gitignore allow-list extended.
-  Golden hex: 32 bytes BE FP16 zeros (16 FP16 values; matches
-  mm_basic_n1s16.hex precedent). Self-compare strict-PASS verified.
+- `a766c90` (Task 2 prep, RED): 13 VEC op tests upgraded from
+  pytest.skip stubs to executable scaffolds against
+  vec_engine.firmware_vec_op + GtxNpu fixtures + MockProcessor.
 
-SUMMARY at `.planning/phases/05-vec-act-pool/05-01-SUMMARY.md`. Self-check
-PASSED: all 17 created files + 5 modified files present; all 3 commits in
-`git log`; quick suite reports **43 skipped, 0 failed** (RED-via-skip per
-P3 plan-01 D-5); full P3+P4+P5 suite reports **199 passed (matches P4
-baseline) / 45 skipped / 0 failed** -- no regression introduced.
+- `28d2ba6` (Task 2 GREEN, feat): vec_engine.firmware_vec_op full body
+  (rs1[15:0]→vec_size with HW conv 0→0x10000 per Pitfall 7; rs2 staged
+  into npu.gspr[GSPR_GTX_OPERAND2]; funct7-keyed L0/L1 path branch
+  covering 0x10/0x18/0x1A/0x1C/0x1D/0x1E/0x1F).
+  [Rule 1 deviation] GTX_F7_VEC_DOT_SUM corrected 0x13→0x1A.
+  vendor disasm.inc:80-84 has scalar MIN/MAX (max_vs/min_vs/max_is/
+  min_is) at funct7=0x13; DOT/SUM lives at 0x1A per disasm.inc:101-104
+  + gtx_npu_vec.cc:632-637. Plan body's "vsum funct3=0, dot funct3=1"
+  was also reversed -- vendor: case 0:DOT, case 1:VSUM. Implementation
+  follows vendor. 15/15 test_op_vec tests GREEN.
 
-NO requirements marked complete (Wave 1a is scaffold-only by design;
-VEC-01..05 / ACT-01..05 / VRF-02 close in Plans 02-06 GREEN-fill).
+- `d3d7a2b` (Task 3, feat): ops/vec.py 22 thin @handler entries -- 8
+  SASMD-VS/IS at funct7=0x10, 2 dot/vsum at funct7=0x1A, 8 SASMD-VV/II
+  at funct7=0x18, 4 CLAMP family at funct7=0x1F. Mnemonics match
+  disasm.inc verbatim. collect_disasms() now returns 66 total (+22 VEC
+  over Plan 01's 44). All 22 forward to vec_engine.firmware_vec_op.
+
+SUMMARY at `.planning/phases/05-vec-act-pool/05-02-SUMMARY.md`. Self-check
+PASSED: all 7 files (3 src/main + 1 encoding modify + 2 tests + 1 SUMMARY)
+present; all 5 commits in `git log`; full P3+P4+P5 suite reports **219
+passed / 25 skipped / 0 failed** (was 199/45/0 baseline; +20 GREEN
+test_op_vec [15] + test_vsum_precision [5]; -20 skipped over Plan 01;
+0 regressions).
+
+Requirements marked complete: VEC-01, VEC-02, VEC-03, VEC-04, VEC-05.
 
 ### Next Action
 
-Phase 5 Plan 02 (vec) unblocked — `/gsd:execute-plan 5 02` will GREEN-fill
-vec_core kernels + ops/vec.py @handler entries + test_op_vec.py +
-test_vsum_precision.py.
+Phase 5 Plan 03 (act) unblocked — `/gsd:execute-plan 5 03` GREEN-fills
+act_core kernels (relu/prelu/gelu/tanh/sigmoid/softmax/esum) + 16
+activation @handlers in ops/act.py + 11 test_op_act.py scaffolds.
 
-Wave 1b parallel-development paths:
-- Plan 02 (vec) owns: vec_core.py + vec_engine.py + ops/vec.py +
-  test_op_vec.py (15 RED) + test_vsum_precision.py (5 RED)
+Wave 1b parallel-development still active:
+
 - Plan 03 (act) owns: act_core.py {act+esum kernels only} + ops/act.py
   {16 activation @handlers} + test_op_act.py (11 RED)
+  Recommended pattern handoff: reuse vec_engine.py's `_l0_block_view`
+  + `_l1_view_addr` helpers for analogous L0/L1 byte-offset addressing
+  in act_engine.firmware_act.
+
 - Plan 04 (pool/format) owns: act_core.py {pool + cvt + FP8 LUTs} +
   act_engine.py {firmware_pool + firmware_format} + ops/act.py {7 cvt +
   2 pool @handlers} + test_op_format.py (8 RED) + test_pooling.py (3 RED)
+
 - Plan 05 (oracle, wave 2): _oracles.py {20 portable bodies} +
   DIRECT_MAPPED_ORACLES dict + test_oracle_parity.py (1 RED -> 20
-  parametrized)
+  parametrized).
+
 - Plan 06 (regression, wave 2): test_regression_fw_act.py body
   (subprocess + 4-tier graceful skip + strict compare against
-  activation_relu_gelu.hex)
+  activation_relu_gelu.hex).
 
 Open follow-ups (P5/P6/P7):
 

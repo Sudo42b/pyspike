@@ -94,13 +94,13 @@
 
 ### VEC (Vector ops)
 
-- [ ] **VEC-01**: SASMD (add/sub/mul/div) 4종 × IS/VS variant 구현 (funct7=0x10)
-- [ ] **VEC-02**: DOT / VSUM 리덕션 — VSUM은 FP32 내부 누적 후 단일 FP16 cast (행별
+- [x] **VEC-01**: SASMD (add/sub/mul/div) 4종 × IS/VS variant 구현 (funct7=0x10)
+- [x] **VEC-02**: DOT / VSUM 리덕션 — VSUM은 FP32 내부 누적 후 단일 FP16 cast (행별
   분할 시 FP16 부분합 재합산 규약 준수)
-- [ ] **VEC-03**: CLAMP (min/max/arange/accum), L1(VV) / L0(II) 분기 (funct7=0x18–0x1F)
-- [ ] **VEC-04**: VEC scalar / immediate variants (`exec_vec_scalar`,
+- [x] **VEC-03**: CLAMP (min/max/arange/accum), L1(VV) / L0(II) 분기 (funct7=0x18–0x1F)
+- [x] **VEC-04**: VEC scalar / immediate variants (`exec_vec_scalar`,
   `_imm`)
-- [ ] **VEC-05**: `firmware_vec_op` 패킹 인코딩 디코딩
+- [x] **VEC-05**: `firmware_vec_op` 패킹 인코딩 디코딩
 
 ### ACT (Activation / Pooling / Format)
 
@@ -214,11 +214,11 @@
 | MM-03 | Phase 4 | In Progress (Wave 0 scaffold landed; Wave 1 Plan 03/04 GREEN) |
 | MM-04 | Phase 4 | In Progress (Wave 0 scaffold landed; Wave 1 Plan 04 GREEN) |
 | MM-05 | Phase 4 | In Progress (Wave 0 scaffold + .elf fixture landed; Wave 2 Plan 05 GREEN) |
-| VEC-01 | Phase 5 | Pending |
-| VEC-02 | Phase 5 | Pending |
-| VEC-03 | Phase 5 | Pending |
-| VEC-04 | Phase 5 | Pending |
-| VEC-05 | Phase 5 | Pending |
+| VEC-01 | Phase 5 | Complete |
+| VEC-02 | Phase 5 | Complete |
+| VEC-03 | Phase 5 | Complete |
+| VEC-04 | Phase 5 | Complete |
+| VEC-05 | Phase 5 | Complete |
 | ACT-01 | Phase 5 | Pending |
 | ACT-02 | Phase 5 | Pending |
 | ACT-03 | Phase 5 | Pending |
