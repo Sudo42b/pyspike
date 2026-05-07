@@ -34,8 +34,12 @@ from .. import act_engine
 from ..encoding import (
     GTX_F7_ACT_PRELU, GTX_F7_ACT_GELU, GTX_F7_ACT_TANH,
     GTX_F7_ACT_SIGM, GTX_F7_ACT_SOFTMAX,
+    GTX_F7_SCVT_QH, GTX_F7_SCVT_IH, GTX_F7_SCVT_HN,
+    GTX_F7_FCVT_SH, GTX_F7_FCVT_DH,
+    GTX_F7_POOL_MAX, GTX_F7_POOL_AVG,
     GTX_ACT_PRELU, GTX_ACT_GELU, GTX_ACT_TANH,
     GTX_ACT_SIGMOID, GTX_ACT_SOFTMAX, GTX_ACT_ESUM,
+    GSPR_GTX_OPCODE,
 )
 
 
@@ -153,3 +157,87 @@ def _exec_esum_i(npu, proc, insn, xs1, xs2):
 def _exec_softmax_i(npu, proc, insn, xs1, xs2):
     """L0 immediate SOFTMAX (uses pre-computed esum from GSPR_OPERAND2 high-16)."""
     return act_engine.firmware_softmax_imm(npu, proc, insn, op_id=GTX_ACT_SOFTMAX)
+
+
+# ============================================================================
+# format_cvt @handlers -- Plan 04 (RESEARCH Adjustment 1: 7 directions incl. FP64)
+# ----------------------------------------------------------------------------
+# SCVT_QH/HQ etc. share funct7; direction is selected by `GSPR_OPCODE & 1`
+# (vendor gtx_npu_act.cc:245). Each funct7 below registers a SINGLE dispatch
+# @handler at None-inner-key (mask_funct3=False) that inspects sub_op&1 to
+# pick (src_kind, dst_kind). RESEARCH §format_cvt Sub-op direction
+# discrimination (lines 558-568) authoritative.
+# ============================================================================
+
+# SCVT_QH / SCVT_HQ at funct7=0x20: sub_op&1 selects FP16<->FP8 direction.
+@handler(kind='custom0', funct7=GTX_F7_SCVT_QH, mnemonic='scvt_qh')
+def _exec_scvt_qh_dispatch(npu, proc, insn, xs1, xs2):
+    """0=qh (FP16->FP8), 1=hq (FP8->FP16). Both apply scale+offset."""
+    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    if sub_op & 1:
+        return act_engine.firmware_format(npu, proc, insn,
+                                          src_kind='fp8', dst_kind='fp16')
+    return act_engine.firmware_format(npu, proc, insn,
+                                      src_kind='fp16', dst_kind='fp8')
+
+
+# SCVT_IH / SCVT_HI at funct7=0x21: sub_op&1 selects FP16<->INT8 direction.
+@handler(kind='custom0', funct7=GTX_F7_SCVT_IH, mnemonic='scvt_ih')
+def _exec_scvt_ih_dispatch(npu, proc, insn, xs1, xs2):
+    """0=ih (FP16->INT8), 1=hi (INT8->FP16). Both apply scale+offset."""
+    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    if sub_op & 1:
+        return act_engine.firmware_format(npu, proc, insn,
+                                          src_kind='int8', dst_kind='fp16')
+    return act_engine.firmware_format(npu, proc, insn,
+                                      src_kind='fp16', dst_kind='int8')
+
+
+# SCVT_HN at funct7=0x22: INT32->FP16 normalize (1-direction only).
+@handler(kind='custom0', funct7=GTX_F7_SCVT_HN, mnemonic='scvt_hn')
+def _exec_scvt_hn(npu, proc, insn, xs1, xs2):
+    """INT32 -> FP16 normalize. Applies scale+offset (gtx_npu_act.cc:301-313)."""
+    return act_engine.firmware_format(npu, proc, insn,
+                                      src_kind='int32', dst_kind='fp16')
+
+
+# FCVT_SH / FCVT_HS at funct7=0x24: sub_op&1 selects FP32<->FP16 direction.
+@handler(kind='custom0', funct7=GTX_F7_FCVT_SH, mnemonic='fcvt_sh')
+def _exec_fcvt_sh_dispatch(npu, proc, insn, xs1, xs2):
+    """0=sh (FP32->FP16), 1=hs (FP16->FP32). Bit-pattern preserving (no
+    scale/offset)."""
+    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    if sub_op & 1:
+        return act_engine.firmware_format(npu, proc, insn,
+                                          src_kind='fp16', dst_kind='fp32')
+    return act_engine.firmware_format(npu, proc, insn,
+                                      src_kind='fp32', dst_kind='fp16')
+
+
+# FCVT_DH / FCVT_HD at funct7=0x25: sub_op&1 selects FP64<->FP16 direction.
+# RESEARCH Adjustment 1 (7 cvt directions, NOT 6).
+@handler(kind='custom0', funct7=GTX_F7_FCVT_DH, mnemonic='fcvt_dh')
+def _exec_fcvt_dh_dispatch(npu, proc, insn, xs1, xs2):
+    """0=dh (FP64->FP16), 1=hd (FP16->FP64). Bit-pattern preserving."""
+    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    if sub_op & 1:
+        return act_engine.firmware_format(npu, proc, insn,
+                                          src_kind='fp16', dst_kind='fp64')
+    return act_engine.firmware_format(npu, proc, insn,
+                                      src_kind='fp64', dst_kind='fp16')
+
+
+# ============================================================================
+# Pool @handlers -- Plan 04
+# disasm.inc:160-161
+# ============================================================================
+@handler(kind='custom0', funct7=GTX_F7_POOL_MAX, mnemonic='pool_m')
+def _exec_pool_m(npu, proc, insn, xs1, xs2):
+    """Max-pool, always forward (CONTEXT D-08)."""
+    return act_engine.firmware_pool(npu, proc, insn, is_max=True)
+
+
+@handler(kind='custom0', funct7=GTX_F7_POOL_AVG, mnemonic='pool_a')
+def _exec_pool_a(npu, proc, insn, xs1, xs2):
+    """Avg-pool with -0.0 -> +0.0 canonicalization (gtx_npu_act.cc:211)."""
+    return act_engine.firmware_pool(npu, proc, insn, is_max=False)
