@@ -154,8 +154,8 @@ golden)와 ULP 허용오차 내로 일치한다.
 **Plans:** 6 plans
 - [x] 05-vec-act-pool/05-01-PLAN.md — Wave 1 scaffold (encoding + module stubs + 7 RED test scaffolds + .elf fixture + golden hex + _oracles.py skeleton + conftest fixture) — covers all 11 P5 Req-IDs at scaffold level
 - [x] 05-vec-act-pool/05-02-PLAN.md — Wave 2 VEC core + engine + 22 @handlers + GREEN-fill 15 VEC unit tests — covers VEC-01..05
-- [ ] 05-vec-act-pool/05-03-PLAN.md — Wave 3 ACT activations (7 kernels + firmware_act direction asymmetry + 16 ISS @handlers) — covers ACT-01, ACT-02, ACT-05
-- [ ] 05-vec-act-pool/05-04-PLAN.md — Wave 4 Pool + format_cvt (FP8 LUTs + 7 cvt directions + 9 @handlers) — covers ACT-03, ACT-04
+- [x] 05-vec-act-pool/05-03-PLAN.md — Wave 3 ACT activations (7 kernels + firmware_act direction asymmetry + 12 ISS @handlers) — covers ACT-01, ACT-02, ACT-05
+- [x] 05-vec-act-pool/05-04-PLAN.md — Wave 4 Pool + format_cvt (FP8 LUTs + 7 cvt directions + 7 @handlers) — covers ACT-03, ACT-04
 - [ ] 05-vec-act-pool/05-05-PLAN.md — Wave 5 VRF-02 oracle parity (20 oracles parametrized) — covers VRF-02
 - [ ] 05-vec-act-pool/05-06-PLAN.md — Wave 5 strict-mode .elf regression (activation_relu_gelu) — covers VRF-02 + ROADMAP success criterion #5
 **UI hint**: no
