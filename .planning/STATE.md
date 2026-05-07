@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: Not started
 status: planning
-last_updated: "2026-05-07T05:13:37.858Z"
+last_updated: "2026-05-07T13:00:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 5
@@ -15,7 +15,7 @@ progress:
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-07 after Phase 5 Plan 02 complete (Wave 1b VEC GREEN-fill: vec_core.py 7 stateless FP32-internal kernels + vec_engine.firmware_vec_op full body with L0/L1 path branch + ops/vec.py 22 @handler entries + 15 GREEN op-level tests + 5 GREEN VSUM precision tests; GTX_F7_VEC_DOT_SUM corrected 0x13→0x1A vendor-authoritative; 219 passed/25 skipped/0 failed -- 0 regressions, +20 over P5-P01 baseline; Plans 03-06 still parallel-development-ready)
+**Last updated:** 2026-05-07 after Phase 6 context gathered (CONTEXT.md + DISCUSSION-LOG.md). 18 decisions D-01..D-18 lock-in across 6 areas: VRF-01 hybrid `_verify` base + dual CLI entry + vendor argparse 1:1 with `--strict`; GTX_DDR_DUMP atexit hook at import-time in `riscv.gtx.__init__` with body in `riscv.gtx.ddr` and vendor 1:1 env vars; regression scope = core op set ~10-20 with vendor `n1s16_<op>.c` 1:1 single-build single parametrize roll; golden source = `vendor/test/<OP>/n1s16/data/{kernel}_ref.txt` direct loan with P4/P5 `.hex` format kept and dev-only vendor build; wheel asset via build-time copy + `_verify` helper API + bundle-first 50MB sizing; 5 plans / 3 waves with Wave 1a parallel 3 (VRF-01 / atexit / VRF-03), Wave 1b 1 (VRF-04 regression), Wave 2 1 (PKG-01/03/04 integrated). Resume: `.planning/phases/06-verification-wheel/06-CONTEXT.md` → `/gsd:plan-phase 6`
 
 ## Project Reference
 
@@ -25,7 +25,7 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 05 — vec-act-pool
+**Current Focus:** Phase 06 — verification-wheel (CONTEXT gathered, ready to plan)
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -33,15 +33,15 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-Phase: 05 (vec-act-pool) — EXECUTING
-Plan: 6 of 6
+Phase: 06 (verification-wheel) — CONTEXT GATHERED
+Plan: 0 of 5 (5 plans / 3 waves planned in CONTEXT D-16)
 Current Plan: Not started
-Total Plans in Phase: 6
+Total Plans in Phase: 5
 
-- **Phase:** 07
-- **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
+- **Phase:** 06
+- **Plan:** 0 of 5 (CONTEXT.md committed; PLAN.md TBD)
 - **Status:** Ready to plan
-- **Progress:** [██████████] 100%
+- **Progress:** [████████████████████] 100% (5 of 6 phases complete in milestone v1.0)
 
 ## Performance Metrics
 
