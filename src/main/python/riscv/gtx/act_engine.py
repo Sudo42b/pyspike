@@ -36,12 +36,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from .act_core import relu, prelu, gelu, tanh_act, sigmoid, softmax, esum
+from .act_core import (
+    relu, prelu, gelu, tanh_act, sigmoid, softmax, esum,
+    pool_max, pool_avg,
+    cvt_qh, cvt_hq, cvt_ih, cvt_hi, cvt_hn, cvt_sh, cvt_hs, cvt_dh, cvt_hd,
+)
 from .encoding import (
     GTX_ACT_RELU, GTX_ACT_TANH, GTX_ACT_SOFTMAX, GTX_ACT_GELU,
     GTX_ACT_SIGMOID, GTX_ACT_PRELU, GTX_ACT_ESUM,
     ACT_OPS_REVERSED,
-    GSPR_GTX_OPERAND2, GSPR_GTX_OPERAND3,
+    GSPR_GTX_OPERAND1, GSPR_GTX_OPERAND2, GSPR_GTX_OPERAND3,
     LSPR_SPM_ADDRA, LSPR_SPM_ADDRR,
 )
 from .params import GTX_NEST_NUM, GTX_SPU_NUM, GTX_L0_SIZE_BYTES
@@ -268,22 +272,122 @@ def firmware_softmax_imm(npu, proc, insn, *, op_id: int) -> int:
 
 
 # ============================================================================
-# Plan 04 fills these
+# firmware_pool -- Plan 04 GREEN
 # ============================================================================
 def firmware_pool(npu, proc, insn, *, is_max: bool) -> int:
-    """Plan 04 GREEN-fill. Source: gtx_npu_act.cc:166-220.
+    """Direct port of gtx_npu_act.cc:166-220 (exec_pooling) +
+    gtx_npu_dispatch.cc:653-655/673-675 (firmware dispatch).
 
     Always forward direction (ADDRA -> ADDRR per CONTEXT D-08).
-    Avg-pool: `avg += 0.0` canonicalises -0.0 -> +0.0 (line 211).
+    length      = GSPR_GTX_OPERAND1 & 0xFFFF (HW conv 0 -> 0x10000)
+    kernel_size = GSPR_GTX_OPERAND2 & 0xFFFF
+    output_len  = length / kernel_size (integer floor; non-overlapping windows)
+
+    Avg-pool: `avg += 0.0` canonicalises -0.0 -> +0.0 (line 211); the
+    canonicalization happens inside act_core.pool_avg.
     """
+    nest, spu = _resolve_nest_spu(npu)
+
+    length = int(npu.gspr.get(GSPR_GTX_OPERAND1, 0)) & 0xFFFF
+    if length == 0:
+        length = 0x10000  # HW conv (mirrors firmware_vec_op / firmware_act)
+    kernel_size = int(npu.gspr.get(GSPR_GTX_OPERAND2, 0)) & 0xFFFF
+    if kernel_size == 0:
+        # Vendor guards `kernel_size > 0` at line 175; division by 0 is UB.
+        # Match vendor by silently NOPing (no engine writeback when guard fails).
+        return 0
+
+    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
+    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+
+    l1_f16 = npu.mem.l1_f16(nest, spu)
+    addra_off = (addr_a // 2) % l1_f16.shape[0]
+    addrr_off = (addr_r // 2) % l1_f16.shape[0]
+
+    in_view = l1_f16[addra_off:addra_off + length]
+
+    if is_max:
+        result = pool_max(in_view, kernel_size)
+    else:
+        result = pool_avg(in_view, kernel_size)
+
+    out_len = length // kernel_size
+    l1_f16[addrr_off:addrr_off + out_len] = result
     return 0
 
 
+# ============================================================================
+# firmware_format -- Plan 04 GREEN
+# ============================================================================
+# Bytes-per-element table for src/dst kinds (gtx_npu_act.cc:248-360).
+_BYTES_PER_ELEM = {'fp16': 2, 'fp32': 4, 'fp64': 8,
+                   'fp8': 1, 'int8': 1, 'int32': 4}
+
+
 def firmware_format(npu, proc, insn, *, src_kind: str, dst_kind: str) -> int:
-    """Plan 04 GREEN-fill. Source: gtx_npu_act.cc:222-372.
+    """Direct port of gtx_npu_act.cc:222-372 (exec_format_cvt).
 
     src_kind/dst_kind in {'fp16', 'fp32', 'fp64', 'fp8', 'int8', 'int32'}.
     Always forward direction (ADDRA -> ADDRR per CONTEXT D-08).
-    Scale/offset unpacked from GSPR_GTX_OPERAND2 (low 16 = scale, high 16 = offset).
+
+    Scale/offset unpacked from GSPR_GTX_OPERAND2 (Pitfall 6 lock):
+      scale  = OP2 & 0xFFFF        (FP16 LE, low 16 bits)
+      offset = (OP2 >> 16) & 0xFFFF (FP16 LE, high 16 bits)
+
+    scale/offset ARE applied for FP16<->{FP8, INT8, INT32};
+    scale/offset are NOT applied for FP16<->{FP32, FP64} (bit-pattern preserving).
+
+    length: read from XPR[insn.rs1] & 0xFFFF (HW conv 0 -> 0x10000).
     """
+    nest, spu = _resolve_nest_spu(npu)
+
+    # length from rs1 register value (mirrors firmware_vec_op).
+    length = int(proc.state.XPR[insn.rs1]) & 0xFFFF
+    if length == 0:
+        length = 0x10000
+
+    op2 = int(npu.gspr.get(GSPR_GTX_OPERAND2, 0))
+    scale = _fp16_low16(op2)    # bits[15:0]  -- Pitfall 6
+    offset = _fp16_high16(op2)  # bits[31:16]
+
+    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
+    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+
+    l1 = npu.mem.l1_byte(nest, spu)
+
+    in_size = length * _BYTES_PER_ELEM[src_kind]
+    in_bytes = l1[addr_a:addr_a + in_size]
+
+    if src_kind == 'fp16' and dst_kind == 'fp8':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.float16)
+        out_bytes = cvt_qh(in_arr, scale, offset).tobytes()
+    elif src_kind == 'fp8' and dst_kind == 'fp16':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.uint8)
+        out_bytes = cvt_hq(in_arr, scale, offset).tobytes()
+    elif src_kind == 'fp16' and dst_kind == 'int8':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.float16)
+        out_bytes = cvt_ih(in_arr, scale, offset).tobytes()
+    elif src_kind == 'int8' and dst_kind == 'fp16':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.int8)
+        out_bytes = cvt_hi(in_arr, scale, offset).tobytes()
+    elif src_kind == 'int32' and dst_kind == 'fp16':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.int32)
+        out_bytes = cvt_hn(in_arr, scale, offset).tobytes()
+    elif src_kind == 'fp32' and dst_kind == 'fp16':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.float32)
+        out_bytes = cvt_sh(in_arr).tobytes()  # NO scale/offset
+    elif src_kind == 'fp16' and dst_kind == 'fp32':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.float16)
+        out_bytes = cvt_hs(in_arr).tobytes()
+    elif src_kind == 'fp64' and dst_kind == 'fp16':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.float64)
+        out_bytes = cvt_dh(in_arr).tobytes()
+    elif src_kind == 'fp16' and dst_kind == 'fp64':
+        in_arr = np.frombuffer(bytes(in_bytes), dtype=np.float16)
+        out_bytes = cvt_hd(in_arr).tobytes()
+    else:
+        return 0  # unsupported direction -- silent NOP
+
+    out_arr = np.frombuffer(out_bytes, dtype=np.uint8)
+    l1[addr_r:addr_r + len(out_arr)] = out_arr
     return 0
