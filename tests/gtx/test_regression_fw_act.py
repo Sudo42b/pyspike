@@ -146,20 +146,23 @@ def test_act_strict_mode_pass(tmp_path):
         f"  - proc.get_state() regression (P4 04-05 PHASE-CRITICAL fix)\n"
     )
 
-    # Skip dump-compare gracefully if the subprocess did not honor GTX_DDR_DUMP
-    # (e.g. running against an older pyspike build without P3 D-04 dump support,
-    # which is the current state per P3 D-09 lock: ddr_dump_to_file does NOT
-    # consult GTX_DDR_DUMP env vars; an explicit atexit hook is P6 territory).
-    # Mirrors P4 04-05 D-4 lock verbatim.
-    if not actual_dump.exists():
-        pytest.skip(
-            f"GTX_DDR_DUMP not honored by subprocess (no {actual_dump}). "
-            "Possible: pyspike build predates P3 D-04 atexit dump infrastructure; "
-            "or GtxNpu.shutdown does not flush dump on SystemExit. "
-            "Subprocess clean-exit IS verified above (returncode=0); "
-            "strict-mode compare gated on dump availability. "
-            "P6 follow-up: wire atexit hook so this branch turns into a hard PASS."
-        )
+    # P6 D-04/D-05 transition: subprocess clean-exit + GTX_DDR_DUMP set MUST
+    # produce a dump file (atexit hook in __init__.py D-04 + ddr.py D-05).
+    # Previously this was tier #5 graceful-skip; in P6 it is a hard PASS gate.
+    #
+    # NOTE on PRIMARY vs SECONDARY signals:
+    # - Primary atexit signal: tests/gtx/test_atexit_ddr_dump.py::test_atexit_dump_fires_on_systemexit (hard-PASS, no toolchain needed beyond nop_wjoin.elf fixture).
+    # - Secondary signal (THIS test): test_act_strict_mode_pass transitions from 5-tier-#5 graceful-skip to hard PASS only on dev machine with /opt/riscv toolchain available. Subprocess pyspike may still skip at tiers 1-4 on CI without toolchain -- primary signal carries.
+    assert actual_dump.exists(), (
+        f"P6 D-04 broken: subprocess clean-exited (rc=0) with GTX_DDR_DUMP "
+        f"set, but no dump file was written.\n"
+        f"  expected: {actual_dump}\n"
+        f"  Possible causes:\n"
+        f"  - atexit registration in riscv/gtx/__init__.py missing or guarded incorrectly\n"
+        f"  - _atexit_ddr_dump in riscv/gtx/ddr.py raised before writing\n"
+        f"  - _LAST_NPU not set in GtxNpu.__init__\n"
+        f"  stderr:\n{result.stderr}"
+    )
 
     # ROADMAP P5 success #5: actual_dump vs golden, strict mode PASS.
     # For Plan 01 zero-init synthesis, both should be all-zeros 16 FP16 BE bit-pair
