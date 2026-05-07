@@ -1,0 +1,5 @@
+# Source: vendor/gtx_cpp_reference/test/TANH/n1s16/data/n1s16_tanh_ref.txt
+# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
+# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
+@f000000
+b6de39edb518b71731d428b4b7c2b57eb9daad322d81b6abb827b8bf2fb5b716
