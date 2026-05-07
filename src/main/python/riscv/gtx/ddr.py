@@ -183,16 +183,19 @@ def _atexit_ddr_dump() -> None:
     NOT raise SystemExit. All error paths use early `return` and
     `print(..., file=sys.stderr)`.
     """
-    # Lazy-import to avoid circular ddr.py <-> npu.py at module-load time.
-    from .npu import _LAST_NPU
-    if _LAST_NPU is None:
+    # Lazy-import the npu MODULE (not _LAST_NPU directly) to capture the live
+    # value at hook-fire time. `from .npu import _LAST_NPU` would bind the
+    # value AT IMPORT TIME (None), missing any later GtxNpu.__init__ assignment.
+    from . import npu as _npu_mod
+    last_npu = _npu_mod._LAST_NPU
+    if last_npu is None:
         return  # No NPU was instantiated — nothing to dump
-    if _LAST_NPU.mem is None or _LAST_NPU.mem._ddr_bytes is None:
-        return  # Mirror C++ has_ddr() check (gtx_npu_core.cc:62)
+    if last_npu.mem is None:
+        return  # No memory subsystem — defensive
 
     # P3 D-05: flush deferred S-loop stores before dumping (mirrors vendor
     # gtx_npu_core.cc:64 flush_deferred_ddr_stores()).
-    _LAST_NPU.flush_deferred_ddr_stores()
+    last_npu.flush_deferred_ddr_stores()
 
     dump_file = os.environ.get('GTX_DDR_DUMP')
     if not dump_file:
@@ -211,4 +214,14 @@ def _atexit_ddr_dump() -> None:
               file=sys.stderr)
         return
 
-    ddr_dump_to_file(_LAST_NPU.mem, dump_file, addr, size)
+    # Ensure DDR is allocated for the requested dump range. Vendor C++ pre-
+    # allocates DDR in the constructor (gtx_npu_core.cc:167 ensure_ddr() in
+    # reset()) so has_ddr() is always true. Our pyspike lazy-allocates per
+    # P3 D-13 doubling-grow ergonomic; here we materialize the requested
+    # range so a clean firmware that never touches DDR still produces a
+    # zero-padded dump file (matches vendor `ddr_dump_to_file` zero-pad
+    # branch at gtx_npu_dma.cc:509-558 + ensures has_ddr() parity).
+    end_offset = _ddr_offset(addr) + size
+    ensure_ddr(last_npu.mem, end_offset)
+
+    ddr_dump_to_file(last_npu.mem, dump_file, addr, size)
