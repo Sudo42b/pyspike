@@ -26,6 +26,22 @@ mm_basic.elf: mm_basic.S
 activation_relu_gelu.elf: activation_relu_gelu.S
 	$(CC) $(LDFLAGS) -o $@ $<
 
+# P6 VRF-03 ACT family (Plan 03 Task 2a; hand-written .S; pre-built .elf committed).
+relu.elf: relu.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
+sigmoid.elf: sigmoid.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
+tanh.elf: tanh.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
+softmax.elf: softmax.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
+leaky_relu.elf: leaky_relu.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
 .PHONY: clean
 clean:
 	rm -f nop_wjoin.elf mm_basic.elf activation_relu_gelu.elf

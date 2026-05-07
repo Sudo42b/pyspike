@@ -1,10 +1,16 @@
 # nop_wjoin.elf, mm_basic.elf, activation_relu_gelu.elf are intentionally
 # committed (D-22, P4 D-09, P5 D-04) -- pre-built binaries for tests.
+# P6 VRF-03 ACT-family fixtures (Plan 03 Task 2a): relu/sigmoid/tanh/softmax/leaky_relu.
 # Override the project-level gitignore (../../../.gitignore patterns *.elf
 # and Makefile) so these fixtures and the build recipe land in the repo.
 !nop_wjoin.elf
 !mm_basic.elf
 !activation_relu_gelu.elf
+!relu.elf
+!sigmoid.elf
+!tanh.elf
+!softmax.elf
+!leaky_relu.elf
 !Makefile
 
 # Build artifacts from `make` other than nop_wjoin.elf:
