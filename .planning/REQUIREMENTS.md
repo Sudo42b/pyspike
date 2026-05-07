@@ -117,7 +117,7 @@
   포팅 + 모듈로 import 가능
 - [x] **VRF-02**: `verify_ref.py` 32개 host-side scalar oracle을 pytest 단위 테스트로
   변환 — 각 op이 oracle과 ULP 1 내 일치
-- [ ] **VRF-03**: `tests/gtx/data/{golden,elf}/`에 회귀 .elf 펌웨어 + golden DDR hex
+- [x] **VRF-03**: `tests/gtx/data/{golden,elf}/`에 회귀 .elf 펌웨어 + golden DDR hex
   자산 동봉 (기존 `run_tests_n1s16.sh` / `run_llext_tests.sh` 시퀀스 대응)
 - [ ] **VRF-04**: 회귀 `.elf` 100% 통과(strict mode: `exact_matches == total_fp16`)
   — gem5 simplified 인코딩 펌웨어 + ISS full 인코딩 펌웨어 양 스위트 모두
@@ -226,7 +226,7 @@
 | ACT-05 | Phase 5 | Complete |
 | VRF-01 | Phase 6 | Complete |
 | VRF-02 | Phase 5 | Complete |
-| VRF-03 | Phase 6 | Pending |
+| VRF-03 | Phase 6 | Complete |
 | VRF-04 | Phase 6 | Pending |
 | PKG-01 | Phase 6 | Pending |
 | PKG-02 | Phase 1 | Complete |
