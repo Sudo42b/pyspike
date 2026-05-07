@@ -42,9 +42,22 @@ softmax.elf: softmax.S
 leaky_relu.elf: leaky_relu.S
 	$(CC) $(LDFLAGS) -o $@ $<
 
+# P6 VRF-03 VEC/MM family (Plan 03 Task 2b; hand-written .S; pre-built .elf committed).
+add_vv.elf: add_vv.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
+mul_vv.elf: mul_vv.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
+sum.elf: sum.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
+abs.elf: abs.S
+	$(CC) $(LDFLAGS) -o $@ $<
+
 .PHONY: clean
 clean:
-	rm -f nop_wjoin.elf mm_basic.elf activation_relu_gelu.elf
+	rm -f nop_wjoin.elf mm_basic.elf activation_relu_gelu.elf relu.elf sigmoid.elf tanh.elf softmax.elf leaky_relu.elf add_vv.elf mul_vv.elf sum.elf abs.elf
 
 .PHONY: verify
 verify: nop_wjoin.elf
