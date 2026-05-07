@@ -29,6 +29,14 @@ from . import _registry  # noqa: F401  -- imported for completeness
 from . import ops as _ops  # noqa: F401  -- triggers @handler decorators
 from .dispatch import build_custom0_table, build_custom1_table
 
+# P6 D-04/D-05: single-global NPU instance pointer for atexit dump hook.
+# Direct port of vendor gtx_npu_core.cc:59
+#   static gtx_npu_t *g_gtx_instance = nullptr;
+# The atexit handler in ddr.py reads this at interpreter shutdown.
+# Single-global is correct for v1 single-hart scope; v2 multi-hart may
+# upgrade to weakref.WeakValueDictionary.
+_LAST_NPU = None  # type: ignore[var-annotated]
+
 
 @isa.register("gtx")
 class GtxNpu(isa.ROCC):
@@ -61,6 +69,11 @@ class GtxNpu(isa.ROCC):
         # Dispatch tables (plan 02-03 fill _registry.HANDLERS)
         self._custom0 = build_custom0_table(self)
         self._custom1 = build_custom1_table(self)
+        # P6 D-04/D-05: register self as the latest GtxNpu (vendor gtx_npu_core.cc:59
+        # `g_gtx_instance = this;` direct port). Last-instance-wins. Single-hart
+        # invariant; tests use subprocess isolation for per-instance lookup.
+        global _LAST_NPU
+        _LAST_NPU = self
 
     # NOTE: do NOT override get_instructions(). The C++ rocc_t base
     # (vendor/spike/riscv/rocc.cc:34-42) returns the c0/c1/c2/c3 dispatch

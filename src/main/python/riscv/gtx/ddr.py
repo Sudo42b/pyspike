@@ -167,3 +167,48 @@ def ddr_dump_to_file(mem: "GtxMemory", filename: str,
             if reversed_mode:
                 chunk = chunk[::-1]
             f.write(chunk.hex() + "\n")
+
+
+def _atexit_ddr_dump() -> None:
+    """atexit handler: vendor gtx_npu_core.cc:61-73 1:1 port (D-05).
+
+    Triggered at Python interpreter shutdown when GTX_DDR_DUMP env var is set
+    (registration is gated in __init__.py per D-04). Reads ADDR/SIZE from env
+    vars and writes DDR slice to file via existing args-only ddr_dump_to_file.
+
+    Single-NPU model (D-05 / RESEARCH §NPU Instance Lookup): looks up
+    riscv.gtx.npu._LAST_NPU module global. v1 single-hart scope.
+
+    SAFETY (RESEARCH §Pitfall 3, CPython issue #103512): this function MUST
+    NOT raise SystemExit. All error paths use early `return` and
+    `print(..., file=sys.stderr)`.
+    """
+    # Lazy-import to avoid circular ddr.py <-> npu.py at module-load time.
+    from .npu import _LAST_NPU
+    if _LAST_NPU is None:
+        return  # No NPU was instantiated — nothing to dump
+    if _LAST_NPU.mem is None or _LAST_NPU.mem._ddr_bytes is None:
+        return  # Mirror C++ has_ddr() check (gtx_npu_core.cc:62)
+
+    # P3 D-05: flush deferred S-loop stores before dumping (mirrors vendor
+    # gtx_npu_core.cc:64 flush_deferred_ddr_stores()).
+    _LAST_NPU.flush_deferred_ddr_stores()
+
+    dump_file = os.environ.get('GTX_DDR_DUMP')
+    if not dump_file:
+        return  # Defensive — registration is gated, but env may have changed.
+
+    # Vendor gtx_npu_core.cc:68-71: hex parse with stoull base=16; defaults
+    # 0x37f000000 (= GTX_DDR_BASE + 0x0F000000) and 0x400 (= 1024 bytes).
+    addr_s = os.environ.get('GTX_DDR_DUMP_ADDR')
+    size_s = os.environ.get('GTX_DDR_DUMP_SIZE')
+    try:
+        addr = int(addr_s, 16) if addr_s else 0x37f000000
+        size = int(size_s, 16) if size_s else 0x400
+    except ValueError as exc:
+        import sys
+        print("GTX_DDR_DUMP: invalid hex int in env vars (" + str(exc) + "); skip dump",
+              file=sys.stderr)
+        return
+
+    ddr_dump_to_file(_LAST_NPU.mem, dump_file, addr, size)

@@ -19,6 +19,8 @@ Phase 1 exposes FP16 helpers (`fp`), memory layer (`memory`), HW parameter
 constants (`params`), funct7 encoding (`encoding`), and DDR helpers (`ddr`).
 The ROCC subclass is added in Phase 2 (D-14).
 """
+import atexit
+import os
 import sys
 
 # D-09 / RESEARCH.md "Anti-Patterns": np.float16 view assumes little-endian host.
@@ -51,3 +53,17 @@ except ImportError as _exc:
     GtxNpu = None  # type: ignore[assignment]
 
 __all__ = ["encoding", "fp", "memory", "params", "ddr", "npu", "GtxNpu"]
+
+# P6 D-04: register atexit DDR dump handler when GTX_DDR_DUMP is set at
+# import time. Vendor gtx_npu_core.cc:127 std::atexit(gtx_atexit_ddr_dump)
+# direct port. Conditional gate avoids registering a no-op handler in
+# non-dump runs (mirrors vendor `if (getenv("GTX_DDR_DUMP")) std::atexit(...);`
+# pattern at gtx_npu_core.cc:125-127).
+#
+# IMPORTANT (RESEARCH §Pitfall 4 + Constraint D-04): the env var is read
+# ONCE at import time. Tests that toggle GTX_DDR_DUMP per-call MUST use
+# subprocess.run(..., env=env) (which spawns a fresh interpreter that
+# re-evaluates this gate). In-process tests cannot toggle the registration.
+if os.getenv('GTX_DDR_DUMP'):
+    from .ddr import _atexit_ddr_dump
+    atexit.register(_atexit_ddr_dump)
