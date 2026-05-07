@@ -13,22 +13,166 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""VEC op @handler entries -- spike-bound shim layer (D-04 mirror of ops/mm.py).
+"""VEC op @handler entries -- D-04 thin shim layer (mirror of ops/mm.py).
 
-Plan 01 ships an empty module with the docstring documenting the 8 SASMD-VS +
-8 SASMD-VV @handlers + 4 CLAMP-family @handlers + math/sign/round @handlers
-that Plan 02 wave 1b will register. NO @handler calls in plan 01 -- that lets
-the import be a pure no-op (no registry mutations) until Plan 02 lands.
+Each handler delegates the full decode/dispatch work to
+`vec_engine.firmware_vec_op`. The disasm layer is fed by
+`@handler(mnemonic=..., mask_funct3=True)` -- one mnemonic per
+(funct7, funct3) tuple, matching `gtx_npu_disasm.inc:67-142`.
 
-Plan 02 will append:
-  - 8 SASMD-family @handlers at funct7=0x10 (add_vs, sub_vs, mul_vs, div_vs at
-    funct3=0..3; add_is, sub_is, mul_is, div_is at funct3=4..7)
-  - 8 SASMD-vector @handlers at funct7=0x18 (add_vv, ... + add_ii, ...)
-  - 1 vsum + 1 dot @handler at funct7=0x13 (funct3=0/1)
-  - 4 CLAMP-family @handlers at funct7=0x1F (clamp_min_v/clamp_max_v/accum_v/arange_v
-    at funct3=0..3; bitwise variants at funct3=4..7 are Plan 02 too)
-  - sqrt/exp/log/abs/neg/sgn/step/ceil/floor/trunc/rne @handlers at funct7=0x1C/0x1D/0x1E
-
-Phase 5 plan 02 task 1.
+Phase 5 plan 02 task 3.
 """
-# Intentionally empty in Plan 01. @handler calls land in Plan 02.
+from .._registry import handler
+from .. import vec_engine
+from ..encoding import (
+    GTX_F7_VEC_SASMD, GTX_F7_VEC_DOT_SUM, GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP,
+)
+
+
+# =========================================================================
+# SASMD scalar arith funct7=0x10 (8 variants: VS funct3=0..3, IS funct3=4..7)
+# disasm.inc:67-74
+# =========================================================================
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=0,
+         mnemonic='add_vs', mask_funct3=True)
+def _exec_add_vs(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=1,
+         mnemonic='sub_vs', mask_funct3=True)
+def _exec_sub_vs(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=2,
+         mnemonic='mul_vs', mask_funct3=True)
+def _exec_mul_vs(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=3,
+         mnemonic='div_vs', mask_funct3=True)
+def _exec_div_vs(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=4,
+         mnemonic='add_is', mask_funct3=True)
+def _exec_add_is(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=5,
+         mnemonic='sub_is', mask_funct3=True)
+def _exec_sub_is(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=6,
+         mnemonic='mul_is', mask_funct3=True)
+def _exec_mul_is(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=7,
+         mnemonic='div_is', mask_funct3=True)
+def _exec_div_is(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+# =========================================================================
+# VSUM/DOT funct7=0x1A (DOT at funct3=0, SUM at funct3=1)
+# disasm.inc:101-104 -- vendor authoritative; Plan 01 seeded 0x13 incorrectly.
+# =========================================================================
+@handler(kind='custom0', funct7=GTX_F7_VEC_DOT_SUM, funct3=0,
+         mnemonic='dot_vvs', mask_funct3=True)
+def _exec_dot_vvs(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_DOT_SUM, funct3=1,
+         mnemonic='sum_vs', mask_funct3=True)
+def _exec_sum_vs(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+# =========================================================================
+# SASMD vector arith funct7=0x18 (8 variants: VV funct3=0..3, II funct3=4..7)
+# disasm.inc:87-94
+# =========================================================================
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=0,
+         mnemonic='add_vv', mask_funct3=True)
+def _exec_add_vv(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=1,
+         mnemonic='sub_vv', mask_funct3=True)
+def _exec_sub_vv(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=2,
+         mnemonic='mul_vv', mask_funct3=True)
+def _exec_mul_vv(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=3,
+         mnemonic='div_vv', mask_funct3=True)
+def _exec_div_vv(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=4,
+         mnemonic='add_ii', mask_funct3=True)
+def _exec_add_ii(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=5,
+         mnemonic='sub_ii', mask_funct3=True)
+def _exec_sub_ii(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=6,
+         mnemonic='mul_ii', mask_funct3=True)
+def _exec_mul_ii(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=7,
+         mnemonic='div_ii', mask_funct3=True)
+def _exec_div_ii(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+# =========================================================================
+# CLAMP family funct7=0x1F (4 variants funct3=0..3; bitwise funct3=4..7
+# deferred for v1 critical path)
+# disasm.inc:135-138
+# =========================================================================
+@handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=0,
+         mnemonic='clamp_min_v', mask_funct3=True)
+def _exec_clamp_min_v(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=1,
+         mnemonic='clamp_max_v', mask_funct3=True)
+def _exec_clamp_max_v(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=2,
+         mnemonic='accum_v', mask_funct3=True)
+def _exec_accum_v(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+@handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=3,
+         mnemonic='arange_v', mask_funct3=True)
+def _exec_arange_v(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
