@@ -8,6 +8,8 @@ recursive-include docs *.puml *.md
 recursive-include src/main/cpp *.h *.cc
 recursive-include src/main/python *.py *.pyi py.typed
 recursive-include tests *.py *.pyi
+recursive-include tests/gtx/data/elf *.elf *.S Makefile
+recursive-include tests/gtx/data/golden *.hex
 recursive-include examples *
 recursive-include tests/data *.py *.elf
 recursive-include vendor *

@@ -20,7 +20,7 @@ build = [
 ]
 manylinux-x86_64-image = "quay.io/pypa/manylinux2014_x86_64"
 test-environment = {PYTHONPATH = "examples"}
-test-command = "pytest -v -k 'not pyspike_cli'"
+test-command = "pytest -v -k 'not pyspike_cli' && python -c \"from riscv.gtx import GtxNpu; from riscv.gtx._verify import compare_hex, bundled_elfs, load_golden; assert callable(compare_hex); assert callable(bundled_elfs); assert callable(load_golden)\" && pyspike-verify --help"
 test-extras = [
   "dev"
 ]
@@ -123,6 +123,10 @@ riscv = [
   "data/lib/libfesvr.a",
   "data/lib/libriscv.so",
   "data/lib/pkgconfig/*.pc"
+]
+"riscv.gtx" = [
+  "data/firmware/*.elf",
+  "data/golden/*.hex"
 ]
 
 [tool.setuptools_scm]

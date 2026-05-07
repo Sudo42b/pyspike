@@ -20,6 +20,7 @@ import glob
 import importlib
 import os
 import pathlib
+import shutil
 import site
 import subprocess
 import tempfile
@@ -114,7 +115,29 @@ def _build_spike(package_dir: pathlib.Path) -> None:
 class build_py(_build_py):
 
     def build_package_data(self):
-        _build_spike(pathlib.Path(self.get_package_dir(package.__name__)).absolute())
+        package_dir = pathlib.Path(self.get_package_dir(package.__name__)).absolute()
+        _build_spike(package_dir)
+
+        # P6 D-13: copy tests/gtx/data/{elf,golden}/ to <pkg>/gtx/data/{firmware,golden}/.
+        # tests/ is the single source-of-truth (D-13); src/ is wheel-only sync.
+        # The package-data glob in pyproject.toml then picks up the staged files.
+        # Note: tests/gtx/data/elf/ is renamed to gtx/data/firmware/ during the copy
+        # (ROADMAP P6 success #3 expects riscv.gtx.data.firmware/).
+        repo_root = pathlib.Path(__file__).parent.absolute()
+        tests_data = repo_root / "tests" / "gtx" / "data"
+        gtx_pkg_data = package_dir / "gtx" / "data"
+        for src_sub, dst_sub, suffix in (
+            ("elf", "firmware", ".elf"),
+            ("golden", "golden", ".hex"),
+        ):
+            src_dir = tests_data / src_sub
+            dst_dir = gtx_pkg_data / dst_sub
+            if src_dir.exists():
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                for entry in src_dir.iterdir():
+                    if entry.suffix == suffix:
+                        shutil.copy2(entry, dst_dir / entry.name)
+
         return super().build_package_data()
 
 
