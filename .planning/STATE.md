@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 5
+current_plan: 6
 status: executing
-last_updated: "2026-05-07T04:45:09.611Z"
+last_updated: "2026-05-07T04:58:10.657Z"
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 27
-  completed_plans: 25
-  percent: 93
+  completed_plans: 26
+  percent: 96
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -34,14 +34,14 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 ## Current Position
 
 Phase: 05 (vec-act-pool) — EXECUTING
-Plan: 5 of 6
-Current Plan: 5
+Plan: 6 of 6
+Current Plan: 6
 Total Plans in Phase: 6
 
 - **Phase:** 07
 - **Plan:** 2 of 5 (Plan 01 Wave 0 scaffold complete; Wave 1 unblocked)
 - **Status:** Ready to execute
-- **Progress:** [█████████░] 93%
+- **Progress:** [██████████] 96%
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Total Plans in Phase: 6
 | Phase 05-vec-act-pool P02 | 16min | 3 tasks | 6 files |
 | Phase 05 P03 | 12min | 3 tasks | 4 files |
 | Phase 05-vec-act-pool P04 | 14min | 3 tasks | 5 files |
+| Phase 05-vec-act-pool P05 | 5min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -156,6 +157,20 @@ Total Plans in Phase: 6
 4. **L0 result-reg source = GSPR_OPERAND3 with insn.rd fallback.** Vendor `exec_scalar_imm` takes result_reg as a parameter; the dispatch upstream reads from `gspr[GSPR_GTX_OPERAND3] & 0x1F`. vec_engine reads OPERAND3 first, falls back to `insn.rd & 0x1F` if OPERAND3 not set -- mirrors vendor `gtx_npu_vec.cc:659` "if op3_raw <= 0x1F use it, else use input_reg" pattern.
 
 5. **DOT/VSUM scalar writeback is LE bytes at L0[0..1].** gtx_npu_vec.cc:108-110 and :258-260 use `l0[0] = r16 & 0xFF; l0[1] = (r16 >> 8) & 0xFF` -- LE byte order. MM_O writes BE, MM_V writes LE; VEC writes LE. Documented asymmetry preserved.
+
+### Phase 5 Plan 05 Decisions (locked during execution)
+
+1. **DIRECT_MAPPED_ORACLES has 21 entries (NOT 20).** sqr is synthesized via mul(a, a) on funct7=0x18 with op_kind='vec_binary_aa' and is conceptually a unique op (vendor verify_ref.py:104 has its own op_sqr entry). Plan body explicitly authorized this divergence: "(Note: the dict has 21 entries because sqr is synthesized via mul(a, a))". Kept verbatim.
+
+2. **compare_fp16 uses atol=0.001 (NOT verify_ref.py's 0.01).** Plan asks for ULP-1 + atol 0.001; ROADMAP P5 success criteria + verify.py main both use 0.001; only the verify_ref host-side unit harness uses the looser 0.01. Tighter threshold proves no drift. Empirically: 0/21 mismatches; observed delta_ulp = 0 across all 21 ops × 64 FP16 inputs (1344 comparisons).
+
+3. **NaN-NaN equivalence guard in compare_fp16 (beyond vendor).** verify_ref.py:318-326 doesn't explicitly handle NaN-NaN; plan body's compare_fp16 sketch did. Reason: op_log on a < 0 input produces NaN and we want NaN-vs-NaN to count as match (not a mismatch). Domain-aware seeded inputs avoid the case, but the guard is defensive.
+
+4. **op_gelu_erf body calls `pytest.skip(...)` not `raise NotImplementedError`.** Reason: pytest.skip is the only way to signal 'documented skip' from inside a test path. The op is NOT in DIRECT_MAPPED_ORACLES so the body is dead code by design; kept for vendor-parity documentation + safety net if a future test imports it directly. Locked the CLAUDE.md scipy ban inline at function body.
+
+5. **Per-op seeded RNG via `hash(op_name) % 2**32`.** Process-local stable; not seed-stable across processes (PYTHONHASHSEED randomization applies to str.__hash__). For maximal cross-process reproducibility a future plan would switch to `zlib.crc32(op_name.encode())`. P5 accepts hash() since the test isn't checking specific input values, just ULP-1 parity. Empirically: 0/21 mismatches, no flakiness observed.
+
+6. **_binary_b_input zero-divisor guard for op_div: replace |b| < 0.5 with 1.0 (not 0.5).** 0.5 would still cause overflow when |a| > 32K (FP16 max). 1.0 keeps quotient strictly within FP16 range while exercising non-trivial division.
 
 ### Phase 5 Plan 04 Decisions (locked during execution)
 
@@ -280,7 +295,49 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
-Phase 05 Plan 04 (Wave 1b ACT pool + format_cvt GREEN-fill) complete —
+Phase 05 Plan 05 (Wave 2 VRF-02 oracle parity) complete -- VRF-02 closed.
+**Plan 05** ran as PARALLEL Wave 5 (alongside 05-06 .elf regression);
+executed in ~5 min with 2 atomic GREEN-only commits (Plan 01 had already
+shipped NotImplementedError skeletons, so no RED prep needed):
+
+- `84d5743` (Task 1 GREEN, feat): tests/gtx/_oracles.py +208 LOC.
+  20 directly-mapped oracle bodies GREEN-filled (ABS/NEG/SGN/STEP/SQRT/
+  EXP/LOG/CEIL/TRUNC/FLOOR/ROUND/SQR/ADD/SUB/MUL/DIV/SCALE/RELU/SIGMOID/
+  TANH/GELU). Direct port of vendor verify_ref.py:185-226 OPS dict;
+  FP32-internal-then-single-FP16-cast discipline matches act_core /
+  vec_core kernel precedent. DIRECT_MAPPED_ORACLES dict has 21 entries
+  (20 unique mappings + sqr synthesized via mul(a, a) on funct7=0x18 with
+  op_kind='vec_binary_aa'). DEFERRED_REASONS dict documents 12 skipped
+  ops (SIN/COS not-in-HW; 7 composed; GELU_ERF scipy-banned with op_gelu
+  tanh-approx as bit-exact substitute; FILL P3-territory; ADD1 redundant).
+
+- `dcbf15b` (Task 2 GREEN, feat): tests/gtx/test_oracle_parity.py +202 LOC.
+  Parametrized over sorted(DIRECT_MAPPED_ORACLES.keys()) -> 21 IDs.
+  compare_fp16(ulp=1, atol=0.001) inline -- direct port of verify_ref.py:
+  318-326 with NaN-NaN equiv guard added beyond vendor. _domain_safe_input
+  generates seeded FP16(64) per op (sqrt/log positive guard; div non-zero
+  divisor guard). Dispatch matrix: vec_unary/vec_binary/vec_scalar ->
+  firmware_vec_op + ADDRR readback; act_reversed -> firmware_act
+  (is_reversed=True) ADDRR->ADDRA; act_forward_dispatch (RELU) ->
+  firmware_act(is_reversed=False) ADDRA->ADDRR. Diagnostic on first
+  mismatch: actual/expected hex (FP16 uint16) + input + delta_ulp.
+
+SUMMARY at `.planning/phases/05-vec-act-pool/05-05-SUMMARY.md`. Self-check
+PASSED. Full P3+P4+P5 suite reports **263 passed / 2 skipped / 0
+failed** (was 242/3/0 post-Plan-04 baseline; +21 GREEN over the 21
+parametrize IDs; -1 placeholder skip; 0 regressions).
+
+**Empirical observation:** Maximum delta_ulp = 0 across all 21 ops × 64
+FP16 inputs (1344 element comparisons). No mismatches, no ULP-1 tolerance
+needed. This validates the FP32-internal compute discipline established
+in Plans 02 and 03 -- bit-exactness by construction. Any future kernel
+edit that drops a single FP32 cast will surface here as delta_ulp > 0.
+
+Requirements marked complete: VRF-02.
+
+---
+
+(Earlier) Phase 05 Plan 04 (Wave 1b ACT pool + format_cvt GREEN-fill) complete —
 last critical compute primitive in Phase 5 landed. **Plan 04** executed
 in ~14 min with 4 atomic commits (TDD RED-then-GREEN):
 
@@ -293,6 +350,7 @@ in ~14 min with 4 atomic commits (TDD RED-then-GREEN):
   after divide; vendor cc:211). 9 cvt kernels (cvt_qh/hq/ih/hi/hn apply
   scale+offset; cvt_sh/hs/dh/hd bit-pattern preserving incl. FP64 per
   RESEARCH Adjustment 1). _build_fp8_to_fp16_lut (256 entries, ~0.2 ms)
+
   + _build_fp16_to_fp8_lut (65536 entries, ~30 ms) build at module import.
   FP8_TO_FP16_LUT[0x00]=+0; [0x80]=-0 (preserved); [0x78]=+inf; [0xF8]=-inf;
   [0x7F]/[0xFF]=NaN. 5/11 tests GREEN at this point (kernel-level only).
@@ -380,33 +438,37 @@ Requirements marked complete: VEC-01, VEC-02, VEC-03, VEC-04, VEC-05.
 
 ### Next Action
 
-Phase 5 Wave 2 unblocked — full ACT/VEC/POOL/FORMAT compute surface
-now GREEN at unit-test level. Plans 05 and 06 can land in parallel.
+Phase 5 Wave 5 IN PROGRESS — Plan 05 (this plan; VRF-02 oracle parity)
+GREEN; Plan 06 (.elf strict-mode regression) running in parallel as
+sibling Wave-5 agent. After both Wave 5 plans complete, Phase 5 closes
+and Phase 6 (PKG/VRF promotion) is unblocked.
 
-- **Plan 05 (oracle parity, Wave 2):** `_oracles.py` 32-op host-side
-  parity tests + `test_oracle_parity.py` (1 RED -> 20 parametrized).
-  All ACT kernels (relu/prelu/gelu/tanh/sigmoid/softmax/esum) + format_cvt
-  (FP16<->FP8/INT8/INT32, FP32<->FP16, FP64<->FP16) + pool (max/avg) are
-  now callable; oracle parity test against `verify_ref.py` (29 portable
-  ops; skip GELU_ERF per CLAUDE.md scipy ban) is plumbing-ready.
+- **Plan 05 (oracle parity, Wave 5 — DONE):** VRF-02 closed. 21
+  parametrized parity tests (20 unique mappings + sqr-as-mul) pass with
+  delta_ulp = 0 across all 1344 element comparisons. compare_fp16
+  ULP-1+atol-0.001 (tighter than verify_ref's 0.01). 12 deferred ops
+  documented in DEFERRED_REASONS.
 
-- **Plan 06 (regression, Wave 2):** `test_regression_fw_act.py` body
-  (subprocess + 4-tier graceful skip + strict compare against
-  `activation_relu_gelu.hex`). RELU forward + GELU reversed wired by
-  Plan 03; pool + format_cvt wired by Plan 04. End-to-end .elf
-  regression via `_verify_minimal.compare_hex(strict=True)` is now
-  plumbing-ready.
+- **Plan 06 (.elf regression, Wave 5 — IN-FLIGHT):** sibling agent is
+  GREEN-filling test_regression_fw_act.py against activation_relu_gelu.elf
+  + golden hex with 4-tier graceful skip + strict compare. End-to-end
+  .elf regression via _verify_minimal.compare_hex(strict=True). Once
+  Plan 06 GREEN lands, Phase 5 success criteria all met.
 
 **Pattern handoff for Plan 05:**
+
 - The `_BYTES_PER_ELEM` table in act_engine.py is a clean source-of-truth
   for any oracle that needs to match firmware_format byte counts.
+
 - All cvt + pool kernels obey the FP32-internal-then-FP16-cast discipline
   established in Plan 02/03; oracle comparisons can use the same pattern.
 
 **Pattern handoff for Plan 06:**
+
 - The FP8/FP16 LUT-based round-trip pattern (`LUT[arr.view(uint16)]`) is
   numba-friendly fancy-index that should JIT cleanly in P7 if profiling
   identifies cvt as a hot path.
+
 - LUT build at module import (~30 ms one-time) is bounded; no per-call
   cost in the hot path.
 

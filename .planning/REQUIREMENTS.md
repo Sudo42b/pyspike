@@ -115,7 +115,7 @@
 
 - [ ] **VRF-01**: `verify.py`(388 LOC, FP16 ULP/atol diff) → `riscv.gtx._verify`로
   포팅 + 모듈로 import 가능
-- [ ] **VRF-02**: `verify_ref.py` 32개 host-side scalar oracle을 pytest 단위 테스트로
+- [x] **VRF-02**: `verify_ref.py` 32개 host-side scalar oracle을 pytest 단위 테스트로
   변환 — 각 op이 oracle과 ULP 1 내 일치
 - [ ] **VRF-03**: `tests/gtx/data/{golden,elf}/`에 회귀 .elf 펌웨어 + golden DDR hex
   자산 동봉 (기존 `run_tests_n1s16.sh` / `run_llext_tests.sh` 시퀀스 대응)
@@ -225,7 +225,7 @@
 | ACT-04 | Phase 5 | Complete |
 | ACT-05 | Phase 5 | Complete |
 | VRF-01 | Phase 6 | Pending |
-| VRF-02 | Phase 5 | Pending |
+| VRF-02 | Phase 5 | Complete |
 | VRF-03 | Phase 6 | Pending |
 | VRF-04 | Phase 6 | Pending |
 | PKG-01 | Phase 6 | Pending |
