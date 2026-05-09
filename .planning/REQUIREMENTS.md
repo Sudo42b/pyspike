@@ -140,14 +140,14 @@ Phase 7 layers optional numba JIT acceleration over the NumPy-only base wheel.
 All NJIT requirements are gated by P6 strict-mode regression green; the
 extras (`pip install spike[fast]`) are opt-in.
 
-- [ ] **NJIT-01**: Lazy `from numba import njit` + auto NumPy fallback (`HAS_NUMBA` gate). `pip install spike` (base) → NumPy-only operation; `pip install spike[fast]` → numba acceleration. Both paths must pass full P6 strict-mode regression. (D-02)
-- [ ] **NJIT-02**: 28 stateless kernels (`gemm_core` 3 + `vec_core` 7 + `act_core` 18) decorated with `@njit(cache=True)` via `_jit.py` shim with FP32-only `_impl` signatures (numba CPU does not support np.float16). Engine layer (mm/vec/act_engine) untouched. (D-06 + NJIT-FP32-BOUNDARY)
-- [ ] **NJIT-03**: `fastmath=False` (numba default) + `with numba.objmode(...)` escape for 5 transcendental kernels (gelu, tanh_act, sigmoid, softmax, esum). Without objmode, LLVM `tanhf`/`expf` differ from glibc by ~1 ULP causing 9/1024 GELU FP16 mismatches; with objmode, 0/1024. (D-09 refined)
-- [ ] **NJIT-04**: Vendor 84-op directory full sweep gate. `tests/gtx/test_regression_fw_full_sweep.py` parametrize over `vendor/gtx_cpp_reference/test/<OP>/n1s16/`; strict-mode `compare_hex(strict=True)` PASS for ops with both .elf + golden present, `pytest.skip` graceful otherwise. M passed + N skipped == 84. (D-10 refined)
-- [ ] **NJIT-05**: Per-kernel ULP-0 parity test (Tier 1). `tests/gtx/test_njit_parity.py` — 28 kernels × NumPy vs JIT delta_ulp == 0 via `np.array_equal(out.view(np.uint16), out_njit.view(np.uint16))`. Transcendental kernels pass via objmode escape. (D-12)
-- [ ] **NJIT-06**: Wall-clock 5× walltime acceptance (Tier 3). `tests/gtx/test_njit_perf.py` pytest-benchmark — full vendor 84-op sweep walltime ≤ 1/5 of P6 NumPy-only baseline. Baseline locked in `tests/gtx/data/baseline_walltime.txt`. (D-13)
-- [ ] **NJIT-07**: Extras packaging. `pyproject.toml [project.optional-dependencies]` adds `fast = ["numba>=0.61.2,<0.66"]` (raised from CONTEXT D-05 `>=0.59` because 0.59 pins numpy<1.27 conflicting with our numpy>=2.0 floor). cibuildwheel `test-extras = ["fast"]` so CI verifies the JIT path on cp310-cp312. (D-03 + D-05 refined)
-- [ ] **NJIT-08**: Documentation sync. REQUIREMENTS.md `Out of Scope` numba row reworded (this section); PROJECT.md "wheel size ≤50MB" clarified to "base wheel size ≤50MB"; ROADMAP.md Phase 7 section filled with goal/requirements/plans; README.md "Performance acceleration" section added. (D-04 + D-15)
+- [x] **NJIT-01**: Lazy `from numba import njit` + auto NumPy fallback (`HAS_NUMBA` gate). `pip install spike` (base) → NumPy-only operation; `pip install spike[fast]` → numba acceleration. Both paths must pass full P6 strict-mode regression. (D-02)
+- [x] **NJIT-02**: 28 stateless kernels (`gemm_core` 3 + `vec_core` 7 + `act_core` 18) decorated with `@njit(cache=True)` via `_jit.py` shim with FP32-only `_impl` signatures (numba CPU does not support np.float16). Engine layer (mm/vec/act_engine) untouched. (D-06 + NJIT-FP32-BOUNDARY)
+- [x] **NJIT-03**: `fastmath=False` (numba default) + `with numba.objmode(...)` escape for 5 transcendental kernels (gelu, tanh_act, sigmoid, softmax, esum). Without objmode, LLVM `tanhf`/`expf` differ from glibc by ~1 ULP causing 9/1024 GELU FP16 mismatches; with objmode, 0/1024. (D-09 refined)
+- [x] **NJIT-04**: Vendor 84-op directory full sweep gate. `tests/gtx/test_regression_fw_full_sweep.py` parametrize over `vendor/gtx_cpp_reference/test/<OP>/n1s16/`; strict-mode `compare_hex(strict=True)` PASS for ops with both .elf + golden present, `pytest.skip` graceful otherwise. M passed + N skipped == 84. (D-10 refined)
+- [x] **NJIT-05**: Per-kernel ULP-0 parity test (Tier 1). `tests/gtx/test_njit_parity.py` — 28 kernels × NumPy vs JIT delta_ulp == 0 via `np.array_equal(out.view(np.uint16), out_njit.view(np.uint16))`. Transcendental kernels pass via objmode escape. (D-12)
+- [x] **NJIT-06**: Wall-clock 5× walltime acceptance (Tier 3). `tests/gtx/test_njit_perf.py` pytest-benchmark — full vendor 84-op sweep walltime ≤ 1/5 of P6 NumPy-only baseline. Baseline locked in `tests/gtx/data/baseline_walltime.txt`. (D-13)
+- [x] **NJIT-07**: Extras packaging. `pyproject.toml [project.optional-dependencies]` adds `fast = ["numba>=0.61.2,<0.66"]` (raised from CONTEXT D-05 `>=0.59` because 0.59 pins numpy<1.27 conflicting with our numpy>=2.0 floor). cibuildwheel `test-extras = ["fast"]` so CI verifies the JIT path on cp310-cp312. (D-03 + D-05 refined)
+- [x] **NJIT-08**: Documentation sync. REQUIREMENTS.md `Out of Scope` numba row reworded (this section); PROJECT.md "wheel size ≤50MB" clarified to "base wheel size ≤50MB"; ROADMAP.md Phase 7 section filled with goal/requirements/plans; README.md "Performance acceleration" section added. (D-04 + D-15)
 
 ## v2 Requirements
 
@@ -248,14 +248,14 @@ extras (`pip install spike[fast]`) are opt-in.
 | PKG-02 | Phase 1 | Complete |
 | PKG-03 | Phase 6 | Pending |
 | PKG-04 | Phase 6 | Pending |
-| NJIT-01 | Phase 7 | Pending |
-| NJIT-02 | Phase 7 | Pending |
-| NJIT-03 | Phase 7 | Pending |
-| NJIT-04 | Phase 7 | Pending |
-| NJIT-05 | Phase 7 | Pending |
-| NJIT-06 | Phase 7 | Pending |
-| NJIT-07 | Phase 7 | Pending |
-| NJIT-08 | Phase 7 | Pending |
+| NJIT-01 | Phase 7 | Complete |
+| NJIT-02 | Phase 7 | Complete |
+| NJIT-03 | Phase 7 | Complete |
+| NJIT-04 | Phase 7 | Complete |
+| NJIT-05 | Phase 7 | Complete |
+| NJIT-06 | Phase 7 | Complete |
+| NJIT-07 | Phase 7 | Complete |
+| NJIT-08 | Phase 7 | Complete |
 
 **Coverage:**
 - v1 requirements: 50 total
