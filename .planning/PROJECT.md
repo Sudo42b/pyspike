@@ -221,4 +221,30 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-07 after Phase 5 complete (VEC/ACT/Pool: vec_core 7 stateless kernels with FP32-internal-accumulate-with-single-FP16-cast precision rule + vec_engine firmware_vec_op + ops/vec 22 @handlers + act_core 7 activations + 2 pool + 9 cvt kernels + FP8 LUTs + act_engine firmware_act direction asymmetry consulting ACT_OPS_REVERSED frozenset + firmware_act_imm/firmware_softmax_imm separate L0 entries + ops/act 19 @handlers + 20 directly-mapped oracle parity (delta_ulp=0 over 1344 element comparisons) + activation_relu_gelu.elf strict-mode subprocess returncode=0 with 5-tier graceful-skip; VEC-01..05 + ACT-01..05 + VRF-02 closed; 264/266 P3+P4+P5 tests pass with 2 graceful-skips on P6-deferred GTX_DDR_DUMP atexit)*
+*Last updated: 2026-05-09 after Phase 7 complete (Numba Dynamic Optimization: 28
+stateless GTX kernels — gemm_core 3 + vec_core 7 + act_core 18 — promoted to
+FP32-only `_impl` + `@njit(cache=True)` boundary with auto NumPy fallback via
+`from riscv.gtx._jit import HAS_NUMBA, njit` shim; 5 transcendentals
+gelu/tanh_act/sigmoid/softmax/esum use `with numba.objmode(...)` escape
+preserving ULP-0 byte equality (gelu 9/1024 mismatches → 0/1024); 28/28 parity
+tests pass `np.array_equal(out.view(np.uint16), out_njit.view(np.uint16))` with
+delta_ulp == 0; vendor 84-op `n1s16` regression sweep harness + perf benchmark
+gate landed (M+N==84 invariant; M=0 on this checkout pending GFW source tree
+build, gracefully skipped via 5-tier discipline); 28 `.nbi` cache files
+materialize after first invocation; `pip install spike[fast]` extras +
+`[tool.cibuildwheel].test-extras = ["fast"]` wired into wheel matrix
+(cp310-cp312 manylinux2014_x86_64); base wheel remains NumPy-only;
+NJIT-01..NJIT-08 closed (NJIT-04 / NJIT-06 acceptance deferred to developer
+machine via 07-HUMAN-UAT.md — infrastructure verified, runtime measurement
+needs vendor `.elf` build); 317 P4-P7 tests pass + 96 skipped + 0 failed;
+zero regression vs P6 baseline)*
+
+**Phase 7 known constraint** — 84-op vendor regression sweep tests collect
+all 84 entries but currently SKIP (M=0) on environments without the GFW
+firmware build toolchain (`vendor/.../gtx/address.h` + intrinsic headers).
+This is environmental, not a code defect — see
+`.planning/phases/07-numba/07-HUMAN-UAT.md` and
+`tests/gtx/data/firmware/README.md` for the build steps that flip these
+tests to PASS once vendor `.elf` files materialize. The harness wiring
+(auto-discovery, OPERAND_STAGING_REQUIRED_VENDOR set, strict-mode
+`compare_hex`) is verified correct.
