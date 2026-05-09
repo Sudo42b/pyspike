@@ -27,6 +27,25 @@ Per PITFALLS Pitfall 2: every reduction MUST upcast FP16 -> FP32 for accumulatio
 then single FP16 cast at the end. Never accumulate in FP16.
 
 Phase 4 plan 02 Task 1.
+
+P7 NJIT-02 / NJIT-FP32-BOUNDARY (Plan 07-02):
+    The three explicit-loop kernels are factored into FP32-only `_impl` functions
+    wrapped by `@njit(cache=True)` (real numba when installed; passthrough no-op
+    when absent per `_jit.py`). The public functions retain the P4 FP16 in/out
+    signature exactly -- they pre-cast FP16 -> FP32 (numba CPU does NOT support
+    np.float16; raises NotImplementedError at compile time, see RESEARCH §"FP16
+    NotImplementedError"), call the JIT'd `_impl`, and post-cast FP32 -> FP16
+    (or to Python float for scalar reductions). Callers in `mm_engine.py` see
+    zero behavior change.
+
+    Why `_impl` takes positional args (no kwonly, no Optional):
+        - numba's lazy-typed dispatch does NOT support kwonly arguments.
+        - numba cannot lazily type Optional[ndarray]; bias_fp32 inside `_impl`
+          MUST always be a real FP32 ndarray. The public wrapper passes a zero
+          (M, N) sentinel when has_bias=False; the `_impl` `if has_bias` branch
+          skips the bias add. (Cold-compile time grows ~2x because lazy
+          dispatch produces one specialization per `has_bias` bool value;
+          deferred unification noted in 07-02-SUMMARY for v1.x/v2.)
 """
 from __future__ import annotations
 
@@ -34,6 +53,98 @@ from typing import Optional
 
 import numpy as np
 from numpy.typing import NDArray
+
+from ._jit import njit, HAS_NUMBA  # noqa: F401  (HAS_NUMBA re-exposed for callers)
+
+
+# ============================================================================
+# SECTION B -- FP32-only `_impl` functions (numba JIT boundary)
+# ============================================================================
+
+
+def _gemm_core_impl(
+    A_f32: NDArray[np.float32],
+    B_f32: NDArray[np.float32],
+    has_bias: bool,
+    bias_fp32: NDArray[np.float32],
+) -> NDArray[np.float32]:
+    """FP32-only 3-loop GEMM accumulate. Direct port of gtx_npu_mm.cc:73-79.
+
+    Numba @njit boundary: FP32 in / FP32 out, positional args only.
+    `bias_fp32` MUST be a real ndarray (zero-fill (M,N) when has_bias=False).
+    """
+    M, K = A_f32.shape
+    K2, N = B_f32.shape
+    if K != K2:
+        raise ValueError(
+            "shape mismatch: A is (M=" + str(M) + ", K=" + str(K) +
+            "), B is (K=" + str(K2) + ", N=" + str(N) + ")"
+        )
+
+    C_f32 = np.zeros((M, N), dtype=np.float32)
+    # Explicit 3-loop. Bit-exact match with gtx_npu_mm.cc:73-79.
+    for i in range(M):
+        for j in range(N):
+            s = np.float32(0.0)
+            for k in range(K):
+                s += A_f32[i, k] * B_f32[k, j]
+            C_f32[i, j] = s
+
+    if has_bias:
+        # Element-wise FP32 add (gtx_npu_mm.cc:84-91).
+        for i in range(M):
+            for j in range(N):
+                C_f32[i, j] = C_f32[i, j] + bias_fp32[i, j]
+
+    return C_f32
+
+
+def _gemm_reduce_sum_a_impl(
+    A_f32: NDArray[np.float32],
+    prior_accum: np.float32,
+) -> np.float32:
+    """FP32-only flat sum + prior. Direct port of gtx_npu_mm.cc:200-211.
+
+    Numba @njit boundary: FP32 in / FP32 out (np.float32 scalar).
+    Explicit Python loop over flat A_f32 (NO np.sum -- pairwise reordering).
+    """
+    flat = A_f32.ravel()
+    s = np.float32(0.0)
+    for k in range(flat.shape[0]):
+        s += flat[k]
+    return s + prior_accum
+
+
+def _gemm_dot_impl(
+    A_f32: NDArray[np.float32],
+    B_f32: NDArray[np.float32],
+    prior_accum: np.float32,
+) -> np.float32:
+    """FP32-only dot + prior. Direct port of gtx_npu_mm.cc:262-265.
+
+    Numba @njit boundary: FP32 in / FP32 out (np.float32 scalar).
+    Explicit Python loop over flat A_f32, B_f32 (assumes equal shape).
+    """
+    A_flat = A_f32.ravel()
+    B_flat = B_f32.ravel()
+    s = np.float32(0.0)
+    for k in range(A_flat.shape[0]):
+        s += A_flat[k] * B_flat[k]
+    return s + prior_accum
+
+
+# ============================================================================
+# SECTION C -- @njit(cache=True) wrappers (re-call pattern, CONTEXT D-11 Option B)
+# ============================================================================
+
+_gemm_core_njit = njit(cache=True)(_gemm_core_impl)
+_gemm_reduce_sum_a_njit = njit(cache=True)(_gemm_reduce_sum_a_impl)
+_gemm_dot_njit = njit(cache=True)(_gemm_dot_impl)
+
+
+# ============================================================================
+# SECTION D -- Public API (P4 signatures preserved verbatim; FP16 in/out)
+# ============================================================================
 
 
 def gemm_core(
@@ -62,25 +173,12 @@ def gemm_core(
     caller (mm_engine) selects the right kernel per variant. mxe_accum read/write
     is the caller's responsibility (D-06).
     """
-    A_f32 = A.astype(np.float32)
-    B_f32 = B.astype(np.float32)
-    M, K = A_f32.shape
-    K2, N = B_f32.shape
+    M, K = A.shape
+    K2, N = B.shape
     if K != K2:
         raise ValueError(
             f"shape mismatch: A is (M={M}, K={K}), B is (K={K2}, N={N})"
         )
-
-    C_f32 = np.zeros((M, N), dtype=np.float32)
-    # Explicit 3-loop. Bit-exact match with gtx_npu_mm.cc:73-79.
-    # P7 numba @njit accelerates this back to BLAS-equivalent throughput.
-    for i in range(M):
-        for j in range(N):
-            s = np.float32(0.0)
-            for k in range(K):
-                s += A_f32[i, k] * B_f32[k, j]
-            C_f32[i, j] = s
-
     if has_bias:
         if bias_fp32 is None:
             raise ValueError("has_bias=True requires bias_fp32 ndarray")
@@ -92,8 +190,13 @@ def gemm_core(
             raise TypeError(
                 f"bias_fp32 dtype must be float32, got {bias_fp32.dtype}"
             )
-        C_f32 += bias_fp32
+        bias_arg = np.ascontiguousarray(bias_fp32, dtype=np.float32)
+    else:
+        bias_arg = np.zeros((M, N), dtype=np.float32)
 
+    A_f32 = np.ascontiguousarray(A, dtype=np.float32)
+    B_f32 = np.ascontiguousarray(B, dtype=np.float32)
+    C_f32 = _gemm_core_njit(A_f32, B_f32, has_bias, bias_arg)
     return C_f32.astype(np.float16)
 
 
@@ -114,9 +217,9 @@ def gemm_reduce_sum_a(
     Returns:
         FP32 scalar (Python float) = sum(A_f32) + prior_accum
     """
-    A_f32 = A.astype(np.float32)
-    s = float(np.sum(A_f32, dtype=np.float32))
-    return s + float(prior_accum)
+    A_f32 = np.ascontiguousarray(A, dtype=np.float32)
+    s = _gemm_reduce_sum_a_njit(A_f32, np.float32(prior_accum))
+    return float(s)
 
 
 def gemm_dot(
@@ -142,9 +245,7 @@ def gemm_dot(
     """
     if A.shape != B.shape:
         raise ValueError(f"shape mismatch: A {A.shape} vs B {B.shape}")
-    A_f32 = A.astype(np.float32)
-    B_f32 = B.astype(np.float32)
-    s = np.float32(0.0)
-    for k in range(A_f32.shape[0]):
-        s += A_f32[k] * B_f32[k]
-    return float(s) + float(prior_accum)
+    A_f32 = np.ascontiguousarray(A, dtype=np.float32)
+    B_f32 = np.ascontiguousarray(B, dtype=np.float32)
+    s = _gemm_dot_njit(A_f32, B_f32, np.float32(prior_accum))
+    return float(s)
