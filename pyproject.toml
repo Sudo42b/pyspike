@@ -12,6 +12,10 @@ requires = [
 ]
 build-backend = "setuptools.build_meta"
 
+[tool.cibuildwheel]
+test-extras = ["fast"]
+test-command = "pytest {project}/tests/gtx -m 'not slow' -x --no-cov"
+
 [tool.cibuildwheel.linux]
 before-all = "yum install -y dtc && git submodule update --init --recursive"
 

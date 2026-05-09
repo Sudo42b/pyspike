@@ -177,6 +177,11 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   회귀가 한 세션 내(≤ 수십 분 수준) 끝나야 실용
 - **Dependencies**: NumPy 외부 추가 런타임 의존성 신규 도입 금지(wheel 배포 단순성).
   검증 단계에서만 기존 C++ libgtx_npu.so 참조(개발 환경)
+- **Wheel size policy**: base wheel size ≤50MB (NumPy-only baseline; PKG-04 / Phase 6
+  success criteria). Optional `[fast]` extras (`pip install spike[fast]`)는 numba +
+  llvmlite transitive size 무제한 허용 (P7 D-15; 약 50–80MB 추가). cibuildwheel
+  매트릭스는 base wheel만 검증; extras transitive는 사용자 opt-in이므로 size 제약
+  없음.
 - **Bit-exact**: ULP 허용오차 내(`verify.py --fp16 --ulp 1 --atol 0.001` 수준)
   C++ 결과와 일치 필수. 회귀 1개라도 깨지면 출하 보류
 - **Testing**: pytest 기반(이미 구축됨). 신규 op마다 verify_ref.py 대응 단위 테스트
