@@ -26,6 +26,7 @@ from .._registry import handler
 from .. import vec_engine
 from ..encoding import (
     GTX_F7_VEC_SASMD, GTX_F7_VEC_DOT_SUM, GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP,
+    GTX_F7_VEC_SIGN,
 )
 
 
@@ -175,4 +176,18 @@ def _exec_accum_v(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=3,
          mnemonic='arange_v', mask_funct3=True)
 def _exec_arange_v(npu, proc, insn, xs1, xs2):
+    return vec_engine.firmware_vec_op(npu, proc, insn)
+
+
+# =========================================================================
+# SIGN family funct7=0x1D (abs/neg/sign/step — sub_op packed in rs1 low bits)
+# vec_engine.py:283 SIGN dispatch already implemented; this @handler closes
+# the missing dispatch entry. Sub-ops: GTX_VEC_VABS=9, VEC_VNEG=10,
+# VEC_VSIGN=11, VEC_VSTEP=12 — disambiguated inside vec_engine via rs1.
+# (P5 Plan 02 omission surfaced by P6 abs.elf — separate from P6 work.)
+# =========================================================================
+@handler(kind='custom0', funct7=GTX_F7_VEC_SIGN, funct3=0,
+         mnemonic='sign_v', mask_funct3=True)
+def _exec_sign_family(npu, proc, insn, xs1, xs2):
+    """SIGN family entry — sub_op (abs/neg/sign/step) decoded from rs1 in vec_engine."""
     return vec_engine.firmware_vec_op(npu, proc, insn)
