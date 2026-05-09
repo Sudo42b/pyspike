@@ -134,6 +134,21 @@
 - [ ] **PKG-04**: cibuildwheel manylinux2014_x86_64 매트릭스 (**cp310–cp312**, D-08)
   통과 — `[tool.cibuildwheel].build`에서 cp38/cp39 라인 제거, wheel 빌드 깨짐 없음
 
+### Numba Optimization (Phase 7)
+
+Phase 7 layers optional numba JIT acceleration over the NumPy-only base wheel.
+All NJIT requirements are gated by P6 strict-mode regression green; the
+extras (`pip install spike[fast]`) are opt-in.
+
+- [ ] **NJIT-01**: Lazy `from numba import njit` + auto NumPy fallback (`HAS_NUMBA` gate). `pip install spike` (base) → NumPy-only operation; `pip install spike[fast]` → numba acceleration. Both paths must pass full P6 strict-mode regression. (D-02)
+- [ ] **NJIT-02**: 28 stateless kernels (`gemm_core` 3 + `vec_core` 7 + `act_core` 18) decorated with `@njit(cache=True)` via `_jit.py` shim with FP32-only `_impl` signatures (numba CPU does not support np.float16). Engine layer (mm/vec/act_engine) untouched. (D-06 + NJIT-FP32-BOUNDARY)
+- [ ] **NJIT-03**: `fastmath=False` (numba default) + `with numba.objmode(...)` escape for 5 transcendental kernels (gelu, tanh_act, sigmoid, softmax, esum). Without objmode, LLVM `tanhf`/`expf` differ from glibc by ~1 ULP causing 9/1024 GELU FP16 mismatches; with objmode, 0/1024. (D-09 refined)
+- [ ] **NJIT-04**: Vendor 84-op directory full sweep gate. `tests/gtx/test_regression_fw_full_sweep.py` parametrize over `vendor/gtx_cpp_reference/test/<OP>/n1s16/`; strict-mode `compare_hex(strict=True)` PASS for ops with both .elf + golden present, `pytest.skip` graceful otherwise. M passed + N skipped == 84. (D-10 refined)
+- [ ] **NJIT-05**: Per-kernel ULP-0 parity test (Tier 1). `tests/gtx/test_njit_parity.py` — 28 kernels × NumPy vs JIT delta_ulp == 0 via `np.array_equal(out.view(np.uint16), out_njit.view(np.uint16))`. Transcendental kernels pass via objmode escape. (D-12)
+- [ ] **NJIT-06**: Wall-clock 5× walltime acceptance (Tier 3). `tests/gtx/test_njit_perf.py` pytest-benchmark — full vendor 84-op sweep walltime ≤ 1/5 of P6 NumPy-only baseline. Baseline locked in `tests/gtx/data/baseline_walltime.txt`. (D-13)
+- [ ] **NJIT-07**: Extras packaging. `pyproject.toml [project.optional-dependencies]` adds `fast = ["numba>=0.61.2,<0.66"]` (raised from CONTEXT D-05 `>=0.59` because 0.59 pins numpy<1.27 conflicting with our numpy>=2.0 floor). cibuildwheel `test-extras = ["fast"]` so CI verifies the JIT path on cp310-cp312. (D-03 + D-05 refined)
+- [ ] **NJIT-08**: Documentation sync. REQUIREMENTS.md `Out of Scope` numba row reworded (this section); PROJECT.md "wheel size ≤50MB" clarified to "base wheel size ≤50MB"; ROADMAP.md Phase 7 section filled with goal/requirements/plans; README.md "Performance acceleration" section added. (D-04 + D-15)
+
 ## v2 Requirements
 
 향후 마일스톤. 현재 로드맵에 미포함.
@@ -180,7 +195,8 @@
 | non-Linux / non-x86_64 플랫폼 | pyspike 자체가 manylinux2014_x86_64 베이스. Windows/macOS/aarch64 v1 비대상 |
 | C++ libgtx_npu.so를 wheel에 동봉 | Python 재작성이 일차 산출물. C++ 바이너리는 `vendor/gtx_cpp_reference/` 소스 스냅샷만 (개발 시 검증용) |
 | 온라인 shadow run vs C++ libgtx_npu.so | 검증은 오프라인 golden hex diff로만 수행 — wheel 의존성 단순성 우선 |
-| numba / cython / JAX / torch / scipy | NumPy 단독으로 회귀 시간 예산 충족. 추가 시 wheel 빌드 복잡도/사이즈 폭증 |
+| numba (hard dep, CUDA path) | numba는 v1 hard dependency 제외 (Phase 7의 optional `spike[fast]` extras 통한 lazy 가속은 허용). |
+| cython / JAX / torch / scipy | v1 전 영역에서 hard 또는 optional dep 모두 제외. 추가 시 wheel 빌드 복잡도/사이즈 폭증 |
 | `match` statement (PEP 634) — 사용 검토 가능 | ~~PROJECT.md 호환 베이스라인 3.8~~ → Phase 1 D-08로 cp310+ 베이스라인 됨, `match` 사용 가능. 그러나 dict-of-handlers가 이미 디스패치 표준 — 일관성 유지를 위해 신규 코드도 dict-of-handlers 사용 권장 |
 | GELU_ERF (scipy.special.erf 의존) | scipy 의존성 회피. 회귀가 요구하면 NumPy 시리즈 근사로 대체 |
 
@@ -232,10 +248,18 @@
 | PKG-02 | Phase 1 | Complete |
 | PKG-03 | Phase 6 | Pending |
 | PKG-04 | Phase 6 | Pending |
+| NJIT-01 | Phase 7 | Pending |
+| NJIT-02 | Phase 7 | Pending |
+| NJIT-03 | Phase 7 | Pending |
+| NJIT-04 | Phase 7 | Pending |
+| NJIT-05 | Phase 7 | Pending |
+| NJIT-06 | Phase 7 | Pending |
+| NJIT-07 | Phase 7 | Pending |
+| NJIT-08 | Phase 7 | Pending |
 
 **Coverage:**
-- v1 requirements: 42 total
-- Mapped to phases: 42 ✓
+- v1 requirements: 50 total
+- Mapped to phases: 50 ✓
 - Unmapped: 0 ✓ (100% coverage)
 
 **Phase distribution:**
@@ -245,6 +269,7 @@
 - Phase 4 (MM Subsystem): 5 (MM-01..05)
 - Phase 5 (VEC/ACT/Pool): 11 (VEC-01..05, ACT-01..05, VRF-02)
 - Phase 6 (Verification & Wheel): 6 (VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04)
+- Phase 7 (Numba Optimization): 8 (NJIT-01..NJIT-08)
 
 ---
 *Requirements defined: 2026-05-04*
