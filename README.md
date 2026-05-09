@@ -14,7 +14,7 @@ PyPI package: [`spike`](https://pypi.org/project/spike/)
 
 ## Getting Started
 
-PySpike requires: Python 3.8+.
+PySpike requires: Python 3.10+ (cp310 / cp311 / cp312 wheels published).
 
 Install the wheel package with `pip`.
 
@@ -146,20 +146,22 @@ Run the built-in test suite with `pytest`.
 
 ### Running Tests with Coverage
 
-To enable coverage report, rebuild the extension module with `--cov` option, then re-run the test suite also with `--cov` option. You should see the coverage report by the end of the test output.
-
-Note, if leaving out the first step, the C++ code will *not* show up in the coverage report.
+Run the test suite with `--cov` to produce a Python-side coverage report
+(written to `coverage.lcov` per `pyproject.toml`).
 
 ```shell
-(.venv) $ python setup.py build_ext --inplace --cov
 (.venv) $ python -m pytest -v --cov
 ```
 
-Optionally, you can generate HTML coverage report from the `lcov` data files.
+Optionally, generate an HTML report from the lcov data file:
 
 ```shell
-(.venv) $ genhtml -o coverage --substitute "s#^#$PWD/#g" *.lcov
+(.venv) $ genhtml -o coverage --substitute "s#^#$PWD/#g" coverage.lcov
 ```
+
+> **C++ coverage:** the legacy `python setup.py build_ext --inplace --cov`
+> path was retired alongside `setup.py`. C++ instrumentation needs to be
+> threaded through the pyproject build hooks — TODO.
 
 ### Packaging
 
