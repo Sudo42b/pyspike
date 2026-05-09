@@ -236,8 +236,8 @@ golden)와 ULP 허용오차 내로 일치한다.
   4. `pip install spike` (base) AND `pip install spike[fast]` BOTH produce a working `from riscv.gtx import GtxNpu` and pass full P6 regression sweep (NumPy fallback path equally bit-exact).
   5. `[tool.cibuildwheel] test-extras = ["fast"]` exists in pyproject.toml; cibuildwheel matrix builds green for cp310-cp312 with numba installed in test env.
 
-**Plans:** 6 plans (Wave 0 scaffold + 3 parallel Wave 1a kernel rewrites + Wave 1b sweep/perf integration + Wave 2 doc sync)
-- [ ] 07-numba/07-01-PLAN.md — Wave 0 scaffold: `_jit.py` shim + pyproject.toml extras + RED test scaffolds + 84-op sweep skeleton (NJIT-01 + NJIT-07 partial)
+**Plans:** 1/6 plans executed
+- [x] 07-numba/07-01-PLAN.md — Wave 0 scaffold: `_jit.py` shim + pyproject.toml extras + RED test scaffolds + 84-op sweep skeleton (NJIT-01 + NJIT-07 partial)
 - [ ] 07-numba/07-02-PLAN.md — Wave 1a gemm_core.py FP32-only `_impl` + 3 parity tests GREEN (NJIT-02 gemm + NJIT-05 gemm)
 - [ ] 07-numba/07-03-PLAN.md — Wave 1a vec_core.py FP32-only `_impl` + 7 parity tests GREEN (NJIT-02 vec + NJIT-05 vec)
 - [ ] 07-numba/07-04-PLAN.md — Wave 1a act_core.py FP32-only `_impl` + 5 transcendentals via objmode + 18 parity tests GREEN (NJIT-02 act + NJIT-03 + NJIT-05 act)

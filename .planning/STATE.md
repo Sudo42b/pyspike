@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 4
+current_plan: 2
 status: executing
-last_updated: "2026-05-07T13:57:25.956Z"
+last_updated: "2026-05-09T06:19:23.396Z"
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 32
-  completed_plans: 32
-  percent: 100
+  total_plans: 38
+  completed_plans: 33
+  percent: 87
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -25,7 +25,7 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 06 — verification-wheel
+**Current Focus:** Phase 07 — numba
 
 **Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
@@ -33,15 +33,15 @@ golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어
 
 ## Current Position
 
-Phase: 06 (verification-wheel) — EXECUTING
-Plan: 4 of 5
-Current Plan: 4
-Total Plans in Phase: 5
+Phase: 07 (numba) — EXECUTING
+Plan: 2 of 6
+Current Plan: 2
+Total Plans in Phase: 6
 
 - **Phase:** 06
 - **Plan:** 0 of 5 (CONTEXT.md committed; PLAN.md TBD)
 - **Status:** Ready to execute
-- **Progress:** [██████████] 100%
+- **Progress:** [█████████░] 87%
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ Total Plans in Phase: 5
 | Phase 06-verification-wheel P03 | 11min | 4 tasks | 30 files |
 | Phase 06-verification-wheel P04 | 9min | 1 tasks | 2 files |
 | Phase 06-verification-wheel P05 | 4min | 2 tasks | 4 files |
+| Phase 07-numba P01 | 8m48s | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -198,6 +199,16 @@ Total Plans in Phase: 5
 2. **Explicit Python 3-loop FP32 oracle in test_mm_addrc_chain_continuity (NOT np.matmul).** Mirrors Plan 02 gemm_core's accumulate ordering exactly. `np.matmul` BLAS drift (4 ULP / 41 of 500 trials) would cause spurious failures.
 3. **L0 BE byte assertion in test_mxe_accum_chain_continuity (Warning 5 from checker iter-1).** After verifying `_mxe_accum[1, 5] == 36.0`, also assert `l0[0] == 0x50` and `l0[1] == 0x80` (BE bytes of FP16(36.0) = 0x5080). Catches a hypothetical bug where the accumulator math is correct but the L0 dump path (gtx_npu_mm.cc:217-218 BE encoding -- asymmetric with MM_V's LE) is wrong.
 4. **test_mm_basic_strict_mode_pass dump-skip is the documented expected outcome for current build.** Subprocess clean-exits (returncode == 0) -- proves SPR -> dispatch -> compute -> writeback plumbing works end-to-end. The dump compare gracefully skips because `ddr_dump_to_file` is env-var-free per P3 D-09 lock; atexit hook is P6 territory (CONTEXT D-12). The strict compare logic IS wired and tested at the API level (Plan 01 verified self-compare returns PASS); only the subprocess auto-flush trigger is missing.
+
+### Phase 7 Plan 01 Decisions (locked during execution)
+
+1. **Lazy njit shim is a single file at `riscv.gtx._jit`** (not per-core `HAS_NUMBA` checks). Mirrors P3 `_RISCV_AVAILABLE` central-detection pattern. Shim handles both `@njit` (bare) and `@njit(cache=True)` (parenthesized) call patterns by inspecting `args[0]` callability before kwargs — single function definition; the call dispatches at decoration time, not at call time, so the runtime cost is zero.
+2. **`numba>=0.61.2,<0.66` (NOT plan-CONTEXT initial `>=0.59`)** — RESEARCH lock-in: numba 0.59 pins `numpy<1.27` which conflicts with our `numpy>=2.0` floor (Phase 1 D-07). 0.61.2 is the lowest version with numpy 2.x support; `<0.66` future-proofs against major API breaks; latest 0.65.x supports `numpy<2.5`. Single line added to `[project.optional-dependencies] fast`; CI test-extras integration deferred to Plan 06 per NJIT-07.
+3. **`_njit_helpers.py` lazy importlib at call-site, not module-top** — Wave 0 collection MUST succeed before Plans 02-04 land `_impl` aliases. Module-top `from riscv.gtx.gemm_core import _gemm_core_impl` would AttributeError at import. Pattern: registry table holds `(name, module_path, public_fn, impl_fn)` strings; `get_public_fn`/`get_impl_fn` resolve via `importlib.import_module + getattr` on demand. Test parametrize uses kernel-name strings (collection-time) so name list exists before targets do.
+4. **`VENDOR_OPS_84` inlined as literal list + filesystem cross-validation at every load** — eliminates "list-vs-filesystem drifted" silent failures. `_discover_vendor_ops()` walks `vendor/gtx_cpp_reference/test/` and is callable from tests/scripts (sweep test calls it directly; script test asserts `sorted(VENDOR_OPS_84) == _discover_vendor_ops()`). If vendor submodule pointer ever updates and adds/removes a directory, the assertion catches it on first import.
+5. **`test_has_numba_detection` is the only ACTIVE test in Wave 0 parity scaffold** — the other 28 are `pytest.skip`. Active sentinel guards the most important contract (HAS_NUMBA reflects environment) at zero cost (no compilation, no FP work). Plans 02-04 will replace the 28 skip bodies with real ULP-0 parity assertions.
+6. **`importorskip("pytest_benchmark")` at module-top of perf scaffold** — entire file skips when dev extras absent, keeping CI matrices clean. Per-test `@pytest.mark.skipif` would still collect tests and reduce signal in `--collect-only` runs.
+7. **Plan acceptance criterion `njit(cache=True)(lambda x: x*2)` documented as unsatisfiable when numba is installed** (Rule 1 deviation, no source change). numba's disk cache requires a real source-file locator; lambdas + `python -c` source location `<string>` both fail it. Verified shim with a real `def double(x)` in tempfile — both `@njit(cache=True)` and bare `@njit` work. Shim correct as-shipped per RESEARCH §"Pattern 1".
 
 ### Phase 4 Plan 04 Decisions (locked during execution)
 
