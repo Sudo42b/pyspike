@@ -221,15 +221,29 @@ golden)와 ULP 허용오차 내로 일치한다.
 | 6. Verification & Wheel | VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04 | 6 |
 | **Total** | | **42 / 42** |
 
-### Phase 7: 제대로 동작을 하면, numba등의 라이브러리를 통해 동적 최적화 기술을 이용하여 최적화 해줘.
+### Phase 7: Numba Dynamic Optimization
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 6
-**Plans:** 0 plans
+**Goal**: 28 stateless GTX NPU kernels (`gemm_core` 3 + `vec_core` 7 + `act_core` 18) accelerate via optional numba `@njit(cache=True)` lazy import with auto NumPy fallback; vendor 84-op `n1s16` regression sweep passes strict-mode (M passed + N skipped == 84); wall-clock walltime is at least 5x faster than P6 NumPy-only baseline; base wheel remains NumPy-only with `pip install spike[fast]` opt-in extras.
 
-Plans:
-- [ ] TBD (run /gsd:plan-phase 7 to break down)
+**Depends on**: Phase 6 (P6 strict-mode regression green is hard prerequisite)
+
+**Requirements**: NJIT-01, NJIT-02, NJIT-03, NJIT-04, NJIT-05, NJIT-06, NJIT-07, NJIT-08
+
+**Success Criteria** (what must be TRUE):
+  1. `pytest tests/gtx/test_njit_parity.py -v --no-cov` reports 28/28 kernels PASS with `np.array_equal(out.view(np.uint16), out_njit.view(np.uint16))` (delta_ulp == 0 across all 28).
+  2. `pytest tests/gtx/test_regression_fw_full_sweep.py -v --no-cov` reports M passed + N skipped where M+N == 84 (full vendor `n1s16` directory accounted for; M >= 12 with bundled .elf, M >= 60 with `/opt/riscv/` toolchain present).
+  3. `pytest tests/gtx/test_njit_perf.py --benchmark-only --benchmark-warmup=on --benchmark-warmup-iterations=3` PASSes the 5x walltime assertion (`benchmark.stats['mean'] * 5 <= baseline_walltime`).
+  4. `pip install spike` (base) AND `pip install spike[fast]` BOTH produce a working `from riscv.gtx import GtxNpu` and pass full P6 regression sweep (NumPy fallback path equally bit-exact).
+  5. `[tool.cibuildwheel] test-extras = ["fast"]` exists in pyproject.toml; cibuildwheel matrix builds green for cp310-cp312 with numba installed in test env.
+
+**Plans:** 6 plans (Wave 0 scaffold + 3 parallel Wave 1a kernel rewrites + Wave 1b sweep/perf integration + Wave 2 doc sync)
+- [ ] 07-numba/07-01-PLAN.md — Wave 0 scaffold: `_jit.py` shim + pyproject.toml extras + RED test scaffolds + 84-op sweep skeleton (NJIT-01 + NJIT-07 partial)
+- [ ] 07-numba/07-02-PLAN.md — Wave 1a gemm_core.py FP32-only `_impl` + 3 parity tests GREEN (NJIT-02 gemm + NJIT-05 gemm)
+- [ ] 07-numba/07-03-PLAN.md — Wave 1a vec_core.py FP32-only `_impl` + 7 parity tests GREEN (NJIT-02 vec + NJIT-05 vec)
+- [ ] 07-numba/07-04-PLAN.md — Wave 1a act_core.py FP32-only `_impl` + 5 transcendentals via objmode + 18 parity tests GREEN (NJIT-02 act + NJIT-03 + NJIT-05 act)
+- [ ] 07-numba/07-05-PLAN.md — Wave 1b vendor 84-op golden import + 72 .elf builds + sweep + perf benchmark (NJIT-04 + NJIT-06)
+- [ ] 07-numba/07-06-PLAN.md — Wave 2 doc + CI sync (REQUIREMENTS / PROJECT / ROADMAP / README + cibuildwheel test-extras) (NJIT-08 + NJIT-07 CI)
+**UI hint**: no
 
 ---
 
