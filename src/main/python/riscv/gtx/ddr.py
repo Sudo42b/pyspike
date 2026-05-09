@@ -169,6 +169,29 @@ def ddr_dump_to_file(mem: "GtxMemory", filename: str,
             f.write(chunk.hex() + "\n")
 
 
+def _init_ddr_from_env(npu) -> None:
+    """vendor gtx_npu_core.cc:120 1:1 port — GTX_DDR_INIT pre-stage.
+
+    Symmetric pair to ``_atexit_ddr_dump()``: input pre-stage at NPU construction
+    time. Vendor calls this from ``gtx_npu_t`` constructor right before
+    registering the atexit dump hook; we mirror that order in ``GtxNpu.__init__``.
+
+    No-op (early return) when:
+      - GTX_DDR_INIT env var unset
+      - referenced file does not exist (defensive — vendor crashes silently)
+
+    SAFETY: errors propagate (unlike _atexit_ddr_dump) since this fires during
+    NPU construction, not at interpreter shutdown — failures should surface
+    immediately so the operator sees them.
+    """
+    init_path = os.environ.get('GTX_DDR_INIT')
+    if not init_path:
+        return
+    if not os.path.exists(init_path):
+        return
+    ddr_init_from_file(npu.mem, init_path)
+
+
 def _atexit_ddr_dump() -> None:
     """atexit handler: vendor gtx_npu_core.cc:61-73 1:1 port (D-05).
 

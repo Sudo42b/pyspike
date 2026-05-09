@@ -69,6 +69,13 @@ class GtxNpu(isa.ROCC):
         # Dispatch tables (plan 02-03 fill _registry.HANDLERS)
         self._custom0 = build_custom0_table(self)
         self._custom1 = build_custom1_table(self)
+        # P6 follow-up (vendor gtx_npu_core.cc:120): GTX_DDR_INIT pre-stage —
+        # symmetric pair to atexit dump. Must run BEFORE _LAST_NPU registration
+        # so atexit hook never sees a half-initialized DDR. P5 Plan 02 added
+        # only the dump half; the init half was missing until this commit.
+        from .ddr import _init_ddr_from_env
+        _init_ddr_from_env(self)
+
         # P6 D-04/D-05: register self as the latest GtxNpu (vendor gtx_npu_core.cc:59
         # `g_gtx_instance = this;` direct port). Last-instance-wins. Single-hart
         # invariant; tests use subprocess isolation for per-instance lookup.
