@@ -30,6 +30,13 @@ from ._njit_helpers import (
 # Plan 02 GREEN: 3 gemm kernels
 GEMM_KERNELS = {"gemm_core", "gemm_reduce_sum_a", "gemm_dot"}
 
+# Plan 03 GREEN: 7 vec kernels
+VEC_KERNELS = {
+    "sasmd_kernel", "dot_kernel", "vsum_kernel",
+    "clamp_min_kernel", "clamp_max_kernel",
+    "accum_kernel", "arange_kernel",
+}
+
 
 def _generate_gemm_inputs(kernel_name: str, seed: int = 42):
     """Fixed-seed FP16 inputs for gemm parity. 16x16 matrices / length-16 vectors."""
@@ -107,13 +114,125 @@ def _run_gemm_parity(kernel_name: str) -> None:
         )
 
 
+def _generate_vec_inputs(kernel_name: str, seed: int = 42):
+    """Fixed-seed FP16 inputs for vec parity. Length-16 vectors / scalars.
+
+    W3 coverage note: SASMD Tier-1 covers the array-b path only. The
+    scalar-b broadcast path (used by IS variants in vec_engine) is
+    exercised by Tier 2 vendor sweep in Plan 07-05; documented in
+    07-03-SUMMARY.md.
+    """
+    rng = np.random.default_rng((seed + hash(kernel_name)) & 0xFFFFFFFF)
+    if kernel_name == "sasmd_kernel":
+        from riscv.gtx.encoding import GTX_VEC_ADD
+        a = rng.random(16, dtype=np.float32).astype(np.float16)
+        b = rng.random(16, dtype=np.float32).astype(np.float16)
+        return ("sasmd", a, b, GTX_VEC_ADD)
+    if kernel_name == "dot_kernel":
+        a = rng.random(16, dtype=np.float32).astype(np.float16)
+        b = rng.random(16, dtype=np.float32).astype(np.float16)
+        return ("dot", a, b)
+    if kernel_name == "vsum_kernel":
+        view = rng.random(16, dtype=np.float32).astype(np.float16)
+        return ("vsum", view)
+    if kernel_name in {"clamp_min_kernel", "clamp_max_kernel"}:
+        # range [-2, 2] so the scalar=0.5 actually clips on both sides
+        a = (rng.random(16, dtype=np.float32) * 4 - 2).astype(np.float16)
+        scalar = np.float16(0.5)
+        return ("clamp", a, scalar)
+    if kernel_name == "accum_kernel":
+        # small-magnitude inputs keep the FP32 cumulative accumulator inside
+        # FP16 representable range so the per-step FP16 cast is bit-exact.
+        a = (rng.random(16, dtype=np.float32) * 0.1).astype(np.float16)
+        return ("accum", a)
+    if kernel_name == "arange_kernel":
+        return ("arange", 16, np.float16(1.0), np.float16(0.5))
+    raise KeyError(kernel_name)
+
+
+def _run_vec_parity(kernel_name: str) -> None:
+    """ULP-0 parity for one vec kernel (numpy oracle vs njit-compiled _impl)."""
+    from riscv.gtx.vec_core import (
+        _sasmd_njit, _dot_njit, _vsum_njit,
+        _clamp_min_njit, _clamp_max_njit,
+        _accum_njit, _arange_njit,
+    )
+
+    inputs = _generate_vec_inputs(kernel_name)
+    kind = inputs[0]
+
+    if kind == "sasmd":
+        _, a, b, op = inputs
+        numpy_out = get_public_fn(kernel_name)(a, b, op)  # FP16 array
+        a_f32 = np.ascontiguousarray(a, dtype=np.float32)
+        b_f32 = np.ascontiguousarray(b, dtype=np.float32)  # array, no broadcast
+        njit_out = _sasmd_njit(a_f32, b_f32, int(op)).astype(np.float16)
+        assert np.array_equal(
+            numpy_out.view(np.uint16), njit_out.view(np.uint16)
+        ), f"{kernel_name}: ULP-0 parity failed (sasmd)"
+
+    elif kind == "dot":
+        _, a, b = inputs
+        numpy_out = get_public_fn(kernel_name)(a, b)  # np.float16 scalar
+        a_f32 = np.ascontiguousarray(a.ravel(), dtype=np.float32)
+        b_f32 = np.ascontiguousarray(b.ravel(), dtype=np.float32)
+        njit_scalar = np.float16(_dot_njit(a_f32, b_f32))
+        assert np.array_equal(
+            np.array([numpy_out]).view(np.uint16),
+            np.array([njit_scalar]).view(np.uint16),
+        ), f"{kernel_name}: ULP-0 parity failed (dot); numpy={numpy_out}, njit={njit_scalar}"
+
+    elif kind == "vsum":
+        _, view = inputs
+        numpy_out = get_public_fn(kernel_name)(view)
+        f32 = np.ascontiguousarray(view.ravel(), dtype=np.float32)
+        njit_scalar = np.float16(_vsum_njit(f32))
+        assert np.array_equal(
+            np.array([numpy_out]).view(np.uint16),
+            np.array([njit_scalar]).view(np.uint16),
+        ), f"{kernel_name}: ULP-0 parity failed (vsum); numpy={numpy_out}, njit={njit_scalar}"
+
+    elif kind == "clamp":
+        _, a, scalar = inputs
+        numpy_out = get_public_fn(kernel_name)(a, scalar)
+        a_f32 = np.ascontiguousarray(a, dtype=np.float32)
+        scalar_f32 = np.float32(scalar)
+        njit_call = _clamp_min_njit if kernel_name == "clamp_min_kernel" else _clamp_max_njit
+        njit_out = njit_call(a_f32, scalar_f32).astype(np.float16)
+        assert np.array_equal(
+            numpy_out.view(np.uint16), njit_out.view(np.uint16)
+        ), f"{kernel_name}: ULP-0 parity failed (clamp)"
+
+    elif kind == "accum":
+        _, a = inputs
+        numpy_out = get_public_fn(kernel_name)(a)
+        a_f32 = np.ascontiguousarray(a, dtype=np.float32)
+        njit_out = _accum_njit(a_f32).astype(np.float16)
+        assert np.array_equal(
+            numpy_out.view(np.uint16), njit_out.view(np.uint16)
+        ), f"{kernel_name}: ULP-0 parity failed (accum)"
+
+    elif kind == "arange":
+        _, n, start, step = inputs
+        numpy_out = get_public_fn(kernel_name)(n, start, step)
+        njit_out = _arange_njit(int(n), np.float32(start), np.float32(step)).astype(np.float16)
+        assert np.array_equal(
+            numpy_out.view(np.uint16), njit_out.view(np.uint16)
+        ), f"{kernel_name}: ULP-0 parity failed (arange)"
+
+    else:
+        raise AssertionError(f"unhandled kind {kind} for {kernel_name}")
+
+
 @pytest.mark.parametrize("kernel_name", ALL_NJIT_KERNEL_NAMES)
 def test_kernel_parity(kernel_name: str) -> None:
     """ULP-0 parity: NumPy public API vs JIT-compiled _impl."""
     if kernel_name in GEMM_KERNELS:
         _run_gemm_parity(kernel_name)
+    elif kernel_name in VEC_KERNELS:
+        _run_vec_parity(kernel_name)
     else:
-        pytest.skip(f"Plan 03/04 GREEN-fills parity body for {kernel_name}")
+        pytest.skip(f"Plan 04 GREEN-fills parity body for {kernel_name}")
 
 
 def test_has_numba_detection(_numba_available: bool) -> None:
