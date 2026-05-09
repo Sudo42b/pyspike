@@ -40,6 +40,43 @@ VENDOR_TO_PYSPIKE_OPS: dict = {
     "LEAKY_RELU": ("n1s16_leaky_relu", "leaky_relu", 1),
 }
 
+# P7 NJIT-04: full 84-op vendor directory list (W2 fix: complete list inlined,
+# no ellipsis). Auto-discovery via `_discover_vendor_ops()` cross-validates.
+VENDOR_OPS_84: list = [
+    "ABS", "ACC", "ADD", "ADD1",
+    "ADD_ID", "ADD_REL_POS", "ARANGE", "CLAMP",
+    "CONCAT", "CONV_2D", "CONV_TRANSPOSE_1D", "CONV_TRANSPOSE_2D",
+    "COS", "CPY", "CUMSUM", "DIAG",
+    "DIAG_MASK_INF", "DIAG_MASK_ZERO", "DIV", "DUP",
+    "ELU", "EXP", "EXPM1", "FILL",
+    "FLOOR", "GATED_LINEAR_ATTN", "GEGLU", "GEGLU_ERF",
+    "GEGLU_QUICK", "GELU", "GELU_ERF", "GELU_QUICK",
+    "GET_REL_POS", "GET_ROWS", "GROUP_NORM", "HARDSIGMOID",
+    "HARDSWISH", "IM2COL", "IM2COL_3D", "L2_NORM",
+    "LEAKY_RELU", "LOG", "MEAN", "MUL",
+    "MUL_MAT", "MUL_MAT_ID", "NEG", "NORM",
+    "OUT_PROD", "PAD", "PAD_REFLECT_1D", "POOL_1D",
+    "POOL_2D", "REGLU", "RELU", "REPEAT",
+    "RMS_NORM", "ROLL", "ROPE", "ROUND",
+    "RWKV_WKV6", "RWKV_WKV7", "SCALE", "SET",
+    "SET_ROWS", "SGN", "SIGMOID", "SILU",
+    "SIN", "SOFTPLUS", "SOFT_MAX", "SOLVE_TRI",
+    "SQR", "STEP", "SUB", "SUM",
+    "SWIGLU_OAI", "TANH", "TIMESTEP_EMBEDDING", "TRI",
+    "TRUNC", "WIN_PART", "WIN_UNPART", "XIELU",
+]
+assert len(VENDOR_OPS_84) == 84, (
+    "P7 NJIT-04: VENDOR_OPS_84 must have 84 entries, got " + str(len(VENDOR_OPS_84))
+)
+
+
+def _discover_vendor_ops() -> list:
+    """Auto-discover all 84 op directories at runtime (verify VENDOR_OPS_84)."""
+    return sorted(
+        p.name for p in VENDOR_TEST.iterdir()
+        if p.is_dir() and p.name != "__pycache__" and p.name[:1].isupper()
+    )
+
 
 def convert_one(vendor_dir: str, kernel_prefix: str, op_name: str,
                 n_lines: int, dry_run: bool = False):
@@ -96,7 +133,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify', action='store_true',
                         help='Dry-run: list mappings without writing files')
+    parser.add_argument('--all', action='store_true',
+                        help='P7 NJIT-04: import all 84 vendor ops (Plan 05 GREEN-fills)')
     args = parser.parse_args(argv)
+
+    if args.all:
+        # Plan 05 GREEN-fills the 84-op converter logic. Wave 0 stub:
+        raise NotImplementedError(
+            "P7 NJIT-04: 84-op vendor import is Plan 05 territory. "
+            "Wave 0 scaffold only exposes VENDOR_OPS_84 constant + --all flag."
+        )
 
     ok_count = 0
     skip_count = 0
