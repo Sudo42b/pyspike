@@ -403,5 +403,115 @@ None — `gsd-tools todo match-phase 7`은 매칭 0건.
 
 ---
 
+## Research Refinements (2026-05-09 — supersedes prior estimates in D-05/D-06/D-09/D-10)
+
+`07-RESEARCH.md`이 4개 항목에서 CONTEXT 추정치를 정확값으로 보정하고 새 제약 1개를 surface함. 사용자 확인 후 lock-in:
+
+### D-05 refined: numba 버전 floor 상향
+
+- 변경 전: `numba>=0.59`
+- **변경 후: `numba>=0.61.2,<0.66`**
+- **이유:** numba 0.59는 `numpy<1.27` pin → 우리 `numpy>=2.0,<3` (P1 D-07)과 직접 충돌. numba 0.61.2부터 numpy 2.x 정식 지원. 상한 `<0.66`은 향후 major API 변경 회귀 차단.
+- **반영 위치:** `pyproject.toml [project.optional-dependencies] fast = ["numba>=0.61.2,<0.66"]`.
+
+### D-06 refined: JIT 적용 커널 수 25 → **28** + FP32-only 시그니처 제약
+
+- 변경 전: "약 25 kernel"
+- **변경 후: 정확 28 kernel** (gemm 3 + vec 7 + act 7활성화 + 2 pool + **9 cvt** = 28; CONTEXT는 cvt를 7로 잘못 추정).
+- **신규 제약 (NJIT-FP32-BOUNDARY):** numba CPU 타깃은 **`np.float16`을 지원하지 않음** (실증 확인: `NotImplementedError: float16` 컴파일 시점 raise). 따라서 28 JIT 커널은 모두 **FP32-only 시그니처** (FP32 in / FP32-or-int out). FP16 ↔ FP32 cast는 **호출자 측 wrapper에서 수행**.
+  - 패턴 (plan-stage 정확화):
+    ```python
+    # gemm_core.py
+    @njit(cache=True)
+    def _gemm_core_impl(A_f32, B_f32):  # FP32 in
+        ...
+        return C_f32  # FP32 out
+
+    def gemm_core_numpy(A_f16, B_f16, ...):
+        # 원본 (P4 lineage)
+        ...
+        return C_f16
+
+    if HAS_NUMBA:
+        def gemm_core(A_f16, B_f16, has_bias=False, bias_fp32=None):
+            A_f32 = A_f16.astype(np.float32)
+            B_f32 = B_f16.astype(np.float32)
+            C_f32 = _gemm_core_impl(A_f32, B_f32)
+            if has_bias: C_f32 += bias_fp32
+            return C_f32.astype(np.float16)
+    else:
+        gemm_core = gemm_core_numpy
+    ```
+  - **public API 보존:** 모든 stateless core 함수의 외부 시그니처(`gemm_core(A: FP16, B: FP16) -> FP16` 등)는 유지. JIT는 내부 `_*_impl(FP32 in/out)`에 한정.
+  - **mm_engine/vec_engine/act_engine 영향 zero:** 호출자는 public FP16 API만 사용 → JIT 도입 투명.
+
+### D-09 refined: 5 transcendental 커널은 `with objmode` escape (Option B)
+
+- 변경 전: "fastmath=False + explicit FP32 for-loop 보존"
+- **변경 후 (D-09 보강):** 위 원칙 유지 + `gelu`, `tanh_act`, `sigmoid`, `softmax`, `esum` 5 커널은 transcendental 호출 부분만 `numba.objmode` block으로 NumPy 위임.
+  - 패턴:
+    ```python
+    @njit(cache=True)
+    def _gelu_impl(arr_f32):
+        # ... 다른 부분은 JIT
+        with numba.objmode(t='float32[:]'):
+            t = np.tanh(inner)  # NumPy의 glibc tanhf 사용
+        # ...
+    ```
+- **이유:** 실증 확인 (`07-RESEARCH.md`): `@njit(fastmath=False)`의 `np.tanh`는 LLVM intrinsic 사용 → glibc `tanhf`와 ~1 ULP 차이 → GELU에서 9/1024 FP16 ULP-0 mismatch 발생. `objmode` escape로 0/1024 mismatch 회복 (실증). `NUMBA_DISABLE_SVML=1` 미효과 (확인됨).
+- **성능 손실:** objmode 전환 오버헤드 일부 발생, 그러나 D-13 5× walltime 목표 충분 충족 (gemm 단일 455× speedup이 dilution 흡수).
+- **NumPy 영향 없는 23 커널:** gemm 3 + vec 7 (sasmd/dot/vsum/clamp 등) + act 비-transcendental (relu) + 2 pool + 9 cvt = 23. `@njit(cache=True)` 단순 적용으로 bit-exact + 큰 speedup.
+- **D-12 acceptance 보존:** ULP-0 strict 유지 (objmode 사용으로 transcendental 부분도 NumPy와 동일).
+
+### D-10 refined: vendor 디렉토리 정확 카운트 = **84**, 72 .elf 신규 빌드 추가
+
+- 변경 전: "약 98-103개 (plan-stage 정확화)"
+- **변경 후 (실증):**
+  - 정확 카운트: **84** (`find vendor/gtx_cpp_reference/test -mindepth 1 -maxdepth 1 -type d ! -name __pycache__ | wc -l`).
+  - 84개 모두 `*_ref.txt` 자산 보유.
+  - 현 프로젝트에 .elf 빌드된 op = 12개 (P5/P6).
+  - **72개 신규 .elf 빌드 P7 범위에 포함:** vendor `run_tests_n1s16.sh` flow + `/opt/riscv/` 툴체인 활용. P7 plan에 .elf 빌드 task 명시.
+- **자산 변환 + git lock-in:** P6 `scripts/import_vendor_golden.py` lineage 확장 → 84 op 자산 모두 `tests/gtx/data/golden/<op>.hex` 형식 변환 + 커밋.
+- **graceful skip 시나리오:** `/opt/riscv/` 툴체인 미설치 환경에서는 .elf 빌드 단계 skip + 기존 12개만 sweep. plan-stage에서 CI 환경 정확화 후 fixture 분기.
+- **이유:** P6 D-07/D-08 deferred ("vendor 98개 풀 sweep")가 P7 acceptance gate로 흡수. 사용자 명시 결정.
+
+### Updated kernel inventory (D-06 lock-in)
+
+총 28 kernel:
+
+| 모듈 | 커널 (FP32-only signature for `_*_impl`) | objmode escape? |
+|------|-----------------------------------------|-----------------|
+| `gemm_core.py` | `_gemm_core_impl`, `_gemm_reduce_sum_a_impl`, `_gemm_dot_impl` (3) | 없음 |
+| `vec_core.py` | `_sasmd_impl`, `_dot_impl`, `_vsum_impl`, `_clamp_impl`, + P5 보조 3 (총 7) | 없음 |
+| `act_core.py` 활성화 | `_relu_impl`, `_prelu_impl`, `_gelu_impl`, `_tanh_act_impl`, `_sigmoid_impl`, `_softmax_impl`, `_esum_impl` (7) | gelu, tanh_act, sigmoid, softmax, esum (5) |
+| `act_core.py` pool | `_pool_max_impl`, `_pool_avg_impl` (2) | 없음 |
+| `act_core.py` cvt | 9 (FP16↔FP32, FP16↔FP8, FP16↔INT8, FP16↔INT32, FP64↔FP16 등) | 없음 |
+
+(plan-stage에서 `vec_core.py`/`act_core.py` 정확 함수 grep 후 \_impl 명명 확정.)
+
+### Derived P7 REQ IDs (researcher proposed, lock-in)
+
+REQUIREMENTS.md `Phase 7` 섹션에 신규 추가 (D-04 sync 시점에 함께):
+
+| REQ ID | Decision | 비고 |
+|--------|----------|------|
+| **NJIT-01** | Lazy import + auto NumPy fallback | D-02 |
+| **NJIT-02** | 28 stateless cores @njit (cache=True), FP32-only `_impl` signature | D-06 + NJIT-FP32-BOUNDARY |
+| **NJIT-03** | fastmath=False + 5 transcendental kernels objmode escape | D-09 |
+| **NJIT-04** | vendor 84-op sweep strict-mode + 72 .elf 신규 빌드 + skip-on-missing | D-10 |
+| **NJIT-05** | per-kernel ULP-0 parity test (28 kernels) | D-12 |
+| **NJIT-06** | wall-clock 5× speedup vs P6 baseline (vendor 84-op sweep) | D-13 |
+| **NJIT-07** | `pip install spike[fast]` extras with `numba>=0.61.2,<0.66` | D-03 + D-05 refined |
+| **NJIT-08** | REQUIREMENTS.md / PROJECT.md sync (Out of Scope rewording + base-only 50MB cap clarification) | D-04 + D-15 |
+
+### Open questions deferred to plan-stage
+
+- 9 cvt 커널 JIT ROI 측정 (fancy indexing + LUT 접근 지배적; benchmark에서 NumPy fallback이 더 빠른 경우 해당 커널만 NumPy 유지 가능).
+- 첫 컴파일 시간 누적 (gemm 단독 ~640ms × 28 ≈ 17.9s 추정) → import-time eager warmup 추가 검토.
+- `/opt/riscv/` 툴체인 CI 환경 가용성 → 72 .elf 빌드 단계 분기.
+
+---
+
 *Phase: 07-numba*
 *Context gathered: 2026-05-08*
+*Refinements added: 2026-05-09 (post-research)*
