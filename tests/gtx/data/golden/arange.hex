@@ -1,0 +1,5 @@
+# Source: vendor/gtx_cpp_reference/test/ARANGE/n1s16/data/n1s16_arange_ref.txt
+# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
+# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
+@f000000
+4b804b004a804a0049804900488048004700460045004400420040003c000000

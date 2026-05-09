@@ -78,6 +78,38 @@ def _discover_vendor_ops() -> list:
     )
 
 
+def _discover_kernel_filename(op_dir: str):
+    """Auto-discover vendor kernel filename for an op directory.
+
+    Returns (kernel_prefix, op_name_for_pyspike) or None if no _ref.txt found.
+
+    kernel_prefix: vendor's filename minus '_ref.txt' (e.g. 'n1s16_relu' for
+                   'n1s16_relu_ref.txt')
+    op_name_for_pyspike: lowercase vendor dir name (e.g. 'relu') -- matches
+                        .elf naming convention used in tests/gtx/data/firmware/
+    """
+    data_dir = VENDOR_TEST / op_dir / "n1s16" / "data"
+    if not data_dir.is_dir():
+        return None
+    ref_files = sorted(data_dir.glob("n1s16_*_ref.txt"))
+    if not ref_files:
+        # Fallback: try _result.hex pattern (some vendor ops)
+        ref_files = sorted(data_dir.glob("n1s16_*_result.hex"))
+    if not ref_files:
+        return None
+    # Default: pick the first matching file (most ops have a single _ref.txt)
+    ref = ref_files[0]
+    stem = ref.stem
+    if stem.endswith("_ref"):
+        kernel_prefix = stem[:-4]
+    elif stem.endswith("_result"):
+        kernel_prefix = stem[:-7]
+    else:
+        kernel_prefix = stem
+    op_name = op_dir.lower()
+    return (kernel_prefix, op_name)
+
+
 def convert_one(vendor_dir: str, kernel_prefix: str, op_name: str,
                 n_lines: int, dry_run: bool = False):
     """Returns (success, message) tuple."""
@@ -138,11 +170,29 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.all:
-        # Plan 05 GREEN-fills the 84-op converter logic. Wave 0 stub:
-        raise NotImplementedError(
-            "P7 NJIT-04: 84-op vendor import is Plan 05 territory. "
-            "Wave 0 scaffold only exposes VENDOR_OPS_84 constant + --all flag."
-        )
+        # P7 NJIT-04 Plan 05 GREEN: walk all 84 vendor op directories and
+        # convert each via _discover_kernel_filename + convert_one. Some ops
+        # may legitimately lack _ref.txt assets -- skip with explicit count.
+        ok_count = 0
+        skip_count = 0
+        for op_dir in VENDOR_OPS_84:
+            result = _discover_kernel_filename(op_dir)
+            if result is None:
+                print("SKIP: " + op_dir + " (no _ref.txt found)")
+                skip_count += 1
+                continue
+            kernel_prefix, op_name = result
+            ok, msg = convert_one(op_dir, kernel_prefix, op_name,
+                                  n_lines=1, dry_run=args.verify)
+            print(msg)
+            if ok:
+                ok_count += 1
+            else:
+                skip_count += 1
+        print()
+        print("--all summary: " + str(ok_count) + " converted, "
+              + str(skip_count) + " skipped/missing.")
+        return 0
 
     ok_count = 0
     skip_count = 0
