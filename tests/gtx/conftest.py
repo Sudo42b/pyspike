@@ -86,3 +86,28 @@ def proc_with_addra_addrr_seeded():
         }
 
     return seed
+
+
+@pytest.fixture
+def _numba_available() -> bool:
+    """P7 NJIT-01: True iff numba is installed (spike[fast] extra)."""
+    try:
+        import numba  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.fixture(scope="session")
+def baseline_walltime() -> float:
+    """P7 NJIT-06: P6 NumPy-only sweep walltime (one-shot baseline).
+
+    Plan 05 GREEN-fills: reads from `tests/gtx/data/baseline_walltime.txt`
+    (created by Plan 05 first-task baseline-recorder). Wave 0 placeholder
+    returns 0.0 so test_njit_perf.py collection succeeds.
+    """
+    import pathlib
+    baseline_file = pathlib.Path(__file__).parent / "data" / "baseline_walltime.txt"
+    if baseline_file.exists():
+        return float(baseline_file.read_text().strip())
+    return 0.0  # placeholder; Plan 05 records real value
