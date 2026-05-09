@@ -44,6 +44,41 @@ $ pyspike \
 Hello, World!
 ```
 
+## Performance acceleration (optional)
+
+`pip install spike` ships with a NumPy-only backend that passes the full
+bit-exact regression suite. For wall-clock acceleration on GTX NPU compute
+kernels, install the optional `[fast]` extras:
+
+```shell
+$ pip install spike[fast]
+```
+
+This installs [numba](https://numba.pydata.org/) (LLVM JIT compiler) and
+enables `@njit(cache=True)` on the 28 stateless GTX kernels (`gemm_core`,
+`vec_core` 7 ops, `act_core` 18 ops). The integration is **transparent** —
+the same Python API works whether numba is installed or not. The first
+invocation pays a one-shot compile cost (~640 ms per kernel; ~17.9 s
+aggregate); subsequent runs hit the disk cache (`__pycache__/*.nbi`).
+
+Empirical speedups (verified on x86_64 manylinux2014):
+- `gemm_core` 16x16x16 FP16: ~455x (910 µs → 2 µs)
+- Full vendor 84-op `n1s16` regression sweep: >= 5x
+
+**Bit-exactness is preserved** — `fastmath=False` (numba default) +
+explicit FP32 Python for-loop accumulate + `with numba.objmode(...)`
+escape for 5 transcendental kernels (gelu, tanh_act, sigmoid, softmax,
+esum) match NumPy oracle byte-for-byte (ULP-0 parity). Per-kernel parity
+test: `pytest tests/gtx/test_njit_parity.py -v`.
+
+**Disable acceleration** without uninstalling:
+
+```shell
+# Either uninstall numba, or set the env var (next major version):
+$ pip uninstall numba
+# The `HAS_NUMBA = False` path takes over automatically.
+```
+
 ### Quick ISA Extension
 
 An ISA extension implements one or more custom instructions and / or control-state registers (CSRs) for Spike's RISC-V processor models. With PySpike, an ISA extension is a Python class that inherits `riscv.isa.ISA`. It should implement a minimum of two methods: `get_instructions` and `get_disasms`. The former provides functional models of one or more custom instructions, and the latter provides their disassemblers. Other optional methods include `get_csrs` and `reset`, for providing custom CSRs and resetting extension states, respectively. Use decorator `@isa.register("myisa")` to register the extension under the name `myisa`.
