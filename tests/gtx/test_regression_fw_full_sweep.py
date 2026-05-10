@@ -95,11 +95,24 @@ def _resolve_pyspike_command():
 
 
 def _find_elf(op_dir: str):
-    """Find <op>.elf in firmware dir or legacy elf dir. Returns Path or None."""
+    """Find <op>.elf in firmware dir, legacy elf dir, or vendor host tree (D-05).
+
+    Resolution order (firmware/ first -> P5/P6 hand-built wins on collision):
+      1. tests/gtx/data/firmware/<elf_stem>.elf      (P5/P6 wheel-bundled)
+      2. tests/gtx/data/elf/<elf_stem>.elf           (P5/P6 legacy location)
+      3. ${GTX_VENDOR_TEST_DIR}/<OP_DIR>/n1s16/n1s16_<elf_stem>.elf
+         (D-13 default = /mnt/e/14_NIGHTLY/pyspike/test/, vendor pre-built)
+
+    Returns Path or None.
+    """
     elf_stem = VENDOR_TO_ELF_STEM.get(op_dir, op_dir.lower())
+    vendor_root = pathlib.Path(
+        os.environ.get("GTX_VENDOR_TEST_DIR", "/mnt/e/14_NIGHTLY/pyspike/test/")
+    )
     candidates = [
         FIRMWARE_DIR / (elf_stem + ".elf"),
         ELF_DIR_LEGACY / (elf_stem + ".elf"),
+        vendor_root / op_dir / "n1s16" / ("n1s16_" + elf_stem + ".elf"),
     ]
     for p in candidates:
         if p.exists():
@@ -150,14 +163,27 @@ def test_vendor_op_sweep_strict(op_dir: str, tmp_path) -> None:
             + " (vendor toolchain build pending; see tests/gtx/data/firmware/README.md)"
         )
 
-    # Tier 3b (P6 lineage): operand-staging-required ops -- vendor golden vs
-    # zero-init runtime mismatch. See OPERAND_STAGING_REQUIRED_VENDOR docstring
-    # above + test_regression_fw_full.py. Resolution path: regenerate goldens
-    # as zero-init oracles OR add ddr_init_from_file pre-stage to .S kernels.
-    if op_dir in OPERAND_STAGING_REQUIRED_VENDOR:
+    # Compute vendor root once for both Tier 3b skip discrimination and the
+    # subprocess GTX_DDR_REVERSED env decision below (D-05/D-10/D-13).
+    vendor_root_for_env = pathlib.Path(
+        os.environ.get("GTX_VENDOR_TEST_DIR", "/mnt/e/14_NIGHTLY/pyspike/test/")
+    )
+
+    # Tier 3b (P6 lineage, D-11 conditioning): operand-staging-required ops --
+    # vendor golden vs zero-init runtime mismatch. This skip ONLY applies to
+    # hand-built .elf (P5/P6 .S kernels). Vendor pre-built .elf stage operands
+    # via the __ddr_init intrinsic (ddr_init_from_file), so the vendor golden's
+    # non-zero-input expectation is satisfied. Detect by checking whether
+    # elf_path is under vendor_root.
+    is_vendor_elf = False
+    try:
+        is_vendor_elf = elf_path.is_relative_to(vendor_root_for_env)
+    except (ValueError, AttributeError):
+        is_vendor_elf = False
+    if op_dir in OPERAND_STAGING_REQUIRED_VENDOR and not is_vendor_elf:
         pytest.skip(
-            op_dir + ": vendor golden assumes non-zero operand staging "
-            "that P5/P6 .S kernel does NOT provide (zero-init L1). "
+            op_dir + ": (hand-built path) vendor golden assumes non-zero "
+            "operand staging that P5/P6 .S kernel does NOT provide (zero-init L1). "
             "See OPERAND_STAGING_REQUIRED_VENDOR + test_regression_fw_full.py."
         )
 
@@ -178,6 +204,18 @@ def test_vendor_op_sweep_strict(op_dir: str, tmp_path) -> None:
     env["GTX_DDR_DUMP"] = str(actual_dump)
     env["GTX_DDR_DUMP_ADDR"] = "0x100"  # P5/P6 default ADDRR
     env["GTX_DDR_DUMP_SIZE"] = "0x20"   # 32 bytes / 16 FP16 (single-row truncation)
+
+    # D-10: vendor pre-built .elf use BE FP16 ordering -> require
+    # GTX_DDR_REVERSED=1 for the subprocess only. P5/P6 hand-built .elf
+    # use LE FP16 (pyspike default) and remain unaffected.
+    # Inline scope (NOT autouse fixture) per CONTEXT.md D-10.
+    try:
+        if elf_path.is_relative_to(vendor_root_for_env):
+            env["GTX_DDR_REVERSED"] = "1"
+    except (ValueError, AttributeError):
+        # is_relative_to is Python 3.9+; cp310+ baseline so this should
+        # always succeed. Guard for unforeseen Path subclass behavior.
+        pass
 
     try:
         result = subprocess.run(
