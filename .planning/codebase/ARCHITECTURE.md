@@ -230,6 +230,35 @@ Spike instruction decode (rocc_insn_t for opcode 0x0b, 0x2b, 0x3b, 0x7b)
 - Python GIL held during custom instruction execution (single-threaded spike context)
 - No lazy loading; extensions instantiated for each hart on first use
 
+### FP16 byte-order boundary (BE vs LE)
+
+The pyspike GTX NPU operates in **LE FP16** byte order natively (matching
+host x86_64 little-endian + `np.float16.view(np.uint8)` semantics). Vendor
+HW simulation (SystemC) produces **BE FP16** in `_ref.txt` golden files
+(32-byte DDR bus-words parsed right-to-left, per
+`vendor/gtx_cpp_reference/gtx/CLAUDE.md` "DDR Hex 파일 바이트 순서").
+
+The boundary is mediated by the `GTX_DDR_REVERSED=1` env var, read per
+call by `src/main/python/riscv/gtx/ddr.py` at `ddr_init_from_file`
+(`ddr.py:110`) and `ddr_dump_to_file` (`ddr.py:145`). When set, both
+functions reverse byte ordering on read/write so that vendor BE golden
+files compare byte-exact against pyspike's LE-default in-memory
+representation. No module-level cache — each call reads `os.environ`
+directly to avoid stale-value poisoning under `monkeypatch.setenv`.
+
+The regression sweep harness
+(`tests/gtx/test_regression_fw_full_sweep.py:382-387`) auto-applies
+`GTX_DDR_REVERSED=1` for vendor-rooted `.elf` paths only via an inline
+`is_relative_to(vendor_root)` check on the resolved ELF path (D-10
+inline subprocess env, NOT autouse fixture — autouse leaks across
+non-vendor tests like `test_ddr_modes.py`). See
+`tests/gtx/data/firmware/README.md` Contracts 1 & 2 for the canonical
+4-contract documentation.
+
+Production code (`riscv.gtx.*`) sees only LE FP16; the BE/LE conversion
+is fully encapsulated in the DDR I/O layer.
+
 ---
 
 *Architecture analysis: 2026-05-04*
+*Updated 2026-05-10: BE/LE FP16 boundary note appended (Phase 8 VTW-04 closure).*

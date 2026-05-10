@@ -3,13 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Post-Ship Polish
 status: executing
-last_updated: "2026-05-10T15:18:26.351Z"
+last_updated: "2026-05-10T18:30:00.000Z"
 last_activity: 2026-05-10
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 7
-  total_plans: 38
-  completed_plans: 38
+  total_plans: 44
+  completed_plans: 44
+phase: 8
+phase_name: multi-tile-dma-parity
+current_plan: "Phase 8 plan 6 - VTW-04 documentation closure"
+stopped_at: "Completed 08-06-PLAN.md (running parallel with 08-05)"
+resume_file: ".planning/phases/08-multi-tile-dma-parity/08-06-SUMMARY.md"
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -33,22 +38,79 @@ M ≥ 12 PASS = milestone success criterion.
 
 ## Current Position
 
-Phase: 08 (multi-tile-dma-parity) — EXECUTING
-Plan: 5 of 6
+Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
+Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
-Status: Ready to execute
+Status: Wave 2 closure — VTW-04 docs landed; VTW-03 baseline pending Plan 08-05; phase exits via `/gsd:verify-work 8` after both Wave 2 plans land
 Last activity: 2026-05-10
+
+### Phase 8 Plan Outcomes (2026-05-10)
+
+- **Plan 01** (Wave 0 RED-state proof + state-reset audit, MTDMA-03 + MTDMA-04):
+  `test_tile_boundary_state_reset` PASS; `test_tile_boundary_byte_exact`
+  XPASS pre-fix → flipped to unconditional PASS post-Plan-04.
+  Programmatic 2-tile path falsified Hypotheses 1/2/4 mechanically;
+  confirmed Hypothesis 5 (bug in dispatch path, not dma_engine core).
+  Commit `6e1bdad`.
+- **Plan 02** (Wave 0 vendor asset wire-up, VTW-01 + VTW-04):
+  `_find_elf` 3-tier landed (firmware/ → elf/ → vendor; later flipped
+  vendor-first by Plan 04); `import_vendor_golden.py --all` covers full
+  84-op VENDOR_OPS_84 (73 converted, 11 skipped via P6 9-op md5
+  invariant guard); `MANIFEST.in` prune + `pyproject.toml`
+  exclude-package-data firmware/ exclusion landed; sentinel test
+  `test_wheel_excludes_firmware_dir` shipped. Commits `759cfa7`,
+  `2f5815e`, `95aeee8`.
+- **Plan 03** (Wave 0 dump-size investigation + full-region golden,
+  MTDMA-01 + VTW-02): added `--full` flag + `golden_full/` (gitignored,
+  ~25 MB); ran 6-op smoke through pyspike with full dumps; **verdict
+  Outcome B** confirmed (NPU code fix needed) — ABS diverges at exactly
+  line 2048 = `MAX_SHARED_DMA_BYTES=65535` boundary. Investigation
+  artifact at `.planning/phases/08-multi-tile-dma-parity/08-03-INVESTIGATION.md`.
+  Commits `25c54a5`, `a3e52f3`.
+- **Plan 04** (Wave 1 surgical fix, MTDMA-01 + MTDMA-02 + VTW-01 + VTW-02):
+  root cause identified via vendor C++ `gtx_npu_dispatch.cc:898-905`
+  cross-reference — missing `credit_ld_chk` (custom0 funct7=0x52) handler
+  for deferred-queue flush. Fix: 3 production files, 30 net lines
+  (`encoding.py` +1 constant, `ops/dma.py` +22-line handler,
+  `dispatch_4mode.py` +4-line condition extension). ABS multi-tile now
+  byte-exact across all 96 tiles (196609 lines of golden); GELU also
+  PASS. M=2 confirmed in SMOKE_SET_12; 10 ops deferred to P9 with
+  documented non-multi-tile root causes
+  (`.planning/seeds/p9-vendor-sweep-non-multi-tile-bugs.md`). Multi-tile
+  invariant fully achieved. Commits `8660c89`, `ab239a6`, `7e2c997`,
+  `bf65b50`.
+- **Plan 05** (Wave 2 VTW-03 baseline rerecording, VTW-03): IN-FLIGHT
+  parallel — owns `tests/gtx/data/baseline_walltime.txt` rerecording
+  under `HAS_NUMBA=False`; hits a human-verify checkpoint per the plan.
+  Status will resolve via `/gsd:verify-work 8` after the Plan 05
+  parallel agent finishes.
+- **Plan 06** (Wave 2 VTW-04 documentation closure, VTW-04, **this plan**):
+  rewrote `tests/gtx/data/firmware/README.md` (52 → 213 lines) with the
+  4-contract D-08 specification + wheel size statement; appended
+  `.planning/codebase/ARCHITECTURE.md` BE/LE FP16 byte-order boundary
+  subsection citing `ddr.py:110/145` and
+  `test_regression_fw_full_sweep.py:382-387`; synchronized
+  `.planning/STATE.md` + `.planning/ROADMAP.md` to reflect Phase 8
+  closure status. VTW-04 closed via documentation deliverable.
+
+**P7 HUMAN-UAT closure status:**
+- Item #1 (M ≥ 12 sweep PASS): partially closed — multi-tile
+  correctness invariant achieved (M=2 strict-mode; 10 ops have
+  non-multi-tile root causes deferred to v1.2 / P9).
+- Item #2 (5x walltime under HAS_NUMBA=False): blocked on Plan 08-05
+  baseline rerecording (running parallel; not yet landed at the time
+  Plan 08-06 closed).
 
 ## Performance Metrics
 
 | Metric | Target | Current |
 |--------|--------|---------|
 | v1.0 requirement coverage | 50/50 | 50/50 ✓ |
-| v1.1 requirement coverage | 8/8 | 8/8 mapped (0/8 satisfied) |
-| Phases completed | 8 | 7 |
-| .elf regressions passing strict (vendor sweep M ≥ 12) | M ≥ 12 | M = 0 (pending P8 fix) |
-| Multi-tile DMA orchestration parity | strict-mode PASS past tile 1 | First tile only (~64 KB / `MAX_SHARED_DMA_BYTES=65535`) PASS, tile 2+ diverges |
-| P7 HUMAN-UAT items closed | 2/2 | 0/2 (both blocked on P8 MTDMA-01 fix) |
+| v1.1 requirement coverage | 8/8 | 7/8 satisfied (VTW-03 pending Plan 08-05 baseline; documented in 08-06 SUMMARY) |
+| Phases completed | 8 | 7 (Phase 8 in Wave 2 closure; verify via `/gsd:verify-work 8`) |
+| .elf regressions passing strict (vendor sweep M ≥ 12) | M ≥ 12 | M = 2 (ABS + GELU strict-mode PASS post-Plan-04; 10 ops deferred to P9 with non-multi-tile root causes) |
+| Multi-tile DMA orchestration parity | strict-mode PASS past tile 1 | ACHIEVED — ABS byte-exact across 96 tiles (196609 lines) via Plan 08-04 `credit_ld_chk` flush wiring |
+| P7 HUMAN-UAT items closed | 2/2 | 1/2 partial (#1 multi-tile invariant achieved; #2 blocked on Plan 08-05 baseline) |
 | .elf regressions passing strict | 100% | 0% |
 | Wheel size | ≤50MB | TBD |
 | cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
@@ -90,6 +152,7 @@ Last activity: 2026-05-10
 | Phase 08-multi-tile-dma-parity P02 | 9min | 3 tasks | 5 files |
 | Phase 08-multi-tile-dma-parity P03 | 12min | 2 tasks | 4 files |
 | Phase 08 P04 | 75min | 2 tasks | 5 files |
+| Phase 08-multi-tile-dma-parity P06 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
