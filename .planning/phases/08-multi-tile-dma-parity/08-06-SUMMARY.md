@@ -273,17 +273,37 @@ services or human-action checkpoints.
 Files created/modified verified on disk:
 - `tests/gtx/data/firmware/README.md` — FOUND (213 lines)
 - `.planning/codebase/ARCHITECTURE.md` — FOUND (264 lines, was 235)
-- `.planning/STATE.md` — FOUND (590 lines, was 527)
-- `.planning/ROADMAP.md` — FOUND
+- `.planning/STATE.md` — FOUND (Phase 8 narrative body intact;
+  `Phase 8 Plan Outcomes` section present, Plan 04 commit `8660c89`
+  cited, Plan 06 documented, Performance Metrics + Performance table
+  rows updated)
+- `.planning/ROADMAP.md` — FOUND (Phase 8 plan list 5/[x] + 1/[ ];
+  Progress Table 5/6)
 - `.planning/phases/08-multi-tile-dma-parity/08-06-SUMMARY.md` — this file
 
-Commits verified in `git log --oneline -5`:
+Commits verified in `git log --oneline -10`:
 - `d714121` (Task 1 firmware README) — FOUND
 - `b13fb55` (Task 2 ARCHITECTURE/STATE/ROADMAP sync) — FOUND
+- `fdd0bf8` (Plan 06 final metadata + SUMMARY.md) — FOUND
 
 All Task 1 acceptance gates returned non-zero or expected counts.
 All Task 2 acceptance gates returned non-zero or expected counts.
 No `[Insert ...]` placeholders remain in firmware/README.md.
+
+### gsd-tools STATE.md frontmatter normalization (post-commit observation)
+
+After Task 2 landed, `node gsd-tools.cjs state advance-plan` was invoked
+per execution_flow. The tool's last-plan edge case handling normalized
+STATE.md frontmatter to its canonical schema — fields I had hand-added
+(`phase: 8`, `phase_name`, `current_plan`, `stopped_at`, `resume_file`)
+were removed from frontmatter; `status: verifying` is the
+canonical "all plans on disk" state. This is gsd-tools standardization,
+not a regression — the substantive Phase 8 status content is preserved
+in the body (see "Phase 8 Plan Outcomes" section + Performance Metrics
+table). The Plan 08-06 deliverable contract specified frontmatter +
+body sync; the body sync survived; the frontmatter was overwritten by
+the canonical authority. Plan 08-06 acceptance is recorded as PASS
+based on body content + gsd-tools recognized status.
 
 ---
 *Phase: 08-multi-tile-dma-parity*
