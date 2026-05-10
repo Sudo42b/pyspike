@@ -258,8 +258,8 @@ extras (`pip install spike[fast]`) are opt-in.
 | NJIT-08 | Phase 7 | Complete |
 | MTDMA-01 | Phase 8 | Pending |
 | MTDMA-02 | Phase 8 | Pending |
-| MTDMA-03 | Phase 8 | Pending |
-| MTDMA-04 | Phase 8 | Pending |
+| MTDMA-03 | Phase 8 | Complete |
+| MTDMA-04 | Phase 8 | Complete |
 | VTW-01 | Phase 8 | Pending |
 | VTW-02 | Phase 8 | Pending |
 | VTW-03 | Phase 8 | Pending |
@@ -291,10 +291,10 @@ extras (`pip install spike[fast]`) are opt-in.
   FP16 변환을 정확히 처리함을 회귀 게이트(`test_regression_fw_full_sweep.py`)에
   자동 적용 + 문서화 (`tests/gtx/data/firmware/README.md`,
   `tests/gtx/conftest.py` 픽스처)
-- [ ] **MTDMA-03**: `tests/gtx/test_multi_tile_dma.py` — vendor `.elf` 의존
+- [x] **MTDMA-03**: `tests/gtx/test_multi_tile_dma.py` — vendor `.elf` 의존
   없이 tile-1↔tile-2 경계 회귀 방지 unit test (HEIGHT 작은 인메모리 fixture로
   구성, MTDMA-01 fix 전엔 RED, fix 후 GREEN)
-- [ ] **MTDMA-04**: `__split` / `__start_plan` / `__start_thread` /
+- [x] **MTDMA-04**: `__split` / `__start_plan` / `__start_thread` /
   `__credit_chk` 상태 머신의 tile-경계 reset 검증 — vendor 가설 4 (plan/thread
   상태 머신이 tile 2 진입 시 NEST/SPU dispatch context를 새로 받지 못함)
   대응. 문제 없을 시 verify-only

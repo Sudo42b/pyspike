@@ -1,20 +1,15 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: post-ship-polish-multi-tile-dma
-current_plan: Not started
-status: context_gathered
-last_updated: "2026-05-10T00:00:00Z"
+milestone_name: — Post-Ship Polish
+status: executing
+last_updated: "2026-05-10T13:50:51.818Z"
+last_activity: 2026-05-10
 progress:
-  total_phases: 8
+  total_phases: 7
   completed_phases: 7
-  total_plans: 0
-  completed_plans: 0
-  percent: 87.5
-phase: 8
-phase_name: multi-tile-dma-parity
-stopped_at: "Phase 8 context gathered"
-resume_file: ".planning/phases/08-multi-tile-dma-parity/08-CONTEXT.md"
+  total_plans: 38
+  completed_plans: 38
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -29,7 +24,7 @@ resume_file: ".planning/phases/08-multi-tile-dma-parity/08-CONTEXT.md"
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Milestone v1.1 — Multi-tile DMA Orchestration Parity (defining requirements)
+**Current Focus:** Phase 08 — multi-tile-dma-parity
 
 **Acceptance Gate:** vendor `pyspike/test/<OP>/n1s16/n1s16_<op>.elf` × `GTX_DDR_REVERSED=1`
 sweep → DDR dump that `compare_hex(strict=True)` reports byte-exact against
@@ -38,11 +33,11 @@ M ≥ 12 PASS = milestone success criterion.
 
 ## Current Position
 
-Phase: 8 — Multi-tile DMA Parity (context gathered)
-Plan: TBD (will be set during `/gsd:plan-phase 8`)
-Total Plans in Phase: TBD (4–6 expected — Wave 0 vendor wire-up + diff → Wave 1 root-cause fix → Wave 2 verification closure)
-Status: 08-CONTEXT.md landed (commit 00bf361); awaiting `/gsd:plan-phase 8`
-Last activity: 2026-05-10 — v1.1 roadmap created, Phase 8 appended after Phase 7
+Phase: 08 (multi-tile-dma-parity) — EXECUTING
+Plan: 2 of 6
+Total Plans in Phase: 6
+Status: Ready to execute
+Last activity: 2026-05-10
 
 ## Performance Metrics
 
@@ -91,6 +86,7 @@ Last activity: 2026-05-10 — v1.1 roadmap created, Phase 8 appended after Phase
 | Phase 07-numba P04 | 9m41s | 2 tasks | 2 files |
 | Phase 07-numba P05 | 14m54s | 3 tasks | 6 files |
 | Phase 07 P06 | 18min | 3 tasks | 5 files |
+| Phase 08-multi-tile-dma-parity P01 | 18min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
