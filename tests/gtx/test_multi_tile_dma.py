@@ -292,22 +292,20 @@ def test_tile_boundary_state_reset() -> None:
     not _RISCV_AVAILABLE,
     reason="GtxNpu construction requires _riscv.so (rocc_t base class)",
 )
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Multi-tile DMA divergence -- flips to PASS in Plan 08-04. "
-        "Wave 0 RED-state proof per D-09. Plan 08-04 must flip "
-        "strict=True once GREEN."
-    ),
-)
 def test_tile_boundary_byte_exact() -> None:
-    """MTDMA-03 RED-state proof: tile 1 ABS output diverges before fix.
+    """MTDMA-03 GREEN: tile 0 + tile 1 ABS output byte-exact (post Plan 08-04 fix).
 
-    Pre-fix expected behavior: tile 0 byte-exact PASSES (within ~64 KB
-    MAX_SHARED_DMA_BYTES boundary), tile 1 byte-exact FAILS.
+    Plan 01 created this test as RED (xfail strict=False) anticipating that
+    multi-tile divergence would surface here. Plan 03 INVESTIGATION confirmed
+    the divergence reproduces only via the vendor `.elf` RoCC dispatch path
+    (not via this programmatic API path); Plan 04 fix landed the production
+    correction (credit.ld.chk -> deferred queue flush) which the vendor sweep
+    (test_regression_fw_full_sweep.py) exercises end-to-end. This unit test
+    guards the programmatic API path against any future regression that might
+    reintroduce a tile-boundary bug.
 
-    Post-fix expected behavior (Plan 08-04): BOTH tiles byte-exact PASS;
-    Plan 08-04 flips xfail strict=True so the test fails on regression.
+    Both tiles must be byte-exact for the test to PASS; xfail decorator
+    removed by Plan 04 so any regression hard-fails.
     """
     from riscv.gtx import GtxNpu
     from riscv.gtx.ddr import ensure_ddr
