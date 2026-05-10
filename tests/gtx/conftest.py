@@ -105,9 +105,18 @@ def baseline_walltime() -> float:
     Plan 05 GREEN-fills: reads from `tests/gtx/data/baseline_walltime.txt`
     (created by Plan 05 first-task baseline-recorder). Wave 0 placeholder
     returns 0.0 so test_njit_perf.py collection succeeds.
+
+    P8 VTW-03 (D-12): file may carry leading ``#`` comment lines documenting
+    the recording method (HAS_NUMBA=False venv, hardware, sweep set). The
+    fixture parses the FIRST non-comment, non-empty line as the float baseline
+    so callers can keep provenance metadata alongside the value.
     """
     import pathlib
     baseline_file = pathlib.Path(__file__).parent / "data" / "baseline_walltime.txt"
     if baseline_file.exists():
-        return float(baseline_file.read_text().strip())
+        for line in baseline_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            return float(line)
     return 0.0  # placeholder; Plan 05 records real value
