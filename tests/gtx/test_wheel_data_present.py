@@ -119,3 +119,28 @@ def test_load_golden_helper_returns_bytes():
         pytest.skip("no golden for " + golden_stem + ": " + str(exc))
     assert isinstance(content, bytes), "expected bytes, got " + type(content).__name__
     assert len(content) > 0, "golden is empty"
+
+
+def test_wheel_excludes_firmware_dir():
+    """D-07: tests/gtx/data/firmware/ must NOT be in the built wheel.
+
+    Sentinel test -- runs only when a built wheel is present in dist/.
+    To exercise locally: `python -m build --wheel`, then
+    `pytest -k wheel_excludes_firmware`.
+    """
+    import zipfile
+    repo_root = pathlib.Path(__file__).resolve().parent.parent.parent
+    dist_dir = repo_root / "dist"
+    wheels = sorted(dist_dir.glob("spike-*.whl")) if dist_dir.exists() else []
+    if not wheels:
+        pytest.skip("no built wheel in dist/; run `python -m build --wheel` first")
+
+    # Inspect the freshest wheel
+    latest = wheels[-1]
+    with zipfile.ZipFile(latest) as zf:
+        members = zf.namelist()
+    firmware_entries = [m for m in members if "tests/gtx/data/firmware/" in m]
+    assert firmware_entries == [], (
+        "wheel " + str(latest) + " unexpectedly ships firmware/ contents: "
+        + str(firmware_entries[:5])
+    )

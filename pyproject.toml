@@ -120,6 +120,13 @@ riscv = [
 #   "data/golden/*.hex"
 # ]
 
+# P8 08-02 D-07: belt-and-suspenders firmware/ wheel exclusion. MANIFEST.in
+# already prunes tests/gtx/data/firmware, but if a future change adds firmware
+# to package-data it must be excluded here too. Wildcard "*" matches every
+# package; entries are relative to each package root.
+[tool.setuptools.exclude-package-data]
+"*" = ["tests/gtx/data/firmware/*", "tests/gtx/data/firmware/**/*"]
+
 [tool.pytest.ini_options]
 # pytest-pylint / pytest-mypy stay in [dev] extras for explicit opt-in
 # (`pytest --pylint --mypy`) — auto-loading them in addopts breaks bare
