@@ -78,6 +78,24 @@ VENDOR_TO_ELF_STEM: dict = {
     # All others use lowercase(op_dir) directly.
 }
 
+# Vendor host-tree pre-built `.elf` follow a slightly different naming
+# convention from the P5/P6 hand-built `.elf`. Examples:
+#   vendor: <root>/MUL/n1s16/n1s16_mul.elf       (NOT mul_vv)
+#   vendor: <root>/DIV/n1s16/n1s16_div_vv.elf    (vv suffix)
+#   vendor: <root>/SOFT_MAX/n1s16/n1s16_softmax.elf  (matches hand-built)
+# This map records vendor-only stems; entries here override the
+# VENDOR_TO_ELF_STEM map specifically when resolving vendor `.elf` paths.
+# Keys NOT in this map fall through to VENDOR_TO_ELF_STEM (then
+# lowercase(op_dir)) for vendor lookup, preserving the prior behavior.
+VENDOR_HOST_TREE_STEM_OVERRIDE: dict = {
+    "MUL": "mul",              # vendor: n1s16_mul.elf
+    "DIV": "div_vv",           # vendor: n1s16_div_vv.elf
+    "ADD1": "add1",            # vendor: n1s16_add1.elf (not aliased above)
+    # ADD vendor has BOTH n1s16_add_vv.elf and n1s16_add1.elf -- we keep
+    # ADD->add_vv (matches VENDOR_TO_ELF_STEM) since add_vv has the
+    # corresponding `_ref.txt`.
+}
+
 # Vendor ops whose goldens (imported from vendor _ref.txt) assume non-zero
 # operand pre-staging via ddr_init_from_file, but whose P5/P6 hand-written
 # .S kernels run against zero-init L1 (no operand staging). This is the same
@@ -163,24 +181,37 @@ def _resolve_pyspike_command():
 
 
 def _find_elf(op_dir: str):
-    """Find <op>.elf in firmware dir, legacy elf dir, or vendor host tree (D-05).
+    """Find <op>.elf, preferring vendor pre-built when available (P8 08-04).
 
-    Resolution order (firmware/ first -> P5/P6 hand-built wins on collision):
-      1. tests/gtx/data/firmware/<elf_stem>.elf      (P5/P6 wheel-bundled)
-      2. tests/gtx/data/elf/<elf_stem>.elf           (P5/P6 legacy location)
-      3. ${GTX_VENDOR_TEST_DIR}/<OP_DIR>/n1s16/n1s16_<elf_stem>.elf
+    Resolution order (vendor first for this sweep harness):
+      1. ${GTX_VENDOR_TEST_DIR}/<OP_DIR>/n1s16/n1s16_<elf_stem>.elf
          (D-13 default = /mnt/e/14_NIGHTLY/pyspike/test/, vendor pre-built)
+      2. tests/gtx/data/firmware/<elf_stem>.elf      (P5/P6 wheel-bundled)
+      3. tests/gtx/data/elf/<elf_stem>.elf           (P5/P6 legacy location)
+
+    Rationale: this sweep tests against vendor _ref.txt goldens, which
+    require the vendor multi-tile firmware to produce the full DDR output.
+    The hand-built P5/P6 `.S` kernels output a single row at 0x100 and would
+    always mismatch the vendor golden; they are exercised by
+    test_regression_fw_full.py / test_regression_fw_mm.py instead.
+
+    08-04 reordering: previously hand-built (firmware/, elf/) won, masking
+    the multi-tile bug surface (the vendor RoCC dispatch path was never
+    exercised). After flipping the priority, vendor `.elf` triggers the
+    `is_vendor_elf` branch in the test body which wires GTX_DDR_INIT,
+    GTX_DDR_DUMP_ADDR=0xf000000, GTX_NO_EXIT=1, GTX_DDR_REVERSED=1.
 
     Returns Path or None.
     """
-    elf_stem = VENDOR_TO_ELF_STEM.get(op_dir, op_dir.lower())
+    handbuilt_stem = VENDOR_TO_ELF_STEM.get(op_dir, op_dir.lower())
+    vendor_stem = VENDOR_HOST_TREE_STEM_OVERRIDE.get(op_dir, handbuilt_stem)
     vendor_root = pathlib.Path(
         os.environ.get("GTX_VENDOR_TEST_DIR", "/mnt/e/14_NIGHTLY/pyspike/test/")
     )
     candidates = [
-        FIRMWARE_DIR / (elf_stem + ".elf"),
-        ELF_DIR_LEGACY / (elf_stem + ".elf"),
-        vendor_root / op_dir / "n1s16" / ("n1s16_" + elf_stem + ".elf"),
+        vendor_root / op_dir / "n1s16" / ("n1s16_" + vendor_stem + ".elf"),
+        FIRMWARE_DIR / (handbuilt_stem + ".elf"),
+        ELF_DIR_LEGACY / (handbuilt_stem + ".elf"),
     ]
     for p in candidates:
         if p.exists():
@@ -188,25 +219,36 @@ def _find_elf(op_dir: str):
     return None
 
 
-def _find_golden(op_dir: str):
-    """Find <op>.hex. Priority: golden_full/ (P8 08-03 INVESTIGATION) > golden/.
+def _find_golden(op_dir: str, *, prefer_full: bool = False):
+    """Find <op>.hex. Priority: golden_full/ (P8 08-04, vendor `.elf` only) > golden/.
 
-    P8 08-03: when `scripts/import_vendor_golden.py --full` has been run
-    locally, golden_full/<op>.hex exists with the non-truncated vendor
-    output. That file takes precedence over golden/<op>.hex (which is the
-    32-byte single-row truncation committed for CI). Falls through to the
-    truncated golden when no full-region version is on disk.
+    P8 08-04: when running vendor pre-built `.elf` (multi-tile output spanning
+    BASE_DDR_RESULT..BASE_DDR_RESULT+full_size), prefer the full-region golden
+    in `golden_full/`. When running P5/P6 hand-built `.elf` (single-row output
+    at 0x100, only 32 bytes), use the truncated golden in `golden/`.
+
+    The `prefer_full=True` flag is set by callers AFTER `_find_elf` resolves
+    to a vendor path (`is_vendor_elf=True`). For hand-built `.elf`,
+    `prefer_full=False` ensures the comparison is against the matching
+    truncated golden (not the full golden which the hand-built kernel never
+    produces).
 
     Vendor SOFT_MAX dir produced softmax.hex (vendor naming variation handled
     in import_vendor_golden.py); look up under the same name lowering rule.
     """
     elf_stem = VENDOR_TO_ELF_STEM.get(op_dir, op_dir.lower())
-    candidates = [
-        GOLDEN_DIR_FULL / (op_dir.lower() + ".hex"),  # P8 08-03 full-region
-        GOLDEN_DIR_FULL / (elf_stem + ".hex"),         # P8 08-03 elf-stem variant
+    truncated_candidates = [
         GOLDEN_DIR / (op_dir.lower() + ".hex"),       # P7 import_vendor_golden --all
         GOLDEN_DIR / (elf_stem + ".hex"),              # P6 9-op map (softmax, add_vv, ...)
     ]
+    full_candidates = [
+        GOLDEN_DIR_FULL / (op_dir.lower() + ".hex"),  # P8 08-03 full-region
+        GOLDEN_DIR_FULL / (elf_stem + ".hex"),         # P8 08-03 elf-stem variant
+    ]
+    if prefer_full:
+        candidates = full_candidates + truncated_candidates
+    else:
+        candidates = truncated_candidates + full_candidates
     for p in candidates:
         if p.exists():
             return p
@@ -263,8 +305,11 @@ def test_vendor_op_sweep_strict(op_dir: str, tmp_path) -> None:
             "See OPERAND_STAGING_REQUIRED_VENDOR + test_regression_fw_full.py."
         )
 
-    # Tier 4: golden hex present
-    golden_path = _find_golden(op_dir)
+    # Tier 4: golden hex present. P8 08-04: only prefer the full-region
+    # golden when running a vendor `.elf` (which actually outputs the full
+    # multi-tile DDR region). P5/P6 hand-built `.elf` output a single row
+    # at 0x100 and would mismatch the full golden trivially.
+    golden_path = _find_golden(op_dir, prefer_full=is_vendor_elf)
     if golden_path is None:
         pytest.skip("no golden hex for op " + op_dir + " (run import_vendor_golden.py --all)")
 
@@ -288,13 +333,19 @@ def test_vendor_op_sweep_strict(op_dir: str, tmp_path) -> None:
     else:
         env["GTX_DDR_DUMP_ADDR"] = "0x100"  # P5/P6 default ADDRR
 
-    # P8 08-03: per-op GTX_DDR_DUMP_SIZE selection.
+    # P8 08-03 / 08-04: per-op GTX_DDR_DUMP_SIZE selection.
     # Priority: GTX_DDR_DUMP_SIZE_OVERRIDE_ALL env var > OP_DUMP_SIZE_OVERRIDE
-    # dict (sourced from GOLDEN_DIR_FULL on disk) > "0x20" legacy default.
+    # dict (sourced from GOLDEN_DIR_FULL on disk, vendor-elf only) > "0x20"
+    # legacy default.
+    #
+    # 08-04 narrowing: OP_DUMP_SIZE_OVERRIDE only applies when running
+    # vendor pre-built `.elf` (full multi-tile output). P5/P6 hand-built
+    # `.elf` output a single row at 0x100 -> always use "0x20" so the
+    # comparison is against the matching truncated golden in golden/.
     explicit_global = os.environ.get("GTX_DDR_DUMP_SIZE_OVERRIDE_ALL")
     if explicit_global:
         env["GTX_DDR_DUMP_SIZE"] = explicit_global
-    elif op_dir in OP_DUMP_SIZE_OVERRIDE:
+    elif is_vendor_elf and op_dir in OP_DUMP_SIZE_OVERRIDE:
         env["GTX_DDR_DUMP_SIZE"] = OP_DUMP_SIZE_OVERRIDE[op_dir]
     else:
         env["GTX_DDR_DUMP_SIZE"] = "0x20"  # 32 bytes / 16 FP16 (single-row truncation)
