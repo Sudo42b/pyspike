@@ -37,3 +37,9 @@ CMakeFiles
 cmake_install.cmake
 Makefile
 /venv
+
+# P8 08-03: full-region vendor goldens (huge; locally generated, not committed).
+# Produced by `scripts/import_vendor_golden.py --full` for multi-tile divergence
+# localization (08-03 INVESTIGATION). Truncated 32-byte goldens stay committed
+# under tests/gtx/data/golden/.
+tests/gtx/data/golden_full/

@@ -21,6 +21,11 @@ import sys
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 VENDOR_TEST = REPO_ROOT / "vendor" / "gtx_cpp_reference" / "test"
 PYSPIKE_GOLDEN = REPO_ROOT / "tests" / "gtx" / "data" / "golden"
+# P8 08-03 D-09 / RESEARCH §"Plan-Stage Hand-Off" Open Q#2:
+# Full-region golden destination -- gitignored, dev-local generation only.
+# Used by `--full` flag to produce non-truncated _ref.txt -> .hex bundles
+# for multi-tile divergence localization (Plan 03 INVESTIGATION).
+PYSPIKE_GOLDEN_FULL = REPO_ROOT / "tests" / "gtx" / "data" / "golden_full"
 
 # Map: vendor_op_dir -> (vendor_kernel_filename_prefix, pyspike_op_name, n_data_lines)
 # Plan 03 GREEN-filled per RESEARCH §Vendor Core Op Set Survey (lines 1064-1091).
@@ -111,8 +116,15 @@ def _discover_kernel_filename(op_dir: str):
 
 
 def convert_one(vendor_dir: str, kernel_prefix: str, op_name: str,
-                n_lines: int, dry_run: bool = False):
-    """Returns (success, message) tuple."""
+                n_lines, dry_run: bool = False, dst_dir=None):
+    """Returns (success, message) tuple.
+
+    n_lines: int (truncate to this many data lines) or None (full region,
+             no truncation). P8 08-03 added the None branch for Plan 03
+             INVESTIGATION (multi-tile divergence localization).
+    dst_dir: override destination directory (default PYSPIKE_GOLDEN). Used
+             by --full to redirect to PYSPIKE_GOLDEN_FULL (gitignored).
+    """
     # Try exact filename first
     src_ref = VENDOR_TEST / vendor_dir / "n1s16" / "data" / (kernel_prefix + "_ref.txt")
     if not src_ref.exists():
@@ -123,7 +135,9 @@ def convert_one(vendor_dir: str, kernel_prefix: str, op_name: str,
         else:
             return (False, "missing: " + str(src_ref))
 
-    dst_hex = PYSPIKE_GOLDEN / (op_name + ".hex")
+    if dst_dir is None:
+        dst_dir = PYSPIKE_GOLDEN
+    dst_hex = dst_dir / (op_name + ".hex")
 
     addr_line = None
     data_lines = []
@@ -139,26 +153,35 @@ def convert_one(vendor_dir: str, kernel_prefix: str, op_name: str,
             if line.startswith('#'):
                 continue
             data_lines.append(line)
-            if len(data_lines) >= n_lines:
+            if n_lines is not None and len(data_lines) >= n_lines:
                 break
 
     if not data_lines:
         return (False, "no data lines in " + str(src_ref))
 
     if dry_run:
-        return (True, "DRY: would write " + str(dst_hex) + " from " + str(src_ref))
+        suffix = (" (full region: " + str(len(data_lines)) + " lines)"
+                  if n_lines is None else "")
+        return (True, "DRY: would write " + str(dst_hex) + " from " + str(src_ref)
+                + suffix)
 
     dst_hex.parent.mkdir(parents=True, exist_ok=True)
     with open(dst_hex, 'w') as f:
         f.write("# Source: vendor/gtx_cpp_reference/test/" + vendor_dir
                 + "/n1s16/data/" + src_ref.name + "\n")
         f.write("# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.\n")
-        f.write("# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.\n")
+        if n_lines is None:
+            f.write("# Full-region (P8 08-03 --full): no truncation, "
+                    + str(len(data_lines)) + " data lines.\n")
+        else:
+            f.write("# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.\n")
         if addr_line:
             f.write(addr_line + "\n")
         for dl in data_lines:
             f.write(dl + "\n")
-    return (True, "WROTE: " + str(dst_hex) + " (" + str(n_lines) + " line)")
+    n_str = str(n_lines) if n_lines is not None else str(len(data_lines))
+    return (True, "WROTE: " + str(dst_hex) + " (" + n_str + " line"
+            + ("s" if n_lines is None or n_lines != 1 else "") + ")")
 
 
 def main(argv=None):
@@ -167,7 +190,23 @@ def main(argv=None):
                         help='Dry-run: list mappings without writing files')
     parser.add_argument('--all', action='store_true',
                         help='P7 NJIT-04: import all 84 vendor ops (Plan 05 GREEN-fills)')
+    parser.add_argument('--full', action='store_true',
+                        help='P8 08-03: import full-region golden (no truncation) '
+                        'to tests/gtx/data/golden_full/ (.gitignored). For '
+                        'multi-tile divergence localization (08-03 INVESTIGATION). '
+                        'Independent of --all (works with the 9-op default map too).')
     args = parser.parse_args(argv)
+
+    # P8 08-03: --full redirects output to PYSPIKE_GOLDEN_FULL and disables
+    # truncation. Computed once, applies to both --all and default branches.
+    if args.full:
+        n_lines_override = None
+        dst_dir_override = PYSPIKE_GOLDEN_FULL
+        if not args.verify:
+            dst_dir_override.mkdir(parents=True, exist_ok=True)
+    else:
+        n_lines_override = 1  # legacy default; per-entry n_lines used for --default
+        dst_dir_override = None
 
     if args.all:
         # P7 NJIT-04 Plan 05 GREEN: walk all 84 vendor op directories and
@@ -180,11 +219,15 @@ def main(argv=None):
         # is lowercased to abs which collides with P6 default mode write).
         # Without this guard, abs.hex / relu.hex / etc. md5 invariant would
         # break across re-runs of `--all` after `--default`.
+        #
+        # P8 08-03: under --full, the skip-guard is RELAXED for the 9 P6 ops
+        # because we want full-region versions in golden_full/ (which is a
+        # separate directory and does NOT collide with truncated golden/).
         vendor_to_pyspike_ops_lower = {k.lower(): v for k, v in VENDOR_TO_PYSPIKE_OPS.items()}
         ok_count = 0
         skip_count = 0
         for op_dir in VENDOR_OPS_84:
-            if op_dir.lower() in vendor_to_pyspike_ops_lower:
+            if not args.full and op_dir.lower() in vendor_to_pyspike_ops_lower:
                 # P6 9-op default-mode path already handles these (preserves
                 # canonical pyspike op_name e.g. add_vv vs add). Skip silently
                 # to keep abs.hex / relu.hex / sigmoid.hex / tanh.hex / softmax.hex /
@@ -198,23 +241,32 @@ def main(argv=None):
                 skip_count += 1
                 continue
             kernel_prefix, op_name = result
+            # P8 08-03: under --full, prefer canonical pyspike op_name from
+            # VENDOR_TO_PYSPIKE_OPS (e.g. add_vv vs add) so golden_full/ matches
+            # the lookup keys used by test_regression_fw_full_sweep.py.
+            if args.full and op_dir.lower() in vendor_to_pyspike_ops_lower:
+                op_name = vendor_to_pyspike_ops_lower[op_dir.lower()][1]
             ok, msg = convert_one(op_dir, kernel_prefix, op_name,
-                                  n_lines=1, dry_run=args.verify)
+                                  n_lines=n_lines_override, dry_run=args.verify,
+                                  dst_dir=dst_dir_override)
             print(msg)
             if ok:
                 ok_count += 1
             else:
                 skip_count += 1
         print()
-        print("--all summary: " + str(ok_count) + " converted, "
+        mode_tag = "--all --full" if args.full else "--all"
+        print(mode_tag + " summary: " + str(ok_count) + " converted, "
               + str(skip_count) + " skipped/missing.")
         return 0
 
     ok_count = 0
     skip_count = 0
     for vendor_dir, (kernel_prefix, op_name, n_lines) in VENDOR_TO_PYSPIKE_OPS.items():
-        ok, msg = convert_one(vendor_dir, kernel_prefix, op_name, n_lines,
-                              dry_run=args.verify)
+        # P8 08-03: --full overrides the per-entry truncation count.
+        effective_n_lines = None if args.full else n_lines
+        ok, msg = convert_one(vendor_dir, kernel_prefix, op_name, effective_n_lines,
+                              dry_run=args.verify, dst_dir=dst_dir_override)
         print(msg)
         if ok:
             ok_count += 1

@@ -53,6 +53,11 @@ VENDOR_TEST_DIR = REPO_ROOT / "vendor" / "gtx_cpp_reference" / "test"
 FIRMWARE_DIR = REPO_ROOT / "tests" / "gtx" / "data" / "firmware"
 ELF_DIR_LEGACY = REPO_ROOT / "tests" / "gtx" / "data" / "elf"
 GOLDEN_DIR = REPO_ROOT / "tests" / "gtx" / "data" / "golden"
+# P8 08-03: full-region (non-truncated) goldens, .gitignored. Populated locally
+# via `python scripts/import_vendor_golden.py --full` for multi-tile divergence
+# investigation. _find_golden prefers this over the truncated golden/ when both
+# exist, so investigation runs use the larger compare automatically.
+GOLDEN_DIR_FULL = REPO_ROOT / "tests" / "gtx" / "data" / "golden_full"
 
 # Auto-discover 84 vendor op directories at collection time
 if VENDOR_TEST_DIR.exists():
@@ -84,6 +89,60 @@ OPERAND_STAGING_REQUIRED_VENDOR: set = {
     "RELU", "SIGMOID", "TANH", "SOFT_MAX", "LEAKY_RELU",
     "ADD", "MUL", "SUM", "ABS",
 }
+
+# P8 08-03 D-09 / RESEARCH §"Plan-Stage Hand-Off" Open Q#3:
+# Per-op GTX_DDR_DUMP_SIZE override. Populated dynamically below by reading
+# `os.stat(GOLDEN_DIR_FULL / <op>.lower()+'.hex').st_size` when a full-region
+# golden has been generated locally (`scripts/import_vendor_golden.py --full`).
+# When no full-region golden exists for an op, the harness falls back to
+# the legacy "0x20" (32 byte / single-row) dump that matches the truncated
+# golden in GOLDEN_DIR. CI defaults preserved.
+#
+# Layered priority (descending):
+#   1. GTX_DDR_DUMP_SIZE_OVERRIDE_ALL env var (one-shot global override)
+#   2. OP_DUMP_SIZE_OVERRIDE[op_dir] (computed from golden_full/ on disk)
+#   3. "0x20" (legacy, 32-byte / single-row truncation)
+#
+# The values are recomputed at module import time so an investigator running
+# `scripts/import_vendor_golden.py --full` then `pytest ...` picks up the
+# new sizes without restarting the worker.
+OP_DUMP_SIZE_OVERRIDE: dict = {}
+if GOLDEN_DIR_FULL.exists():
+    for _full in GOLDEN_DIR_FULL.glob("*.hex"):
+        # File size in bytes; round up to next 32-byte multiple to match the
+        # vendor `_ref.txt` line emission cadence (1 line = 32 bytes hex =
+        # 16 FP16 words). The harness's GTX_DDR_DUMP_SIZE is in bytes.
+        try:
+            _bytes = _full.stat().st_size
+        except OSError:
+            continue
+        # Convert hex-text size -> raw byte count: each non-comment line is
+        # 64 hex chars (32 bytes) + newline. Estimate raw bytes = lines * 32.
+        # Use a quick wc-style line count via mmap-free path.
+        try:
+            with open(_full, "rb") as _fh:
+                _lines = 0
+                for _raw in _fh:
+                    _s = _raw.strip()
+                    if _s and not _s.startswith(b"#") and not _s.startswith(b"@"):
+                        _lines += 1
+        except OSError:
+            continue
+        if _lines == 0:
+            continue
+        # Each data line encodes 32 raw bytes; pad to 32-byte alignment for
+        # the C++-style ddr_dump_to_file emission contract.
+        _raw_bytes = _lines * 32
+        # Stem mapping: golden_full uses lowercase + canonical pyspike op_name
+        # (e.g. add_vv.hex, softmax.hex). Convert to uppercase op_dir form.
+        _stem = _full.stem  # e.g. "add_vv"
+        # Reverse-map via VENDOR_TO_ELF_STEM if needed; otherwise upper-case.
+        _op_dir_guess = _stem.upper()
+        for _vd, _es in VENDOR_TO_ELF_STEM.items():
+            if _es == _stem:
+                _op_dir_guess = _vd
+                break
+        OP_DUMP_SIZE_OVERRIDE[_op_dir_guess] = hex(_raw_bytes)
 
 
 def _resolve_pyspike_command():
@@ -121,15 +180,23 @@ def _find_elf(op_dir: str):
 
 
 def _find_golden(op_dir: str):
-    """Find <op>.hex in golden dir. Returns Path or None.
+    """Find <op>.hex. Priority: golden_full/ (P8 08-03 INVESTIGATION) > golden/.
+
+    P8 08-03: when `scripts/import_vendor_golden.py --full` has been run
+    locally, golden_full/<op>.hex exists with the non-truncated vendor
+    output. That file takes precedence over golden/<op>.hex (which is the
+    32-byte single-row truncation committed for CI). Falls through to the
+    truncated golden when no full-region version is on disk.
 
     Vendor SOFT_MAX dir produced softmax.hex (vendor naming variation handled
     in import_vendor_golden.py); look up under the same name lowering rule.
     """
     elf_stem = VENDOR_TO_ELF_STEM.get(op_dir, op_dir.lower())
     candidates = [
-        GOLDEN_DIR / (op_dir.lower() + ".hex"),  # P7 import_vendor_golden --all
-        GOLDEN_DIR / (elf_stem + ".hex"),         # P6 9-op map (softmax, add_vv, ...)
+        GOLDEN_DIR_FULL / (op_dir.lower() + ".hex"),  # P8 08-03 full-region
+        GOLDEN_DIR_FULL / (elf_stem + ".hex"),         # P8 08-03 elf-stem variant
+        GOLDEN_DIR / (op_dir.lower() + ".hex"),       # P7 import_vendor_golden --all
+        GOLDEN_DIR / (elf_stem + ".hex"),              # P6 9-op map (softmax, add_vv, ...)
     ]
     for p in candidates:
         if p.exists():
@@ -203,7 +270,17 @@ def test_vendor_op_sweep_strict(op_dir: str, tmp_path) -> None:
     env.pop("GTX_NO_EXIT", None)  # WJOIN must raise SystemExit(0)
     env["GTX_DDR_DUMP"] = str(actual_dump)
     env["GTX_DDR_DUMP_ADDR"] = "0x100"  # P5/P6 default ADDRR
-    env["GTX_DDR_DUMP_SIZE"] = "0x20"   # 32 bytes / 16 FP16 (single-row truncation)
+
+    # P8 08-03: per-op GTX_DDR_DUMP_SIZE selection.
+    # Priority: GTX_DDR_DUMP_SIZE_OVERRIDE_ALL env var > OP_DUMP_SIZE_OVERRIDE
+    # dict (sourced from GOLDEN_DIR_FULL on disk) > "0x20" legacy default.
+    explicit_global = os.environ.get("GTX_DDR_DUMP_SIZE_OVERRIDE_ALL")
+    if explicit_global:
+        env["GTX_DDR_DUMP_SIZE"] = explicit_global
+    elif op_dir in OP_DUMP_SIZE_OVERRIDE:
+        env["GTX_DDR_DUMP_SIZE"] = OP_DUMP_SIZE_OVERRIDE[op_dir]
+    else:
+        env["GTX_DDR_DUMP_SIZE"] = "0x20"  # 32 bytes / 16 FP16 (single-row truncation)
 
     # D-10: vendor pre-built .elf use BE FP16 ordering -> require
     # GTX_DDR_REVERSED=1 for the subprocess only. P5/P6 hand-built .elf
