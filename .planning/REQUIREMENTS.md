@@ -257,7 +257,7 @@ extras (`pip install spike[fast]`) are opt-in.
 | NJIT-07 | Phase 7 | Complete |
 | NJIT-08 | Phase 7 | Complete |
 | MTDMA-01 | Phase 8 | Complete |
-| MTDMA-02 | Phase 8 | Pending |
+| MTDMA-02 | Phase 8 | Complete |
 | MTDMA-03 | Phase 8 | Complete |
 | MTDMA-04 | Phase 8 | Complete |
 | VTW-01 | Phase 8 | Complete |
@@ -287,7 +287,7 @@ extras (`pip install spike[fast]`) are opt-in.
 - [x] **MTDMA-01**: vendor `gtx_npu_dma.cc` tile loop의 DDR↔L2 + L2↔L1
   multi-tile orchestration을 pyspike에 1:1 포팅 — `n1s16_<op>.elf`가 tile 1
   ~ tile N 모두 byte-exact PASS (현재는 tile 1만 PASS, tile 2부터 diverge)
-- [ ] **MTDMA-02**: `GTX_DDR_REVERSED=1` 시맨틱이 vendor BE FP16 ↔ pyspike LE
+- [x] **MTDMA-02**: `GTX_DDR_REVERSED=1` 시맨틱이 vendor BE FP16 ↔ pyspike LE
   FP16 변환을 정확히 처리함을 회귀 게이트(`test_regression_fw_full_sweep.py`)에
   자동 적용 + 문서화 (`tests/gtx/data/firmware/README.md`,
   `tests/gtx/conftest.py` 픽스처)
