@@ -251,7 +251,7 @@ plans across these waves.
   4. **5x walltime gate fires under HAS_NUMBA=False baseline (VTW-03):** `tests/gtx/data/baseline_walltime.txt` is re-recorded with `HAS_NUMBA=False` against the now-passing vendor sweep, then `pytest tests/gtx/test_njit_perf.py --benchmark-only` reports `test_vendor_sweep_walltime_5x` as PASS (asserts `benchmark.stats['mean'] * 5 <= baseline_walltime`, NOT skipped via the 30s `pytest.skip` threshold). Closes P7 HUMAN-UAT item #2.
   5. **Vendor `.elf` asset policy decided + recorded (VTW-04):** the 79 `n1s16_<op>.elf` + 70 `_ref.txt` files currently untracked at `/mnt/e/14_NIGHTLY/pyspike/test/` have a documented commit/symlink/separate-repo decision in `tests/gtx/data/firmware/README.md` with explicit `MANIFEST.in` and wheel-size impact assessment. Either the chosen path lands in `tests/gtx/data/firmware/` via `import_vendor_golden.py` extension, or `_find_elf` learns a documented multi-path search; in both cases the regression harness resolves vendor fixtures deterministically without per-developer environment knobs.
 
-**Plans:** 6 plans (Wave 0 RED-state + asset wire-up + investigation → Wave 1 fix → Wave 2 verification + docs)
+**Plans:** 5/6 plans executed
 - [x] 08-multi-tile-dma-parity/08-01-PLAN.md — Wave 0 tile-2 RED-state proof + state-reset audit (MTDMA-03 + MTDMA-04)
 - [x] 08-multi-tile-dma-parity/08-02-PLAN.md — Wave 0 vendor asset wire-up (_find_elf 3-tier + import_vendor_golden 84-op + firmware/ wheel exclusion) (VTW-01 + VTW-04)
 - [x] 08-multi-tile-dma-parity/08-03-PLAN.md — Wave 0 dump-size investigation + full-region golden import (MTDMA-01 + VTW-02)
@@ -273,7 +273,7 @@ plans across these waves.
 | 5. VEC/ACT/Pool | 2/6 | In Progress | - |
 | 6. Verification & Wheel | 1/5 | In Progress|  |
 | 7. Numba Dynamic Optimization | 6/6 | Complete | 2026-05-09 |
-| 8. Multi-tile DMA Parity (v1.1) | 5/6 | In Progress (Wave 2: 08-05 in-flight, 08-06 complete) |  |
+| 8. Multi-tile DMA Parity (v1.1) | 5/6 | In Progress|  |
 
 ---
 

@@ -2,19 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Post-Ship Polish
-status: executing
-last_updated: "2026-05-10T18:30:00.000Z"
+status: verifying
+last_updated: "2026-05-10T15:31:38.338Z"
 last_activity: 2026-05-10
 progress:
-  total_phases: 8
+  total_phases: 7
   completed_phases: 7
-  total_plans: 44
-  completed_plans: 44
-phase: 8
-phase_name: multi-tile-dma-parity
-current_plan: "Phase 8 plan 6 - VTW-04 documentation closure"
-stopped_at: "Completed 08-06-PLAN.md (running parallel with 08-05)"
-resume_file: ".planning/phases/08-multi-tile-dma-parity/08-06-SUMMARY.md"
+  total_plans: 38
+  completed_plans: 38
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -41,7 +36,7 @@ M ≥ 12 PASS = milestone success criterion.
 Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
-Status: Wave 2 closure — VTW-04 docs landed; VTW-03 baseline pending Plan 08-05; phase exits via `/gsd:verify-work 8` after both Wave 2 plans land
+Status: Phase complete — ready for verification
 Last activity: 2026-05-10
 
 ### Phase 8 Plan Outcomes (2026-05-10)
@@ -52,6 +47,7 @@ Last activity: 2026-05-10
   Programmatic 2-tile path falsified Hypotheses 1/2/4 mechanically;
   confirmed Hypothesis 5 (bug in dispatch path, not dma_engine core).
   Commit `6e1bdad`.
+
 - **Plan 02** (Wave 0 vendor asset wire-up, VTW-01 + VTW-04):
   `_find_elf` 3-tier landed (firmware/ → elf/ → vendor; later flipped
   vendor-first by Plan 04); `import_vendor_golden.py --all` covers full
@@ -60,6 +56,7 @@ Last activity: 2026-05-10
   exclude-package-data firmware/ exclusion landed; sentinel test
   `test_wheel_excludes_firmware_dir` shipped. Commits `759cfa7`,
   `2f5815e`, `95aeee8`.
+
 - **Plan 03** (Wave 0 dump-size investigation + full-region golden,
   MTDMA-01 + VTW-02): added `--full` flag + `golden_full/` (gitignored,
   ~25 MB); ran 6-op smoke through pyspike with full dumps; **verdict
@@ -67,6 +64,7 @@ Last activity: 2026-05-10
   line 2048 = `MAX_SHARED_DMA_BYTES=65535` boundary. Investigation
   artifact at `.planning/phases/08-multi-tile-dma-parity/08-03-INVESTIGATION.md`.
   Commits `25c54a5`, `a3e52f3`.
+
 - **Plan 04** (Wave 1 surgical fix, MTDMA-01 + MTDMA-02 + VTW-01 + VTW-02):
   root cause identified via vendor C++ `gtx_npu_dispatch.cc:898-905`
   cross-reference — missing `credit_ld_chk` (custom0 funct7=0x52) handler
@@ -79,11 +77,13 @@ Last activity: 2026-05-10
   (`.planning/seeds/p9-vendor-sweep-non-multi-tile-bugs.md`). Multi-tile
   invariant fully achieved. Commits `8660c89`, `ab239a6`, `7e2c997`,
   `bf65b50`.
+
 - **Plan 05** (Wave 2 VTW-03 baseline rerecording, VTW-03): IN-FLIGHT
   parallel — owns `tests/gtx/data/baseline_walltime.txt` rerecording
   under `HAS_NUMBA=False`; hits a human-verify checkpoint per the plan.
   Status will resolve via `/gsd:verify-work 8` after the Plan 05
   parallel agent finishes.
+
 - **Plan 06** (Wave 2 VTW-04 documentation closure, VTW-04, **this plan**):
   rewrote `tests/gtx/data/firmware/README.md` (52 → 213 lines) with the
   4-contract D-08 specification + wheel size statement; appended
@@ -94,9 +94,11 @@ Last activity: 2026-05-10
   closure status. VTW-04 closed via documentation deliverable.
 
 **P7 HUMAN-UAT closure status:**
+
 - Item #1 (M ≥ 12 sweep PASS): partially closed — multi-tile
   correctness invariant achieved (M=2 strict-mode; 10 ops have
   non-multi-tile root causes deferred to v1.2 / P9).
+
 - Item #2 (5x walltime under HAS_NUMBA=False): blocked on Plan 08-05
   baseline rerecording (running parallel; not yet landed at the time
   Plan 08-06 closed).
@@ -152,6 +154,7 @@ Last activity: 2026-05-10
 | Phase 08-multi-tile-dma-parity P02 | 9min | 3 tasks | 5 files |
 | Phase 08-multi-tile-dma-parity P03 | 12min | 2 tasks | 4 files |
 | Phase 08 P04 | 75min | 2 tasks | 5 files |
+| Phase 08-multi-tile-dma-parity P06 | 8min | 2 tasks | 4 files |
 | Phase 08-multi-tile-dma-parity P06 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
