@@ -256,11 +256,19 @@ extras (`pip install spike[fast]`) are opt-in.
 | NJIT-06 | Phase 7 | Complete |
 | NJIT-07 | Phase 7 | Complete |
 | NJIT-08 | Phase 7 | Complete |
+| MTDMA-01 | Phase 8 | Pending |
+| MTDMA-02 | Phase 8 | Pending |
+| MTDMA-03 | Phase 8 | Pending |
+| MTDMA-04 | Phase 8 | Pending |
+| VTW-01 | Phase 8 | Pending |
+| VTW-02 | Phase 8 | Pending |
+| VTW-03 | Phase 8 | Pending |
+| VTW-04 | Phase 8 | Pending |
 
 **Coverage:**
-- v1 requirements: 50 total
-- Mapped to phases: 50 ✓
-- Unmapped: 0 ✓ (100% coverage)
+- v1.0 requirements: 50 total — 50 mapped, 100% coverage
+- v1.1 requirements: 8 total — 8 mapped, 100% coverage
+- Combined: 58 requirements ↔ 58 mapped ✓
 
 **Phase distribution:**
 - Phase 1 (Foundation): 5 (FOUND-01..04, PKG-02)
@@ -270,8 +278,44 @@ extras (`pip install spike[fast]`) are opt-in.
 - Phase 5 (VEC/ACT/Pool): 11 (VEC-01..05, ACT-01..05, VRF-02)
 - Phase 6 (Verification & Wheel): 6 (VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04)
 - Phase 7 (Numba Optimization): 8 (NJIT-01..NJIT-08)
+- Phase 8 (Multi-tile DMA Parity, v1.1): 8 (MTDMA-01..04, VTW-01..04)
+
+## Milestone v1.1 Post-Ship Polish — Multi-tile DMA Orchestration Parity
+
+### Multi-tile DMA Parity (MTDMA)
+
+- [ ] **MTDMA-01**: vendor `gtx_npu_dma.cc` tile loop의 DDR↔L2 + L2↔L1
+  multi-tile orchestration을 pyspike에 1:1 포팅 — `n1s16_<op>.elf`가 tile 1
+  ~ tile N 모두 byte-exact PASS (현재는 tile 1만 PASS, tile 2부터 diverge)
+- [ ] **MTDMA-02**: `GTX_DDR_REVERSED=1` 시맨틱이 vendor BE FP16 ↔ pyspike LE
+  FP16 변환을 정확히 처리함을 회귀 게이트(`test_regression_fw_full_sweep.py`)에
+  자동 적용 + 문서화 (`tests/gtx/data/firmware/README.md`,
+  `tests/gtx/conftest.py` 픽스처)
+- [ ] **MTDMA-03**: `tests/gtx/test_multi_tile_dma.py` — vendor `.elf` 의존
+  없이 tile-1↔tile-2 경계 회귀 방지 unit test (HEIGHT 작은 인메모리 fixture로
+  구성, MTDMA-01 fix 전엔 RED, fix 후 GREEN)
+- [ ] **MTDMA-04**: `__split` / `__start_plan` / `__start_thread` /
+  `__credit_chk` 상태 머신의 tile-경계 reset 검증 — vendor 가설 4 (plan/thread
+  상태 머신이 tile 2 진입 시 NEST/SPU dispatch context를 새로 받지 못함)
+  대응. 문제 없을 시 verify-only
+
+### Vendor Test Wire-up (VTW)
+
+- [ ] **VTW-01**: `pyspike/test/<OP>/n1s16/n1s16_<op>.elf` (79개) + `_ref.txt`
+  (70개) untracked 자산을 정식 fixture로 wire-up. `import_vendor_golden.py`
+  확장으로 `tests/gtx/data/firmware/`에 import (또는 `_find_elf` 다중 경로 탐색)
+- [ ] **VTW-02**: P7 HUMAN-UAT 항목 #1 종결 — `pytest
+  tests/gtx/test_regression_fw_full_sweep.py -v --no-cov` 가 `M ≥ 12` PASS
+  보고 (대표 6 op: ABS, ADD_VV, MUL_VV, RELU, SIGMOID, GELU + 추가 6개)
+- [ ] **VTW-03**: P7 HUMAN-UAT 항목 #2 종결 — `tests/gtx/data/baseline_walltime.txt`
+  를 `HAS_NUMBA=False`로 재기록 → `pytest tests/gtx/test_njit_perf.py
+  --benchmark-only` 가 `test_vendor_sweep_walltime_5x` PASS (30s threshold
+  skip 아님)
+- [ ] **VTW-04**: vendor `.elf` git 자산화 결정 — `test/` 디렉터리를 정식
+  커밋할지, symlink로 둘지, 별도 데이터 레포로 분리할지 명시. `MANIFEST.in` /
+  wheel size 영향 평가 + `tests/gtx/data/firmware/README.md` 동기화
 
 ---
-*Requirements defined: 2026-05-04*
-*Phase mappings filled: 2026-05-04 by gsd-roadmapper*
-*Last updated: 2026-05-04 after Phase 1 discuss (FOUND-01/PKG-02/PKG-04 NumPy 2.x + cp310 pivot, D-07/D-08/D-09)*
+*Requirements defined: 2026-05-04 (v1.0); v1.1 added 2026-05-10*
+*Phase mappings filled: 2026-05-04 by gsd-roadmapper; v1.1 mappings 2026-05-10*
+*Last updated: 2026-05-10 after milestone v1.1 startup (MTDMA-01..04 + VTW-01..04 added)*
