@@ -90,35 +90,42 @@ OPERAND_STAGING_REQUIRED_VENDOR: set = {
     "ADD", "MUL", "SUM", "ABS",
 }
 
+# P8 08-04 / CONTEXT D-11: 12-op smoke set.
+# 9 confirmed ops (CONTEXT D-11 explicit list, after collapsing ADD/ADD_VV +
+# MUL/MUL_VV duplicates) plus 3 plan-stage chosen ops (NEG, DIV, EXP per
+# RESEARCH §"12-op smoke set candidate"). All 12 must achieve byte-exact
+# strict-mode PASS against full-region vendor golden after Plan 04 fix.
+SMOKE_SET_12 = (
+    "ABS", "ADD", "MUL", "RELU", "SIGMOID", "GELU",
+    "TANH", "LEAKY_RELU", "SUM", "NEG", "DIV", "EXP",
+)
+
+
 # P8 08-03 D-09 / RESEARCH §"Plan-Stage Hand-Off" Open Q#3:
-# Per-op GTX_DDR_DUMP_SIZE override. Populated dynamically below by reading
-# `os.stat(GOLDEN_DIR_FULL / <op>.lower()+'.hex').st_size` when a full-region
-# golden has been generated locally (`scripts/import_vendor_golden.py --full`).
-# When no full-region golden exists for an op, the harness falls back to
-# the legacy "0x20" (32 byte / single-row) dump that matches the truncated
-# golden in GOLDEN_DIR. CI defaults preserved.
+# Per-op GTX_DDR_DUMP_SIZE override computed at TEST COLLECT TIME from
+# `os.stat(GOLDEN_DIR_FULL / <op>.lower()+'.hex').st_size`. No hard-coded
+# byte counts -- they would drift if the vendor regenerates goldens. CI
+# default ("0x20" truncated) preserved when GOLDEN_DIR_FULL is absent.
 #
 # Layered priority (descending):
 #   1. GTX_DDR_DUMP_SIZE_OVERRIDE_ALL env var (one-shot global override)
 #   2. OP_DUMP_SIZE_OVERRIDE[op_dir] (computed from golden_full/ on disk)
 #   3. "0x20" (legacy, 32-byte / single-row truncation)
-#
-# The values are recomputed at module import time so an investigator running
-# `scripts/import_vendor_golden.py --full` then `pytest ...` picks up the
-# new sizes without restarting the worker.
-OP_DUMP_SIZE_OVERRIDE: dict = {}
-if GOLDEN_DIR_FULL.exists():
+def _compute_op_dump_size_override():
+    """Compute per-op dump size from golden_full/<op>.hex line-count * 32.
+
+    Runtime computation avoids hard-coded byte counts that drift if vendor
+    regenerates goldens. Returns dict of {OP_DIR: hex_size_str}.
+
+    Each non-comment, non-@-directive line in the vendor _ref.txt-format
+    golden encodes exactly 32 raw DDR bytes (16 FP16 words = one 256-bit
+    bus word). Computing raw_bytes = lines * 32 matches the vendor C++
+    ddr_dump_to_file emission cadence (gtx_npu_dma.cc:509-558).
+    """
+    out: dict = {}
+    if not GOLDEN_DIR_FULL.exists():
+        return out
     for _full in GOLDEN_DIR_FULL.glob("*.hex"):
-        # File size in bytes; round up to next 32-byte multiple to match the
-        # vendor `_ref.txt` line emission cadence (1 line = 32 bytes hex =
-        # 16 FP16 words). The harness's GTX_DDR_DUMP_SIZE is in bytes.
-        try:
-            _bytes = _full.stat().st_size
-        except OSError:
-            continue
-        # Convert hex-text size -> raw byte count: each non-comment line is
-        # 64 hex chars (32 bytes) + newline. Estimate raw bytes = lines * 32.
-        # Use a quick wc-style line count via mmap-free path.
         try:
             with open(_full, "rb") as _fh:
                 _lines = 0
@@ -130,19 +137,21 @@ if GOLDEN_DIR_FULL.exists():
             continue
         if _lines == 0:
             continue
-        # Each data line encodes 32 raw bytes; pad to 32-byte alignment for
-        # the C++-style ddr_dump_to_file emission contract.
         _raw_bytes = _lines * 32
         # Stem mapping: golden_full uses lowercase + canonical pyspike op_name
-        # (e.g. add_vv.hex, softmax.hex). Convert to uppercase op_dir form.
-        _stem = _full.stem  # e.g. "add_vv"
-        # Reverse-map via VENDOR_TO_ELF_STEM if needed; otherwise upper-case.
+        # (e.g. add_vv.hex, softmax.hex). Reverse-map via VENDOR_TO_ELF_STEM
+        # to recover the upper-case OP_DIR form used by VENDOR_OP_DIRS.
+        _stem = _full.stem
         _op_dir_guess = _stem.upper()
         for _vd, _es in VENDOR_TO_ELF_STEM.items():
             if _es == _stem:
                 _op_dir_guess = _vd
                 break
-        OP_DUMP_SIZE_OVERRIDE[_op_dir_guess] = hex(_raw_bytes)
+        out[_op_dir_guess] = "0x" + format(_raw_bytes, "X")
+    return out
+
+
+OP_DUMP_SIZE_OVERRIDE: dict = _compute_op_dump_size_override()
 
 
 def _resolve_pyspike_command():
@@ -267,9 +276,17 @@ def test_vendor_op_sweep_strict(op_dir: str, tmp_path) -> None:
         str(elf_path),
     ]
     env = os.environ.copy()
-    env.pop("GTX_NO_EXIT", None)  # WJOIN must raise SystemExit(0)
     env["GTX_DDR_DUMP"] = str(actual_dump)
-    env["GTX_DDR_DUMP_ADDR"] = "0x100"  # P5/P6 default ADDRR
+
+    # P8 08-04: per-op GTX_DDR_DUMP_ADDR selection. Vendor `.elf` writes
+    # output at 0xf000000 (per `_ref.txt` @-headers and gtx-firmware
+    # n1s16_*.c BASE_DDR_RESULT constant). P5/P6 hand-built `.elf` use the
+    # legacy 0x100 default. INVESTIGATION (08-03) flagged this as a
+    # mandatory wire-up gap.
+    if is_vendor_elf:
+        env["GTX_DDR_DUMP_ADDR"] = "0xf000000"
+    else:
+        env["GTX_DDR_DUMP_ADDR"] = "0x100"  # P5/P6 default ADDRR
 
     # P8 08-03: per-op GTX_DDR_DUMP_SIZE selection.
     # Priority: GTX_DDR_DUMP_SIZE_OVERRIDE_ALL env var > OP_DUMP_SIZE_OVERRIDE
@@ -282,27 +299,59 @@ def test_vendor_op_sweep_strict(op_dir: str, tmp_path) -> None:
     else:
         env["GTX_DDR_DUMP_SIZE"] = "0x20"  # 32 bytes / 16 FP16 (single-row truncation)
 
+    # P8 08-04: vendor `.elf` requires GTX_DDR_INIT pre-staging from
+    # vendor input.txt (loaded via __ddr_init intrinsic at boot). Without
+    # it, DDR is all zeros and ABS/RELU/etc operate on f(0) instead of the
+    # expected vendor input pattern -> golden mismatch from line 0.
+    # Vendor convention: <op_dir>/n1s16/data/n1s16_<elf_stem>_input.txt.
+    # INVESTIGATION (08-03) flagged this as a mandatory wire-up gap.
+    if is_vendor_elf:
+        elf_stem_for_input = VENDOR_TO_ELF_STEM.get(op_dir, op_dir.lower())
+        vendor_input = elf_path.parent / "data" / (
+            "n1s16_" + elf_stem_for_input + "_input.txt"
+        )
+        if vendor_input.exists():
+            env["GTX_DDR_INIT"] = str(vendor_input)
+        # If absent, leave unset -- the kernel may not require operand
+        # staging (e.g. ARANGE which generates its input internally).
+
+    # P8 08-04: vendor `.elf` uses multi-tile firmware loops (e.g.
+    # n1s16_abs.c iterates tile_row_start until ROWS_PER_NEST). Each
+    # iteration ends with `__join` (custom1 funct3=0b101) which raises
+    # SystemExit(0) by default -- but that exits before the for-loop's
+    # subsequent tiles run. Setting GTX_NO_EXIT lets WJOIN return 0; the
+    # kernel exits cleanly via main return -> tohost (HTIF). P5/P6
+    # hand-built single-iteration kernels are unaffected (they have at
+    # most one __join, and exit-on-first-join is fine for them).
+    if is_vendor_elf:
+        env["GTX_NO_EXIT"] = "1"
+    else:
+        env.pop("GTX_NO_EXIT", None)  # P5/P6: WJOIN must raise SystemExit(0)
+
     # D-10: vendor pre-built .elf use BE FP16 ordering -> require
     # GTX_DDR_REVERSED=1 for the subprocess only. P5/P6 hand-built .elf
     # use LE FP16 (pyspike default) and remain unaffected.
     # Inline scope (NOT autouse fixture) per CONTEXT.md D-10.
-    try:
-        if elf_path.is_relative_to(vendor_root_for_env):
-            env["GTX_DDR_REVERSED"] = "1"
-    except (ValueError, AttributeError):
-        # is_relative_to is Python 3.9+; cp310+ baseline so this should
-        # always succeed. Guard for unforeseen Path subclass behavior.
-        pass
+    if is_vendor_elf:
+        env["GTX_DDR_REVERSED"] = "1"
 
+    # P8 08-04: vendor multi-tile kernels (ABS with HEIGHT=393217 -> 96 tiles)
+    # take several minutes per op on functional simulation. P5/P6 hand-built
+    # kernels finish in seconds. Use a 600s ceiling for vendor and 120s for
+    # hand-built so a stuck NPU still surfaces deterministically.
+    subprocess_timeout = 600 if is_vendor_elf else 120
     try:
         result = subprocess.run(
             cmd, env=env, capture_output=True, text=True,
-            timeout=120, check=False,
+            timeout=subprocess_timeout, check=False,
         )
     except FileNotFoundError as exc:
         pytest.skip("pyspike CLI not found: " + str(exc))
     except subprocess.TimeoutExpired:
-        pytest.fail(op_dir + ": pyspike subprocess timeout (120s)")
+        pytest.fail(
+            op_dir + ": pyspike subprocess timeout ("
+            + str(subprocess_timeout) + "s)"
+        )
 
     if result.returncode != 0:
         pytest.fail(
