@@ -28,9 +28,10 @@ skipif decorators so the module loads cleanly even when _riscv.so is absent.
 
 Plan 08-01: tasks 1 + 2 land atomically as a single Wave 0 commit (no
 inter-task commit) so the _drive_full_tile helper is never stub-only on
-disk. test_tile_boundary_byte_exact is decorated @pytest.mark.xfail
-(strict=False) for the Wave 0 RED state; Plan 08-04 surgical fix flips it
-to strict=True once GREEN.
+disk. test_tile_boundary_byte_exact was originally decorated as xfail
+(strict=False) for the Wave 0 RED state; Plan 08-04 fix landed (vendor
+parity credit_ld_chk -> deferred queue flush) and the decorator was
+removed so any future regression hard-fails.
 
 Deviation notes (Rule 3 -- fix blocking issues to match real production API):
   - Plan's <interfaces> block listed firmware_dma_sloop_load(npu, args, ...).
