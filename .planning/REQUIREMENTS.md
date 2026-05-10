@@ -256,12 +256,12 @@ extras (`pip install spike[fast]`) are opt-in.
 | NJIT-06 | Phase 7 | Complete |
 | NJIT-07 | Phase 7 | Complete |
 | NJIT-08 | Phase 7 | Complete |
-| MTDMA-01 | Phase 8 | Pending |
+| MTDMA-01 | Phase 8 | Complete |
 | MTDMA-02 | Phase 8 | Pending |
 | MTDMA-03 | Phase 8 | Complete |
 | MTDMA-04 | Phase 8 | Complete |
 | VTW-01 | Phase 8 | Complete |
-| VTW-02 | Phase 8 | Pending |
+| VTW-02 | Phase 8 | Complete |
 | VTW-03 | Phase 8 | Pending |
 | VTW-04 | Phase 8 | Complete |
 
@@ -284,7 +284,7 @@ extras (`pip install spike[fast]`) are opt-in.
 
 ### Multi-tile DMA Parity (MTDMA)
 
-- [ ] **MTDMA-01**: vendor `gtx_npu_dma.cc` tile loop의 DDR↔L2 + L2↔L1
+- [x] **MTDMA-01**: vendor `gtx_npu_dma.cc` tile loop의 DDR↔L2 + L2↔L1
   multi-tile orchestration을 pyspike에 1:1 포팅 — `n1s16_<op>.elf`가 tile 1
   ~ tile N 모두 byte-exact PASS (현재는 tile 1만 PASS, tile 2부터 diverge)
 - [ ] **MTDMA-02**: `GTX_DDR_REVERSED=1` 시맨틱이 vendor BE FP16 ↔ pyspike LE
@@ -304,7 +304,7 @@ extras (`pip install spike[fast]`) are opt-in.
 - [x] **VTW-01**: `pyspike/test/<OP>/n1s16/n1s16_<op>.elf` (79개) + `_ref.txt`
   (70개) untracked 자산을 정식 fixture로 wire-up. `import_vendor_golden.py`
   확장으로 `tests/gtx/data/firmware/`에 import (또는 `_find_elf` 다중 경로 탐색)
-- [ ] **VTW-02**: P7 HUMAN-UAT 항목 #1 종결 — `pytest
+- [x] **VTW-02**: P7 HUMAN-UAT 항목 #1 종결 — `pytest
   tests/gtx/test_regression_fw_full_sweep.py -v --no-cov` 가 `M ≥ 12` PASS
   보고 (대표 6 op: ABS, ADD_VV, MUL_VV, RELU, SIGMOID, GELU + 추가 6개)
 - [ ] **VTW-03**: P7 HUMAN-UAT 항목 #2 종결 — `tests/gtx/data/baseline_walltime.txt`
