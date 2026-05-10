@@ -3,7 +3,7 @@
 **Created:** 2026-05-04
 **Granularity:** standard (5–8 phases)
 **Parallelization:** enabled
-**Coverage:** 42/42 v1 requirements mapped
+**Coverage:** 50/50 v1.0 requirements mapped + 8/8 v1.1 requirements mapped (58/58 total)
 
 **Core Value:** 기존 NPU 펌웨어(.elf) 회귀 테스트가 pyspike+Python NPU에서도 그대로
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
@@ -13,6 +13,9 @@ golden)와 ULP 허용오차 내로 일치한다.
 `pyspike --extlib=riscv.gtx <fw>.elf` produces a DDR dump that
 `verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
 (`exact_matches == total_fp16`) against the C++ golden hex.
+
+**Phases shipped (v1.0):** 1–7 ✓
+**Current milestone:** v1.1 — Multi-tile DMA Orchestration Parity (Phase 8)
 
 ---
 
@@ -25,6 +28,10 @@ golden)와 ULP 허용오차 내로 일치한다.
 - [ ] **Phase 5: VEC/ACT/Pool** — Vector ops (SASMD/DOT/VSUM/CLAMP), forward+reversed activations, pooling, format_cvt (incl. FP8 codec), per-op `verify_ref` oracle suite
 - [ ] **Phase 6: Verification & Wheel** — `verify.py` ported as `riscv.gtx._verify`, full .elf regression harness (strict mode), `pip install spike` ship gate, cibuildwheel matrix green
 - [ ] **Phase 7: Numba Dynamic Optimization** — 정상 동작 확인 후 numba 등 동적 최적화 라이브러리로 핫스팟 가속 (P6 회귀 그린이 진입 조건)
+
+### Milestone v1.1 — Post-Ship Polish
+
+- [ ] **Phase 8: Multi-tile DMA Parity** — Port vendor `gtx_npu_dma.cc` multi-tile loop so vendor 84-op `n1s16` regression passes strict-mode past the first `MAX_SHARED_DMA_BYTES=65535` boundary; close P7 HUMAN-UAT items #1 (M ≥ 12 sweep PASS) and #2 (5x walltime measurement)
 
 ---
 
@@ -187,40 +194,6 @@ golden)와 ULP 허용오차 내로 일치한다.
 
 ---
 
-## Progress Table
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Foundation | 5/5 | Complete   | 2026-05-04 |
-| 2. Skeleton & Disasm | 0/5 | Not started | - |
-| 3. DMA & DDR I/O | 5/5 | Complete   | 2026-05-05 |
-| 4. MM Subsystem | 4/5 | In Progress | - |
-| 5. VEC/ACT/Pool | 2/6 | In Progress | - |
-| 6. Verification & Wheel | 1/5 | In Progress|  |
-
----
-
-## Phase Ordering Rationale
-
-- **Bit-exact dependency chain:** FP helpers (P1) → memory views (P1) → SPR + dispatch (P2) → DMA (P3) → MM (P4) → VEC/ACT (P5) → regression + wheel (P6). Each phase strictly extends the prior so failures localise to the most recent phase.
-- **MM-first per PROJECT.md:** P4 proves the project's "Core Value" (first .elf regression). P1–P3 are infrastructure that exist solely to unblock P4.
-- **Risk-front-loading:** All 6 critical pitfalls (LE byte order, FP32 accumulate rule, mxe_accum continuity, xs1=0 quirk, funct7 collision, ACT direction asymmetry) have explicit acceptance criteria in P1–P5; none defer to P6.
-- **Verify-throughout, not verify-last:** Per-op `verify_ref.py` oracles are integrated from P4 onward (MM) and P5 (VEC/ACT). P6 only adds the full `.elf` harness and packaging — not new verification logic.
-
----
-
-## Coverage Summary
-
-| Phase | Requirements | Count |
-|-------|--------------|-------|
-| 1. Foundation | FOUND-01, FOUND-02, FOUND-03, FOUND-04, PKG-02 | 5 |
-| 2. Skeleton & Disasm | CORE-01, CORE-02, CORE-03, CORE-04, SPR-01, SPR-02, DISASM-01, DISP-01, DISP-02 | 9 |
-| 3. DMA & DDR I/O | DMA-01, DMA-02, DMA-03, DMA-04, DMA-05, DISP-03 | 6 |
-| 4. MM Subsystem | MM-01, MM-02, MM-03, MM-04, MM-05 | 5 |
-| 5. VEC/ACT/Pool | VEC-01, VEC-02, VEC-03, VEC-04, VEC-05, ACT-01, ACT-02, ACT-03, ACT-04, ACT-05, VRF-02 | 11 |
-| 6. Verification & Wheel | VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04 | 6 |
-| **Total** | | **42 / 42** |
-
 ### Phase 7: Numba Dynamic Optimization
 
 **Goal**: 28 stateless GTX NPU kernels (`gemm_core` 3 + `vec_core` 7 + `act_core` 18) accelerate via optional numba `@njit(cache=True)` lazy import with auto NumPy fallback; vendor 84-op `n1s16` regression sweep passes strict-mode (M passed + N skipped == 84); wall-clock walltime is at least 5x faster than P6 NumPy-only baseline; base wheel remains NumPy-only with `pip install spike[fast]` opt-in extras.
@@ -247,7 +220,86 @@ golden)와 ULP 허용오차 내로 일치한다.
 
 ---
 
+## Milestone v1.1 — Post-Ship Polish (Multi-tile DMA Orchestration Parity)
+
+**Triggered:** 2026-05-10 by P7 ABS smoke test discovery (see
+`.planning/phases/07-numba/07-HUMAN-UAT.md` Findings + seed
+`.planning/seeds/p8-multi-tile-dma.md`).
+
+**Why a single phase:** All 8 v1.1 requirements (MTDMA-01..04 + VTW-01..04)
+are tightly coupled around a single observable goal — the vendor 84-op
+`n1s16` regression sweep passes strict-mode `compare_hex(strict=True)`
+past the first `MAX_SHARED_DMA_BYTES=65535` boundary. MTDMA-* land the
+fix; VTW-* wire the validation harness that proves the fix; the two
+clusters are sequential within the same phase (Wave 0 wire-up → Wave 1
+fix → Wave 2 closure) and split would create artificial test fixtures
+that don't validate end-to-end. Plan-phase will decompose into 4–6
+plans across these waves.
+
+### Phase 8: Multi-tile DMA Parity
+
+**Goal**: Vendor 84-op `n1s16` regression sweep (`pyspike/test/<OP>/n1s16/n1s16_<op>.elf`) passes strict-mode `compare_hex(strict=True)` against `_ref.txt` golden for the **full output region** (not just the first DMA tile) under `GTX_DDR_REVERSED=1`. P7 HUMAN-UAT items #1 (M ≥ 12 sweep PASS) and #2 (5x walltime, baseline re-recorded under `HAS_NUMBA=False`) close out via `/gsd:verify-work 7`. Deliver the missing multi-tile DMA orchestration path from vendor `gtx_npu_dma.cc` plus a vendor-`.elf`-free tile-2 unit-test guard against regression.
+
+**Depends on**: Phase 7 (numba JIT path validated + 84-op sweep harness + perf benchmark scaffold all wired; this phase only needs to flip the M=0 → M ≥ 12 status by landing correctness + fixtures)
+
+**Requirements**: MTDMA-01, MTDMA-02, MTDMA-03, MTDMA-04, VTW-01, VTW-02, VTW-03, VTW-04
+
+**Success Criteria** (what must be TRUE):
+  1. **Vendor smoke set passes strict-mode end-to-end (MTDMA-01 + VTW-01 + VTW-02):** `pytest tests/gtx/test_regression_fw_full_sweep.py -v --no-cov` reports `M passed + N skipped where M+N == 84 and M ≥ 12`, with the representative smoke set `{ABS, ADD_VV, MUL_VV, RELU, SIGMOID, GELU}` plus 6 additional ops all PASSing strict-mode `compare_hex(strict=True)` byte-exact against the vendor `_ref.txt` golden under `GTX_DDR_REVERSED=1`. Pre-fix baseline: only the first ~2047 lines (~64 KB / `MAX_SHARED_DMA_BYTES=65535`) match; post-fix: full DDR output region matches.
+  2. **Tile-boundary regression guard exists vendor-`.elf`-free (MTDMA-03):** `pytest tests/gtx/test_multi_tile_dma.py -v --no-cov` PASSes a tile-1↔tile-2 boundary unit test built from an in-memory fixture (small HEIGHT, two tiles only — no vendor `.elf` dependency). Test FAILs RED before the MTDMA-01 fix lands and FLIPs GREEN after, proving the protection is real (recorded in plan SUMMARY).
+  3. **`GTX_DDR_REVERSED` semantics auto-applied + documented (MTDMA-02 + MTDMA-04):** the vendor sweep regression harness (`tests/gtx/conftest.py` fixture + `tests/gtx/test_regression_fw_full_sweep.py`) sets `GTX_DDR_REVERSED=1` automatically for vendor-derived `.elf`/`_ref.txt` pairs (no manual env-var dance per test); `tests/gtx/data/firmware/README.md` documents the BE FP16 ↔ LE FP16 contract; `__split` / `__start_plan` / `__start_thread` / `__credit_chk` state-machine reset across tile boundaries is verified by direct assertion (NEST/SPU dispatch context refreshed at tile 2 entry — guards vendor `gtx_npu_dma.cc` hypothesis #4).
+  4. **5x walltime gate fires under HAS_NUMBA=False baseline (VTW-03):** `tests/gtx/data/baseline_walltime.txt` is re-recorded with `HAS_NUMBA=False` against the now-passing vendor sweep, then `pytest tests/gtx/test_njit_perf.py --benchmark-only` reports `test_vendor_sweep_walltime_5x` as PASS (asserts `benchmark.stats['mean'] * 5 <= baseline_walltime`, NOT skipped via the 30s `pytest.skip` threshold). Closes P7 HUMAN-UAT item #2.
+  5. **Vendor `.elf` asset policy decided + recorded (VTW-04):** the 79 `n1s16_<op>.elf` + 70 `_ref.txt` files currently untracked at `/mnt/e/14_NIGHTLY/pyspike/test/` have a documented commit/symlink/separate-repo decision in `tests/gtx/data/firmware/README.md` with explicit `MANIFEST.in` and wheel-size impact assessment. Either the chosen path lands in `tests/gtx/data/firmware/` via `import_vendor_golden.py` extension, or `_find_elf` learns a documented multi-path search; in both cases the regression harness resolves vendor fixtures deterministically without per-developer environment knobs.
+
+**Plans:** TBD (will be set during `/gsd:plan-phase 8`; expected 4–6 plans across Wave 0 vendor wire-up → Wave 1 multi-tile DMA fix → Wave 2 verification closure)
+**UI hint**: no
+
+---
+
+## Progress Table
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Foundation | 5/5 | Complete   | 2026-05-04 |
+| 2. Skeleton & Disasm | 0/5 | Not started | - |
+| 3. DMA & DDR I/O | 5/5 | Complete   | 2026-05-05 |
+| 4. MM Subsystem | 4/5 | In Progress | - |
+| 5. VEC/ACT/Pool | 2/6 | In Progress | - |
+| 6. Verification & Wheel | 1/5 | In Progress|  |
+| 7. Numba Dynamic Optimization | 6/6 | Complete | 2026-05-09 |
+| 8. Multi-tile DMA Parity (v1.1) | 0/TBD | Not started (defining context) | - |
+
+---
+
+## Phase Ordering Rationale
+
+- **Bit-exact dependency chain:** FP helpers (P1) → memory views (P1) → SPR + dispatch (P2) → DMA (P3) → MM (P4) → VEC/ACT (P5) → regression + wheel (P6) → JIT (P7) → multi-tile DMA parity (P8). Each phase strictly extends the prior so failures localise to the most recent phase.
+- **MM-first per PROJECT.md:** P4 proves the project's "Core Value" (first .elf regression). P1–P3 are infrastructure that exist solely to unblock P4.
+- **Risk-front-loading:** All 6 critical pitfalls (LE byte order, FP32 accumulate rule, mxe_accum continuity, xs1=0 quirk, funct7 collision, ACT direction asymmetry) have explicit acceptance criteria in P1–P5; none defer to P6.
+- **Verify-throughout, not verify-last:** Per-op `verify_ref.py` oracles are integrated from P4 onward (MM) and P5 (VEC/ACT). P6 only adds the full `.elf` harness and packaging — not new verification logic.
+- **Post-ship polish discipline:** P8 only exists because P7 ABS smoke test surfaced a real defect (multi-tile DMA orchestration) that single-tile P5/P6 hand-written `.elf` fixtures never exercised. The fix path is deterministic — vendor `gtx_npu_dma.cc` is the reference port target — and the validation infrastructure (84-op sweep harness + walltime gate) already landed in P7. P8 closes the verification loop by activating that infrastructure against a corrected NPU model.
+
+---
+
+## Coverage Summary
+
+| Phase | Requirements | Count |
+|-------|--------------|-------|
+| 1. Foundation | FOUND-01, FOUND-02, FOUND-03, FOUND-04, PKG-02 | 5 |
+| 2. Skeleton & Disasm | CORE-01, CORE-02, CORE-03, CORE-04, SPR-01, SPR-02, DISASM-01, DISP-01, DISP-02 | 9 |
+| 3. DMA & DDR I/O | DMA-01, DMA-02, DMA-03, DMA-04, DMA-05, DISP-03 | 6 |
+| 4. MM Subsystem | MM-01, MM-02, MM-03, MM-04, MM-05 | 5 |
+| 5. VEC/ACT/Pool | VEC-01, VEC-02, VEC-03, VEC-04, VEC-05, ACT-01, ACT-02, ACT-03, ACT-04, ACT-05, VRF-02 | 11 |
+| 6. Verification & Wheel | VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04 | 6 |
+| 7. Numba Dynamic Optimization | NJIT-01, NJIT-02, NJIT-03, NJIT-04, NJIT-05, NJIT-06, NJIT-07, NJIT-08 | 8 |
+| 8. Multi-tile DMA Parity (v1.1) | MTDMA-01, MTDMA-02, MTDMA-03, MTDMA-04, VTW-01, VTW-02, VTW-03, VTW-04 | 8 |
+| **Total v1.0** | | **50 / 50** |
+| **Total v1.1** | | **8 / 8** |
+| **Combined** | | **58 / 58** |
+
+---
+
 *Roadmap created: 2026-05-04*
-*Last updated: 2026-05-04 after Phase 1 discuss (NumPy 2.x / cp310 / FP16 view pivot — D-07/D-08/D-09)*
+*Last updated: 2026-05-10 after v1.1 startup — Phase 8 (Multi-tile DMA Parity) appended to close P7 HUMAN-UAT items #1/#2 and land vendor 84-op sweep correctness*
 *Granularity: standard*
 *Coverage: 100%*

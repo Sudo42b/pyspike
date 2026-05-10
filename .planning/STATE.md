@@ -6,16 +6,18 @@ current_plan: Not started
 status: defining_requirements
 last_updated: "2026-05-10T00:00:00Z"
 progress:
-  total_phases: 0
-  completed_phases: 0
+  total_phases: 8
+  completed_phases: 7
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 87.5
+phase: 8
+phase_name: multi-tile-dma-parity
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
 
-**Last updated:** 2026-05-07 after Phase 6 context gathered (CONTEXT.md + DISCUSSION-LOG.md). 18 decisions D-01..D-18 lock-in across 6 areas: VRF-01 hybrid `_verify` base + dual CLI entry + vendor argparse 1:1 with `--strict`; GTX_DDR_DUMP atexit hook at import-time in `riscv.gtx.__init__` with body in `riscv.gtx.ddr` and vendor 1:1 env vars; regression scope = core op set ~10-20 with vendor `n1s16_<op>.c` 1:1 single-build single parametrize roll; golden source = `vendor/test/<OP>/n1s16/data/{kernel}_ref.txt` direct loan with P4/P5 `.hex` format kept and dev-only vendor build; wheel asset via build-time copy + `_verify` helper API + bundle-first 50MB sizing; 5 plans / 3 waves with Wave 1a parallel 3 (VRF-01 / atexit / VRF-03), Wave 1b 1 (VRF-04 regression), Wave 2 1 (PKG-01/03/04 integrated). Resume: `.planning/phases/06-verification-wheel/06-CONTEXT.md` → `/gsd:plan-phase 6`
+**Last updated:** 2026-05-10 after Milestone v1.1 roadmap creation. v1.0 shipped Phases 1–7 (numba JIT path validated, 28 stateless kernels accelerated, vendor 84-op sweep harness scaffold landed but M=0 due to multi-tile DMA orchestration defect surfaced by P7 ABS smoke test). v1.1 adds **Phase 8 — Multi-tile DMA Parity** (single-phase milestone, 8 requirements MTDMA-01..04 + VTW-01..04). Phase 8 goal: vendor `n1s16_<op>.elf` × `_ref.txt` strict-mode `compare_hex(strict=True)` PASSes past the first `MAX_SHARED_DMA_BYTES=65535` boundary under `GTX_DDR_REVERSED=1`, M ≥ 12 representative ops PASS (ABS, ADD_VV, MUL_VV, RELU, SIGMOID, GELU + 6 more), tile-2 unit test guards against vendor-`.elf`-free regression, and P7 HUMAN-UAT items #1 (M ≥ 12 sweep) and #2 (5x walltime under HAS_NUMBA=False baseline) close out via `/gsd:verify-work 7`. Resume: `.planning/seeds/p8-multi-tile-dma.md` → `/gsd:plan-phase 8`
 
 ## Project Reference
 
@@ -34,17 +36,22 @@ M ≥ 12 PASS = milestone success criterion.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining v1.1 requirements
-Last activity: 2026-05-10 — Milestone v1.1 started
+Phase: 8 — Multi-tile DMA Parity (defining context)
+Plan: TBD (will be set during `/gsd:plan-phase 8`)
+Total Plans in Phase: TBD (4–6 expected — Wave 0 wire-up → Wave 1 fix → Wave 2 verification closure)
+Status: Roadmap landed; awaiting `/gsd:phase-context 8` then `/gsd:plan-phase 8`
+Last activity: 2026-05-10 — v1.1 roadmap created, Phase 8 appended after Phase 7
 
 ## Performance Metrics
 
 | Metric | Target | Current |
 |--------|--------|---------|
-| v1 requirement coverage | 42/42 | 42/42 ✓ |
-| Phases completed | 6 | 0 |
+| v1.0 requirement coverage | 50/50 | 50/50 ✓ |
+| v1.1 requirement coverage | 8/8 | 8/8 mapped (0/8 satisfied) |
+| Phases completed | 8 | 7 |
+| .elf regressions passing strict (vendor sweep M ≥ 12) | M ≥ 12 | M = 0 (pending P8 fix) |
+| Multi-tile DMA orchestration parity | strict-mode PASS past tile 1 | First tile only (~64 KB / `MAX_SHARED_DMA_BYTES=65535`) PASS, tile 2+ diverges |
+| P7 HUMAN-UAT items closed | 2/2 | 0/2 (both blocked on P8 MTDMA-01 fix) |
 | .elf regressions passing strict | 100% | 0% |
 | Wheel size | ≤50MB | TBD |
 | cp310–cp312 cibuildwheel matrix (D-08, cp38/cp39 dropped) | green | TBD — Phase 1 will adjust matrix |
@@ -88,6 +95,7 @@ Last activity: 2026-05-10 — Milestone v1.1 started
 ### Roadmap Evolution
 
 - Phase 7 added: 제대로 동작을 하면, numba 등의 라이브러리를 통해 동적 최적화 기술을 이용하여 최적화 (정상 동작 확인 후 핫스팟 가속; 진입 조건 = P6 회귀 그린)
+- Phase 8 added (2026-05-10, v1.1 milestone open): Multi-tile DMA Orchestration Parity — surfaced by P7 ABS smoke test (4.8 s with numba; first DMA tile byte-exact under `GTX_DDR_REVERSED=1` but lines past `MAX_SHARED_DMA_BYTES=65535` diverge). Single-phase milestone; 8 requirements MTDMA-01..04 (port vendor `gtx_npu_dma.cc` multi-tile loop + state-machine reset verification + tile-2 guard) + VTW-01..04 (wire 79 vendor `.elf` + 70 `_ref.txt` as fixtures, close P7 HUMAN-UAT items #1 M ≥ 12 sweep PASS and #2 5x walltime under `HAS_NUMBA=False` baseline, decide vendor `.elf` git asset policy). Depends on Phase 7 (sweep harness + perf benchmark scaffold already wired).
 
 ### Phase 2 Plan 01 Decisions (locked during execution)
 
