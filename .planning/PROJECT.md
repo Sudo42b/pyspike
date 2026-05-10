@@ -8,6 +8,33 @@
 패키지에 동봉되어, 사용자가 `pip install spike` 후 한 줄로 GTX NPU 시뮬레이션을
 띄우고 ISA/op를 Python에서 자유롭게 변형·검증할 수 있게 한다.
 
+## Current Milestone: v1.1 Post-Ship Polish — Multi-tile DMA Orchestration Parity
+
+**Goal:** v1.0 numba ship 후 발견된 multi-tile DMA orchestration 버그를 수정해
+vendor 84-op `n1s16` 회귀가 strict-mode로 PASS하도록 만들기. P7 HUMAN-UAT 2건
+(M ≥ 12 sweep, 5x walltime) 종결을 통해 v1 출하 사이클의 마지막 verification 갭
+해소.
+
+**Target features:**
+- Multi-tile DMA orchestration 정합성 (DDR↔L2↔L1 포인터 advance, L1 bank reuse,
+  credit gate, plan/thread state reset)
+- Vendor 84-op 회귀 sweep 활성화 (`pyspike/test/<OP>/n1s16/n1s16_<op>.elf` +
+  `_ref.txt` golden)
+- `GTX_DDR_REVERSED` 시맨틱 정합 (vendor BE FP16 ↔ pyspike LE FP16) 문서화 + 회귀
+  게이트 통합
+- Tile-2 unit test 추가 (vendor `.elf` 의존 없는 회귀 방지 가드)
+- P7 HUMAN-UAT 2건 종결 (M ≥ 12 sweep PASS + 5x walltime 측정)
+
+**Trigger:** P7 ABS smoke test (2026-05-10) — `n1s16_abs.elf`가 numba와 함께
+4.8s에 실행되었지만 첫 DMA tile (~64KB / `MAX_SHARED_DMA_BYTES=65535`)만 byte-exact
+PASS, tile 2부터 diverge. 시드 `.planning/seeds/p8-multi-tile-dma.md`에 4개 가설 +
+investigation steps 기록.
+
+**Environment assets confirmed:** GFW source tree
+(`/mnt/e/14_NIGHTLY/gtx_spike/gtx-firmware/`, full layout with address.h, 10 headers,
+4 linker scripts) + 79 pre-built vendor `.elf` + 70 `_ref.txt`
+(`/mnt/e/14_NIGHTLY/pyspike/test/`, untracked).
+
 ## Core Value
 
 **기존 NPU 펌웨어(.elf) 회귀 테스트가 pyspike+Python NPU에서도 그대로 통과하고

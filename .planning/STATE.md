@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+milestone: v1.1
+milestone_name: post-ship-polish-multi-tile-dma
 current_plan: Not started
-status: completed
-last_updated: "2026-05-09T15:50:56.957Z"
+status: defining_requirements
+last_updated: "2026-05-10T00:00:00Z"
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 38
-  completed_plans: 38
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -25,23 +25,19 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 07 — numba
+**Current Focus:** Milestone v1.1 — Multi-tile DMA Orchestration Parity (defining requirements)
 
-**Acceptance Gate:** `pyspike --extlib=riscv.gtx <fw>.elf` → DDR dump that
-`verify.py --fp16 --ulp 1 --atol 0.001` reports as **strict-mode pass**
-(`exact_matches == total_fp16`) against C++ golden.
+**Acceptance Gate:** vendor `pyspike/test/<OP>/n1s16/n1s16_<op>.elf` × `GTX_DDR_REVERSED=1`
+sweep → DDR dump that `compare_hex(strict=True)` reports byte-exact against
+`_ref.txt` golden for the FULL output region (not just the first DMA tile).
+M ≥ 12 PASS = milestone success criterion.
 
 ## Current Position
 
-Phase: 07 (numba) — EXECUTING
-Plan: 6 of 6
-Current Plan: Not started
-Total Plans in Phase: 6
-
-- **Phase:** 07
-- **Plan:** 0 of 5 (CONTEXT.md committed; PLAN.md TBD)
-- **Status:** Milestone complete
-- **Progress:** [██████████] 100%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining v1.1 requirements
+Last activity: 2026-05-10 — Milestone v1.1 started
 
 ## Performance Metrics
 
