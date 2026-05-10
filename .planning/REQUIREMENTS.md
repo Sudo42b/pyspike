@@ -260,10 +260,10 @@ extras (`pip install spike[fast]`) are opt-in.
 | MTDMA-02 | Phase 8 | Pending |
 | MTDMA-03 | Phase 8 | Complete |
 | MTDMA-04 | Phase 8 | Complete |
-| VTW-01 | Phase 8 | Pending |
+| VTW-01 | Phase 8 | Complete |
 | VTW-02 | Phase 8 | Pending |
 | VTW-03 | Phase 8 | Pending |
-| VTW-04 | Phase 8 | Pending |
+| VTW-04 | Phase 8 | Complete |
 
 **Coverage:**
 - v1.0 requirements: 50 total — 50 mapped, 100% coverage
@@ -301,7 +301,7 @@ extras (`pip install spike[fast]`) are opt-in.
 
 ### Vendor Test Wire-up (VTW)
 
-- [ ] **VTW-01**: `pyspike/test/<OP>/n1s16/n1s16_<op>.elf` (79개) + `_ref.txt`
+- [x] **VTW-01**: `pyspike/test/<OP>/n1s16/n1s16_<op>.elf` (79개) + `_ref.txt`
   (70개) untracked 자산을 정식 fixture로 wire-up. `import_vendor_golden.py`
   확장으로 `tests/gtx/data/firmware/`에 import (또는 `_find_elf` 다중 경로 탐색)
 - [ ] **VTW-02**: P7 HUMAN-UAT 항목 #1 종결 — `pytest
@@ -311,7 +311,7 @@ extras (`pip install spike[fast]`) are opt-in.
   를 `HAS_NUMBA=False`로 재기록 → `pytest tests/gtx/test_njit_perf.py
   --benchmark-only` 가 `test_vendor_sweep_walltime_5x` PASS (30s threshold
   skip 아님)
-- [ ] **VTW-04**: vendor `.elf` git 자산화 결정 — `test/` 디렉터리를 정식
+- [x] **VTW-04**: vendor `.elf` git 자산화 결정 — `test/` 디렉터리를 정식
   커밋할지, symlink로 둘지, 별도 데이터 레포로 분리할지 명시. `MANIFEST.in` /
   wheel size 영향 평가 + `tests/gtx/data/firmware/README.md` 동기화
 
