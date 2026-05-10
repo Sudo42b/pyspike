@@ -173,9 +173,25 @@ def main(argv=None):
         # P7 NJIT-04 Plan 05 GREEN: walk all 84 vendor op directories and
         # convert each via _discover_kernel_filename + convert_one. Some ops
         # may legitimately lack _ref.txt assets -- skip with explicit count.
+        #
+        # P8 08-02 (D-06 MEDIUM-2 abs.hex race guard): SKIP ops already covered
+        # by the P6 9-op VENDOR_TO_PYSPIKE_OPS mapping so the lower-cased walk
+        # does NOT silently overwrite the P6-emitted golden (e.g., ABS->abs.hex
+        # is lowercased to abs which collides with P6 default mode write).
+        # Without this guard, abs.hex / relu.hex / etc. md5 invariant would
+        # break across re-runs of `--all` after `--default`.
+        vendor_to_pyspike_ops_lower = {k.lower(): v for k, v in VENDOR_TO_PYSPIKE_OPS.items()}
         ok_count = 0
         skip_count = 0
         for op_dir in VENDOR_OPS_84:
+            if op_dir.lower() in vendor_to_pyspike_ops_lower:
+                # P6 9-op default-mode path already handles these (preserves
+                # canonical pyspike op_name e.g. add_vv vs add). Skip silently
+                # to keep abs.hex / relu.hex / sigmoid.hex / tanh.hex / softmax.hex /
+                # add_vv.hex / mul_vv.hex / sum.hex / leaky_relu.hex md5 invariant.
+                print("SKIP: " + op_dir + " (covered by P6 9-op default map)")
+                skip_count += 1
+                continue
             result = _discover_kernel_filename(op_dir)
             if result is None:
                 print("SKIP: " + op_dir + " (no _ref.txt found)")
