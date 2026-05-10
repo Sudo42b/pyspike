@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: post-ship-polish-multi-tile-dma
 current_plan: Not started
-status: defining_requirements
+status: context_gathered
 last_updated: "2026-05-10T00:00:00Z"
 progress:
   total_phases: 8
@@ -13,6 +13,8 @@ progress:
   percent: 87.5
 phase: 8
 phase_name: multi-tile-dma-parity
+stopped_at: "Phase 8 context gathered"
+resume_file: ".planning/phases/08-multi-tile-dma-parity/08-CONTEXT.md"
 ---
 
 # State: pyspike + GTX NPU (Python RoCC Port)
@@ -36,10 +38,10 @@ M ≥ 12 PASS = milestone success criterion.
 
 ## Current Position
 
-Phase: 8 — Multi-tile DMA Parity (defining context)
+Phase: 8 — Multi-tile DMA Parity (context gathered)
 Plan: TBD (will be set during `/gsd:plan-phase 8`)
-Total Plans in Phase: TBD (4–6 expected — Wave 0 wire-up → Wave 1 fix → Wave 2 verification closure)
-Status: Roadmap landed; awaiting `/gsd:phase-context 8` then `/gsd:plan-phase 8`
+Total Plans in Phase: TBD (4–6 expected — Wave 0 vendor wire-up + diff → Wave 1 root-cause fix → Wave 2 verification closure)
+Status: 08-CONTEXT.md landed (commit 00bf361); awaiting `/gsd:plan-phase 8`
 Last activity: 2026-05-10 — v1.1 roadmap created, Phase 8 appended after Phase 7
 
 ## Performance Metrics
