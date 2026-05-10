@@ -30,7 +30,7 @@ from .params import GTX_NEST_NUM, GTX_SPU_NUM
 from .encoding import (
     GTX_OP_DMA,
     GTX_ISS_F7_DMA_LD_SVR_L1, GTX_ISS_F7_DMA_ST_SVR_L1,
-    GTX_ISS_F7_CREDIT_ST_CHK,
+    GTX_ISS_F7_CREDIT_LD_CHK, GTX_ISS_F7_CREDIT_ST_CHK,
 )
 from . import dma_engine
 
@@ -56,7 +56,9 @@ def dispatch_iss_opcode(npu, nest_id: int, spu_id: int, funct7: int,
         return 0
     # Plan 05: credit_st_chk flush trigger (mirror of ops/dma.py:_credit_st_chk
     # for the dispatch_4mode entry path -- RESEARCH "3 call sites" lock-in).
-    if funct7 == GTX_ISS_F7_CREDIT_ST_CHK and npu.warp.is_sloop:
+    # P8 MTDMA-01: vendor parity (gtx_npu_dispatch.cc:898-905) collapses
+    # CREDIT_LD_CHK and CREDIT_ST_CHK; mirror that here.
+    if funct7 in (GTX_ISS_F7_CREDIT_LD_CHK, GTX_ISS_F7_CREDIT_ST_CHK) and npu.warp.is_sloop:
         npu.flush_deferred_ddr_stores()
         return 0
     # P4/P5 will add MM/VEC/ACT cases here. Reference funct7 constants

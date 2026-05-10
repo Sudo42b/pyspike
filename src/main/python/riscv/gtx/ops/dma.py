@@ -37,7 +37,7 @@ from ..encoding import (
     GTX_ISS_F7_DMA_LD_ST, GTX_ISS_F7_DMA_3D,
     GTX_ISS_F7_DMA_MCAST_S2L, GTX_ISS_F7_DMA_LD_SVR_L1,
     GTX_ISS_F7_DMA_MCAST_GS, GTX_ISS_F7_DMA_ST_SVR_L1,
-    GTX_ISS_F7_CREDIT_ST_CHK,
+    GTX_ISS_F7_CREDIT_LD_CHK, GTX_ISS_F7_CREDIT_ST_CHK,
 )
 from ..params import GTX_NEST_NUM, GTX_SPU_NUM
 
@@ -307,8 +307,30 @@ def _copy_mem_stub(npu, proc, insn, xs1, xs2):
 
 
 # ============================================================================
-# credit_st_chk -- stub here; Plan 05 fills body with flush trigger.
+# credit_ld_chk / credit_st_chk -- mid-execution flush trigger for plan-style
+# (WSPLIT/WJOIN) firmware. Vendor parity: gtx_npu_dispatch.cc:898-905 collapses
+# both funct7=0x52 and 0x53 into the same `if (is_sloop) flush_deferred_ddr_stores()`
+# behavior. P8 MTDMA-01: multi-tile vendor `.elf` (e.g. n1s16_abs.c) emits
+# `credit.ld.chk` (0x52) -- NOT `credit.st.chk` (0x53) -- inside the shared
+# block before pushing the next tile's deferred __store_cr; without 0x52 also
+# flushing, the deferred queue accumulates 96+ entries that all read stale L2
+# at exit-time atexit flush, scrambling tiles 0..N-1 with tile N's data.
 # ============================================================================
+@handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_LD_CHK,
+         mnemonic='credit_ld_chk')
+def _credit_ld_chk(npu, proc, insn, xs1, xs2):
+    """Direct port of gtx_npu_dispatch.cc:898-905 (credit.ld.chk branch).
+
+    Vendor collapses CREDIT_LD_CHK and CREDIT_ST_CHK into the same flush
+    behavior. P8 MTDMA-01 fix: vendor multi-tile firmware (n1s16_abs.c et al.)
+    issues `credit.ld.chk` between tiles; this MUST flush so the next tile's
+    L2 overwrite doesn't corrupt the previous tile's deferred-store source.
+    """
+    if npu.warp.is_sloop:
+        npu.flush_deferred_ddr_stores()
+    return 0
+
+
 @handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_ST_CHK,
          mnemonic='credit_st_chk')
 def _credit_st_chk(npu, proc, insn, xs1, xs2):
