@@ -57,6 +57,7 @@ P7 FP8 LUTs (NJIT-02 + RESEARCH "Module-level LUT capture"):
 """
 from __future__ import annotations
 import numpy as np
+import torch
 from numpy.typing import NDArray
 
 from ._jit import njit, HAS_NUMBA  # noqa: F401  (HAS_NUMBA re-exposed for callers)
@@ -71,10 +72,28 @@ except ImportError:  # pragma: no cover -- exercised when `spike[fast]` not inst
 
 
 # ============================================================================
+# C1 torch-migration helpers (2026-05-11)
+# Mirror vec_core._as_fp32 (phase 1, commit 53eb670). Caller may pass numpy
+# arrays, torch tensors, or Python scalars; helper normalises to FP32 torch.
+# ============================================================================
+def _as_fp32(a) -> torch.Tensor:
+    """ndarray | torch.Tensor | scalar -> FP32 torch.Tensor.
+    gtx 외부 API ingestion 포인트. caller가 ndarray 넘겨도 흡수."""
+    if isinstance(a, torch.Tensor):
+        return a.to(torch.float32)
+    return torch.as_tensor(a, dtype=torch.float32)
+
+
+def _to_torch_fp16(t: torch.Tensor) -> torch.Tensor:
+    """FP32 torch.Tensor -> FP16 torch.Tensor (single cast site)."""
+    return t.to(torch.float16)
+
+
+# ============================================================================
 # SECTION A -- FP8 codec LUTs (preserved verbatim from P5)
 # gtx_npu.h:154-221 (RESEARCH §FP8 Codec lines 419-468)
 # ============================================================================
-def _build_fp8_to_fp16_lut() -> np.ndarray:
+def _build_fp8_to_fp16_lut() -> torch.Tensor:
     """Direct port of gtx_npu.h:154-179 gtx_fp8_to_32 (cast to FP16 at output).
 
     DIVERGENCES from NVIDIA E4M3 (Pitfall 5):
@@ -83,8 +102,10 @@ def _build_fp8_to_fp16_lut() -> np.ndarray:
       - h_exp=0xF, h_frac>0: maps to NaN.
 
     Bit layout: sign[7] exp[6:3] frac[2:0]; bias = 7.
+
+    C1: storage migrated np.ndarray -> torch.Tensor. Numeric loop unchanged.
     """
-    out = np.zeros(256, dtype=np.float16)
+    vals: list[float] = []
     for h in range(256):
         h_sign = (h & 0x80) >> 7
         h_exp  = (h & 0x78) >> 3
@@ -101,16 +122,17 @@ def _build_fp8_to_fp16_lut() -> np.ndarray:
                 val = float('nan')
         else:
             val = (1.0 + h_frac / 8.0) * (2.0 ** (h_exp - 7))
-        if h_sign and not np.isnan(val):
+        if h_sign and not (val != val):  # x!=x is NaN-safe (no numpy needed)
             val = -val
-        out[h] = np.float16(val)
+        vals.append(val)
+    out = torch.tensor(vals, dtype=torch.float16)
     # Preserve negative-zero bit pattern for h=0x80 (sign=1, exp=0, frac=0).
-    # `val = -0.0` followed by `np.float16(-0.0)` gives 0x8000 LE -- correct.
-    out[0x80] = np.float16(-0.0)
+    # torch.tensor(-0.0, dtype=torch.float16) -> 0x8000 LE (verified empirically).
+    out[0x80] = torch.tensor(-0.0, dtype=torch.float16)
     return out
 
 
-def _build_fp16_to_fp8_lut() -> np.ndarray:
+def _build_fp16_to_fp8_lut() -> torch.Tensor:
     """Direct port of gtx_npu.h:182-221 gtx_fp16_to_8.
 
     For all 65536 FP16 inputs, compute the closest FP8 byte. Cases:
@@ -120,6 +142,9 @@ def _build_fp16_to_fp8_lut() -> np.ndarray:
       new_e > 14: overflow -> sign|0xF8 (inf).
 
     Built once at module import (D-15). 64KB cost; one-time ~50-100 ms.
+
+    C1: storage migrated np.ndarray -> torch.Tensor. Numeric loop unchanged
+    (numpy uint8 buffer used internally then wrapped to torch at return).
     """
     out = np.zeros(65536, dtype=np.uint8)
     for h in range(65536):
@@ -167,15 +192,40 @@ def _build_fp16_to_fp8_lut() -> np.ndarray:
             continue
         # new_e > 14: overflow -> inf
         out[h] = sign8 | 0xF8
-    return out
+    return torch.from_numpy(out)
 
 
 # Build at module import (D-14, D-15). Numba captures these as Read-only Globals
 # (RESEARCH "Module-level LUT capture" verified empirical) BUT FP16 globals are
 # not directly usable inside @njit. The LUTs are accessed exclusively from the
 # public wrappers (NOT inside `_impl` bodies).
-FP8_TO_FP16_LUT: np.ndarray = _build_fp8_to_fp16_lut()
-FP16_TO_FP8_LUT: np.ndarray = _build_fp16_to_fp8_lut()
+#
+# C1 (2026-05-11): storage np.ndarray -> torch.Tensor. cvt_qh/cvt_hq wrappers
+# (still numpy-based, C4 scope) use the *_NP aliases below so their numpy
+# indexing/.astype path stays untouched until the C4 migration.
+FP8_TO_FP16_LUT: torch.Tensor = _build_fp8_to_fp16_lut()
+FP16_TO_FP8_LUT: torch.Tensor = _build_fp16_to_fp8_lut()
+
+# Compat aliases for cvt_qh / cvt_hq (C4 scope). Removed when CVT migrates.
+FP8_TO_FP16_LUT_NP: np.ndarray = FP8_TO_FP16_LUT.numpy()
+FP16_TO_FP8_LUT_NP: np.ndarray = FP16_TO_FP8_LUT.numpy()
+
+
+# ============================================================================
+# C1 e4m3 dual-path codec (NVIDIA-native, separate from GTX-custom LUT path)
+# ============================================================================
+def fp8_e4m3_to_fp16(t_e4m3: torch.Tensor) -> torch.Tensor:
+    """NVIDIA E4M3 native codec (torch.float8_e4m3fn -> FP16).
+    GTX-custom LUT과 별개 경로. vendor parity 필요시 LUT 경로 사용."""
+    return t_e4m3.to(torch.float16)
+
+
+def fp16_to_fp8_e4m3(t_fp16: torch.Tensor) -> torch.Tensor:
+    """FP16 -> NVIDIA E4M3 native (torch.float8_e4m3fn).
+    GTX-custom encoding과 일치 보장 안 함 -- 신규 학습 경로용."""
+    if not isinstance(t_fp16, torch.Tensor):
+        t_fp16 = torch.as_tensor(t_fp16, dtype=torch.float16)
+    return t_fp16.to(torch.float8_e4m3fn)
 
 
 # ============================================================================
@@ -184,23 +234,10 @@ FP16_TO_FP8_LUT: np.ndarray = _build_fp16_to_fp8_lut()
 # ============================================================================
 
 # ---- Activations: 2 non-transcendental (relu, prelu) -----------------------
-def _relu_impl(arr_f32: NDArray[np.float32]) -> NDArray[np.float32]:
-    """RELU FP32: max(0, x). Source: gtx_npu_act.cc:60-67 (forward).
-
-    Numba @njit boundary: FP32 in / FP32 out. `np.maximum` is supported.
-    """
-    return np.maximum(arr_f32, np.float32(0.0))
-
-
-def _prelu_impl(
-    arr_f32: NDArray[np.float32],
-    slope_f32: np.float32,
-) -> NDArray[np.float32]:
-    """PRELU FP32: x if x >= 0 else slope * x. Source: gtx_npu_act.cc:118-131
-    (reversed). Vendor C++ uses `(a < 0.0f) ? slope * a : a`; we mirror exactly.
-    Numba @njit boundary: FP32 in / FP32 out.
-    """
-    return np.where(arr_f32 < np.float32(0.0), slope_f32 * arr_f32, arr_f32)
+# C1 (2026-05-11): relu/prelu migrated to torch backend. Their FP32 `_impl` +
+# `_njit` shells were removed -- the public functions (Section D) now call
+# torch.relu / torch.where directly. The 16 remaining kernels (Pool, 5
+# transcendentals, 9 CVT) keep the @njit/_impl shape until C2/C3/C4.
 
 
 # ---- Activations: 5 transcendentals (objmode escape per NJIT-03 / D-09) ----
@@ -553,10 +590,9 @@ def _cvt_hd_impl(arr_f32: NDArray[np.float32]) -> NDArray[np.float64]:
 # ============================================================================
 # SECTION C -- @njit(cache=True) wrappers (re-call pattern)
 # Transcendentals (5) are already decorated inside the HAS_NUMBA fork above;
-# below covers the 13 non-transcendentals.
+# below covers the 11 non-transcendentals remaining after C1 torch migration
+# (relu/prelu dropped @njit; pool + 9 cvt still wrapped).
 # ============================================================================
-_relu_njit       = njit(cache=True)(_relu_impl)
-_prelu_njit      = njit(cache=True)(_prelu_impl)
 _pool_max_njit   = njit(cache=True)(_pool_max_impl)
 _pool_avg_njit   = njit(cache=True)(_pool_avg_impl)
 _cvt_qh_njit     = njit(cache=True)(_cvt_qh_impl)
@@ -575,23 +611,32 @@ _cvt_hd_njit     = njit(cache=True)(_cvt_hd_impl)
 # ============================================================================
 
 # ---- Activations (7) -------------------------------------------------------
-def relu(arr: NDArray[np.float16]) -> NDArray[np.float16]:
+def relu(arr) -> torch.Tensor:
     """RELU: max(0, x). Source: gtx_npu_act.cc:60-67 (forward).
     FP32 internal compute then single FP16 cast at writeback.
+
+    C1: torch backend (vec_core phase 1 hybrid pattern). Accepts ndarray or
+    torch tensor; returns torch.Tensor[float16] (callers in act_engine assign
+    into numpy slices -- torch tensor implements __array__ for this case).
     """
-    a_f32 = np.ascontiguousarray(arr, dtype=np.float32)
-    out_f32 = _relu_njit(a_f32)
-    return out_f32.astype(np.float16)
+    a_f32 = _as_fp32(arr)
+    return _to_torch_fp16(torch.relu(a_f32))
 
 
-def prelu(arr: NDArray[np.float16], slope: np.float16) -> NDArray[np.float16]:
+def prelu(arr, slope) -> torch.Tensor:
     """PRELU: x if x >= 0 else slope * x. Source: gtx_npu_act.cc:118-131
     (reversed). Vendor C++ uses `(a < 0.0f) ? slope * a : a`.
+
+    C1: torch backend. `slope` may be FP16 scalar (numpy/python float) or a
+    torch tensor; both are accepted.
     """
-    a_f32 = np.ascontiguousarray(arr, dtype=np.float32)
-    s_f32 = np.float32(slope)
-    out_f32 = _prelu_njit(a_f32, s_f32)
-    return out_f32.astype(np.float16)
+    a_f32 = _as_fp32(arr)
+    slope_f32 = (
+        slope.to(torch.float32) if isinstance(slope, torch.Tensor)
+        else float(slope)
+    )
+    out = torch.where(a_f32 < 0.0, slope_f32 * a_f32, a_f32)
+    return _to_torch_fp16(out)
 
 
 def gelu(arr: NDArray[np.float16]) -> NDArray[np.float16]:
@@ -676,7 +721,8 @@ def cvt_qh(arr: NDArray[np.float16], scale: np.float16,
     o_f32 = np.float32(offset)
     f32_scaled = _cvt_qh_njit(a_f32, s_f32, o_f32)
     fp16 = f32_scaled.astype(np.float16)
-    return FP16_TO_FP8_LUT[fp16.view(np.uint16).astype(np.intp)]
+    # C1: use _NP alias to keep numpy indexing/.astype path intact (C4 will migrate).
+    return FP16_TO_FP8_LUT_NP[fp16.view(np.uint16).astype(np.intp)]
 
 
 def cvt_hq(arr: NDArray[np.uint8], scale: np.float16,
@@ -684,7 +730,8 @@ def cvt_hq(arr: NDArray[np.uint8], scale: np.float16,
     """FP8 -> FP16. Decode via LUT then `out = decoded * scale + offset`.
     Source: gtx_npu_act.cc:251-260. LUT decode pre-step in wrapper.
     """
-    decoded_f16 = FP8_TO_FP16_LUT[arr.view(np.uint8).astype(np.intp)]
+    # C1: use _NP alias to keep numpy indexing/.astype path intact (C4 will migrate).
+    decoded_f16 = FP8_TO_FP16_LUT_NP[arr.view(np.uint8).astype(np.intp)]
     decoded_f32 = decoded_f16.astype(np.float32)
     s_f32 = np.float32(scale)
     o_f32 = np.float32(offset)
