@@ -40,6 +40,35 @@ def wrspr_iss(npu, proc, insn, xs1, xs2):
     return 0
 
 
+# P8 RELU fix (2026-05-11): OPSET handler ported from vendor gtx_npu_custom0.cc:116-131.
+# Firmware __clamp_min / __sasmd_imm / DMA load_cr etc. call __opset(slot, value)
+# before the dispatch instruction. slot=0 stages rs3 into GSPR_GTX_OPERAND3 (0x003),
+# slot=1 stages rs4 into GSPR 0x005. Vendor CLAMP_MIN does not actually consume
+# OPERAND4 (only OPERAND2 = rs2 scalar), but the stale OPERAND3 leak from prior
+# instructions caused multi-tile RELU sweeps to dispatch with wrong staging,
+# resulting in 76% byte mismatch vs vendor _ref.txt. Registering OPSET also
+# unblocks firmware DMA / DOT / MM variants that explicitly pre-stage operands.
+@handler(kind='custom0', funct7=0x4A, mnemonic='opset')
+def opset_iss(npu, proc, insn, xs1, xs2):
+    """ISS-full OPSET: stage rs3/rs4 for the next instruction.
+
+    Port of vendor gtx_npu_custom0.cc:116-131.
+    rs1 = slot index (bit 0): 0 -> GSPR_GTX_OPERAND3 (0x003), 1 -> GSPR 0x005.
+    rs2 = staging value (full reg width preserved).
+    OPSET does NOT clear the other slot; both slots are consumed and cleared
+    by the next dispatch (vendor return-without-clear contract).
+    """
+    state = proc.state
+    rs1_val = state.XPR[insn.rs1]
+    rs2_val = state.XPR[insn.rs2]
+    slot = rs1_val & 1
+    if slot == 0:
+        npu.gspr[0x003] = rs2_val  # GSPR_GTX_OPERAND3
+    else:
+        npu.gspr[0x005] = rs2_val  # GSPR_GTX_OPERAND4 (vendor uses literal 0x005)
+    return 0
+
+
 @handler(kind='custom0', funct7=0x48, mnemonic='rdspr')
 def rdspr_iss(npu, proc, insn, xs1, xs2):
     """ISS-full RDSPR: addr = rs1, return rd_spr(addr); force-write to rd (port custom0.cc:96-105)."""
