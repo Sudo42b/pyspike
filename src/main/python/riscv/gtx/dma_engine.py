@@ -194,7 +194,7 @@ def exec_transpose(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
         for j in range(cols):
             s_off = (addr_a + (j + cols * i) * 2) % GTX_L1_SIZE_BYTES
             d_off = (addr_r + (i + rows * j) * 2) % GTX_L1_SIZE_BYTES
-            l1[d_off : d_off + 2] = l1[s_off : s_off + 2].copy()
+            l1[d_off : d_off + 2] = l1[s_off : s_off + 2].clone()
     return 0
 
 
@@ -232,7 +232,7 @@ def exec_transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
     nelem = dim2 * dim1 * dim0
     max_off = max(src_off + nelem * 2, dst_off + nelem * 2)
     ensure_ddr(mem, max_off)
-    cap = mem._ddr_bytes.size  # type: ignore[union-attr]
+    cap = mem._ddr_bytes.numel()  # type: ignore[union-attr]
 
     for i2 in range(dim2):
         for i1 in range(dim1):
@@ -243,7 +243,7 @@ def exec_transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
                 s = src_off + src_idx * 2
                 d = dst_off + dst_idx * 2
                 if s + 1 < cap and d + 1 < cap:
-                    mem._ddr_bytes[d : d + 2] = mem._ddr_bytes[s : s + 2].copy()  # type: ignore[union-attr]
+                    mem._ddr_bytes[d : d + 2] = mem._ddr_bytes[s : s + 2].clone()  # type: ignore[union-attr]
 
 
 # ============================================================================
@@ -305,7 +305,7 @@ def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_l
         ddr_off = ddr_off_base + row * rd_stride
         l2_off = (addr_lo + row * wr_stride) % GTX_L2_SIZE_BYTES
         copy_len = min(length,
-                        ddr.size - ddr_off,
+                        ddr.numel() - ddr_off,
                         GTX_L2_SIZE_BYTES - l2_off)
         if copy_len <= 0:
             continue
@@ -356,7 +356,7 @@ def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
                               length: int, height: int) -> int:
     """T-loop L1 -> L1 same-SPU copy (matches C++ std::memmove semantics).
 
-    `.copy()` on src slice is essential: source/dest may overlap, and numpy
+    `.clone()` on src slice is essential: source/dest may overlap, and numpy
     slice assignment without copy can corrupt overlapping ranges.
     """
     l1 = mem.l1_byte(nest, spu)
@@ -368,5 +368,5 @@ def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
                         GTX_L1_SIZE_BYTES - d_off)
         if copy_len <= 0:
             continue
-        l1[d_off : d_off + copy_len] = l1[s_off : s_off + copy_len].copy()
+        l1[d_off : d_off + copy_len] = l1[s_off : s_off + copy_len].clone()
     return 0

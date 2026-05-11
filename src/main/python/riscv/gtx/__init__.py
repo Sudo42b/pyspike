@@ -20,8 +20,14 @@ constants (`params`), funct7 encoding (`encoding`), and DDR helpers (`ddr`).
 The ROCC subclass is added in Phase 2 (D-14).
 """
 import atexit
+import faulthandler
 import os
 import sys
+
+# Enable faulthandler in embedded interpreter so SIGSEGV produces a traceback
+# (Python's -X faulthandler doesn't reach pyspike's embedded interpreter).
+if os.environ.get('PYSPIKE_FAULTHANDLER', '1') != '0':
+    faulthandler.enable()
 
 # D-09 / RESEARCH.md "Anti-Patterns": np.float16 view assumes little-endian host.
 # manylinux2014_x86_64 is always LE; this tripwire defends against accidental
@@ -51,19 +57,31 @@ except ImportError as _exc:
     # on _RISCV_AVAILABLE.
     npu = None  # type: ignore[assignment]
     GtxNpu = None  # type: ignore[assignment]
+    raise ImportError(
+        "riscv.gtx.npu is not available. This may be expected if you are running "
+        "Phase 1 tests without a built wheel. If you need npu functionality, please "
+        "build the wheel or install from source with 'pip install .'."
+    ) from _exc
 
 __all__ = ["encoding", "fp", "memory", "params", "ddr", "npu", "GtxNpu"]
 
-# P6 D-04: register atexit DDR dump handler when GTX_DDR_DUMP is set at
-# import time. Vendor gtx_npu_core.cc:127 std::atexit(gtx_atexit_ddr_dump)
-# direct port. Conditional gate avoids registering a no-op handler in
-# non-dump runs (mirrors vendor `if (getenv("GTX_DDR_DUMP")) std::atexit(...);`
-# pattern at gtx_npu_core.cc:125-127).
+# P6 D-04 / 2026-05-11 torch migration: the original vendor port registered
+# `_atexit_ddr_dump` via `atexit.register()`. Under pyspike's pybind11
+# embedded interpreter shutdown, torch tensor indexing in the atexit hook
+# triggered SIGSEGV (torch _C internal state torn down before the hook ran;
+# the issue is not reproducible in pure-CPython atexit).
 #
-# IMPORTANT (RESEARCH §Pitfall 4 + Constraint D-04): the env var is read
-# ONCE at import time. Tests that toggle GTX_DDR_DUMP per-call MUST use
-# subprocess.run(..., env=env) (which spawns a fresh interpreter that
-# re-evaluates this gate). In-process tests cannot toggle the registration.
-if os.getenv('GTX_DDR_DUMP'):
-    from .ddr import _atexit_ddr_dump
-    atexit.register(_atexit_ddr_dump)
+# Replacement: WJOIN handlers (control.py wjoin_with_exit + wjoin_custom0)
+# call `_run_ddr_dump()` inline at firmware completion. Multi-tile firmware
+# (e.g. ABS, 96 iterations of __join) re-runs the dump per iteration; the
+# final iteration captures the final DDR state. The semantics match vendor
+# atexit-once (final state wins).
+
+# Pytorch is essentially packed into the ecosystem; many users have it installed.
+# Check to Pytorch CPU or GPU
+try:
+    import torch
+    device: str = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+except ImportError:
+    raise ImportError(
+        "PyTorch is required for riscv.gtx. Please install PyTorch to use this module.")

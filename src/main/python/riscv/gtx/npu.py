@@ -15,7 +15,7 @@
 #
 """GtxNpu -- riscv.isa.ROCC subclass, registered as 'gtx' (CORE-01, D-14)."""
 from typing import List
-import numpy as np
+import torch
 # pylint: disable=import-error,no-name-in-module
 from riscv import isa
 from riscv.csrs import csr_t
@@ -61,8 +61,8 @@ class GtxNpu(isa.ROCC):
         ]
         # mxe_accum: 2D scalar accumulator per (NEST, SPU). FP32. CORRECTED
         # from CONTEXT.md D-06 (4D was wrong -- see C++ gtx_npu.h:1254).
-        self._mxe_accum: np.ndarray = np.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=np.float32
+        self._mxe_accum: torch.Tensor = torch.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.float32
         )
         # P8 (2026-05-11) — per-NEST/per-SPU credit counters (vendor parity).
         # gtx_npu.h:624-625 declares these on the nest struct; pyspike collapses
@@ -70,11 +70,11 @@ class GtxNpu(isa.ROCC):
         # check variants ("always true — DMA is instantaneous") so the counters
         # are stat-only; kept for vendor 1:1 diff invariance and to surface any
         # future check-path coupling without re-architecting.
-        self._credit_ld: np.ndarray = np.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=np.int32
+        self._credit_ld: torch.Tensor = torch.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32
         )
-        self._credit_st: np.ndarray = np.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=np.int32
+        self._credit_st: torch.Tensor = torch.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32
         )
         # Disasm cache (plan 04 fills via _registry.collect_disasms)
         self._disasm_entries: List[disasm_insn_t] = []
@@ -123,14 +123,14 @@ class GtxNpu(isa.ROCC):
         except Exception:
             pass
         # mxe_accum zero-init
-        self._mxe_accum.fill(0.0)
+        self._mxe_accum.fill_(0.0)
         # P8: credit counter zero-init (vendor parity)
-        self._credit_ld.fill(0)
-        self._credit_st.fill(0)
+        self._credit_ld.fill_(0)
+        self._credit_st.fill_(0)
         # Memory zero-init
-        self.mem._l0_bytes.fill(0)
-        self.mem._l1_bytes.fill(0)
-        self.mem._l2_bytes.fill(0)
+        self.mem._l0_bytes.fill_(0)
+        self.mem._l1_bytes.fill_(0)
+        self.mem._l2_bytes.fill_(0)
         # SPR zero-init + defaults (gtx_npu_core.cc:80-109 verbatim)
         self.gspr.clear()
         for addr in (0x000, 0x001, 0x002, 0x003, 0x004, 0x010, 0x011):
@@ -205,17 +205,22 @@ class GtxNpu(isa.ROCC):
         # Lazy-import to avoid circular ddr.py <- dma_engine.py <- this
         from .ddr import ensure_ddr
         from .params import GTX_L2_SIZE_BYTES
+        # atexit-safe: import torch locally so its module ref stays alive
+        # for the duration of this call (avoids _C dtor races during shutdown).
+        import torch  # noqa: F401  -- pin module reference
         for req in self.deferred_ddr_stores:
+            l2_src = self.mem.l2_byte(req.nest).detach().cpu().contiguous()
             for row in range(req.height):
                 ddr_off = req.ddr_off + row * req.ddr_stride
                 l2_off = (req.l2_off + row * req.l2_stride) % GTX_L2_SIZE_BYTES
                 copy_len = req.length
                 ensure_ddr(self.mem, ddr_off + copy_len)
-                copy_len = min(copy_len, self.mem._ddr_bytes.size - ddr_off)
+                ddr_buf = self.mem._ddr_bytes
+                copy_len = min(copy_len, ddr_buf.numel() - ddr_off)
                 copy_len = min(copy_len, GTX_L2_SIZE_BYTES - l2_off)
                 if copy_len > 0:
-                    self.mem._ddr_bytes[ddr_off:ddr_off + copy_len] = (
-                        self.mem.l2_byte(req.nest)[l2_off:l2_off + copy_len]
+                    ddr_buf[ddr_off:ddr_off + copy_len] = (
+                        l2_src[l2_off:l2_off + copy_len]
                     )
         self.deferred_ddr_stores.clear()
 

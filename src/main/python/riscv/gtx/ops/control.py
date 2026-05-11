@@ -167,7 +167,7 @@ def wsplit(npu, proc, insn, xs1, xs2):
 
 @handler(kind='custom1', funct3=0b101, mnemonic='warp_join')
 def wjoin_with_exit(npu, proc, insn, xs1, xs2):
-    """WJOIN -- CORE-03 / D-07 / D-08.
+    """WJOIN -- CORE-03 / D-07 / D-08 + 2026-05-11 inline DDR dump.
 
     Per D-07: read GTX_NO_EXIT every call (no caching).
 
@@ -175,9 +175,15 @@ def wjoin_with_exit(npu, proc, insn, xs1, xs2):
         unset / empty string  -> raises SystemExit (testable via pytest.raises)
         any non-empty value   -> returns 0 (firmware loop continues)
 
-    Note: '0' literally is non-empty, so it is treated as truthy -> return 0.
-    Tests in tests/gtx/test_wjoin.py exercise both branches (D-08).
+    Inline DDR dump (2026-05-11): when GTX_DDR_DUMP is set, run the dump
+    BEFORE returning/exiting. Replaces the atexit hook that crashed under
+    pybind11 embedded interpreter teardown. Multi-tile firmware (ABS, 96
+    iters) calls WJOIN per tile; each dump overwrites the file, final
+    iteration wins (matches vendor atexit-once semantics).
     """
+    if os.environ.get('GTX_DDR_DUMP'):
+        from ..ddr import _run_ddr_dump
+        _run_ddr_dump()
     if os.environ.get('GTX_NO_EXIT'):
         return 0
     raise SystemExit(0)
@@ -219,8 +225,12 @@ def wjoin_custom0_no_exit(npu, proc, insn, xs1, xs2):
     """custom0 funct7=0x03 WJOIN firmware variant -- NEVER raises SystemExit
     (research §439: only custom1 funct3=0b101 has exit semantics).
 
-    Returns 0 (placeholder for P3+ "elapsed cycles" return value).
+    2026-05-11: also triggers inline DDR dump when GTX_DDR_DUMP is set
+    (paired with custom1 WJOIN handler). Returns 0.
     """
+    if os.environ.get('GTX_DDR_DUMP'):
+        from ..ddr import _run_ddr_dump
+        _run_ddr_dump()
     return 0
 
 

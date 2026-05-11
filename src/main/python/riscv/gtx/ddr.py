@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-import numpy as np
+import torch
 
 if TYPE_CHECKING:
     from .memory import GtxMemory   # avoid circular import at runtime
@@ -59,7 +59,7 @@ def get_ddr_cap() -> int:
     return int(val)
 
 
-def ensure_ddr(mem: "GtxMemory", end_offset: int) -> np.ndarray:
+def ensure_ddr(mem: "GtxMemory", end_offset: int) -> torch.Tensor:
     """Doubling-grow DDR allocation. P3 D-13 upgrade.
 
     NOTE: C++ gtx_npu_t::ensure_ddr (gtx_npu_core.cc:198-203) allocates the
@@ -76,11 +76,11 @@ def ensure_ddr(mem: "GtxMemory", end_offset: int) -> np.ndarray:
             f"DDR access {end_offset:#x} exceeds cap {cap:#x} "
             f"(set GTX_DDR_SIZE env var to raise)"
         )
-    current_size = mem._ddr_bytes.size if mem._ddr_bytes is not None else 0
+    current_size = mem._ddr_bytes.numel() if mem._ddr_bytes is not None else 0
     if end_offset > current_size:
         new_size = max(end_offset, current_size * 2, INITIAL_FLOOR)
         new_size = min(new_size, cap)
-        new_arr = np.zeros(new_size, dtype=np.uint8)
+        new_arr = torch.zeros(new_size, dtype=torch.uint8)
         if mem._ddr_bytes is not None:
             new_arr[:current_size] = mem._ddr_bytes
         mem._ddr_bytes = new_arr
@@ -125,8 +125,10 @@ def ddr_init_from_file(mem: "GtxMemory", filename: str) -> None:
             if reversed_mode:
                 chunk = chunk[::-1]
             ensure_ddr(mem, offset + nbytes)
-            mem._ddr_bytes[offset : offset + nbytes] = np.frombuffer(
-                chunk, dtype=np.uint8
+            # torch.frombuffer requires writable buffer; bytes is read-only,
+            # so go via bytearray (copy is cheap for 32-byte chunks).
+            mem._ddr_bytes[offset : offset + nbytes] = torch.frombuffer(
+                bytearray(chunk), dtype=torch.uint8
             )
             offset += nbytes
 
@@ -152,7 +154,9 @@ def ddr_dump_to_file(mem: "GtxMemory", filename: str,
             pass
         return
 
-    ddr_size = mem._ddr_bytes.size
+    # atexit-safe: .detach().cpu() once outside the loop.
+    ddr_src = mem._ddr_bytes.detach().cpu()
+    ddr_size = ddr_src.numel()
     with open(filename, "w") as f:
         for i in range(0, size, 32):
             chunk_off = off + i
@@ -161,7 +165,7 @@ def ddr_dump_to_file(mem: "GtxMemory", filename: str,
             for j in range(32):
                 src_idx = chunk_off + j
                 if 0 <= src_idx < ddr_size:
-                    buf[j] = int(mem._ddr_bytes[src_idx])
+                    buf[j] = int(ddr_src[src_idx])
                 # else: leave 0 (zero-pad)
             chunk = bytes(buf)
             if reversed_mode:
@@ -192,19 +196,22 @@ def _init_ddr_from_env(npu) -> None:
     ddr_init_from_file(npu.mem, init_path)
 
 
-def _atexit_ddr_dump() -> None:
-    """atexit handler: vendor gtx_npu_core.cc:61-73 1:1 port (D-05).
+def _run_ddr_dump() -> None:
+    """Inline DDR dump (called by WJOIN handler, not atexit — 2026-05-11).
 
-    Triggered at Python interpreter shutdown when GTX_DDR_DUMP env var is set
-    (registration is gated in __init__.py per D-04). Reads ADDR/SIZE from env
-    vars and writes DDR slice to file via existing args-only ddr_dump_to_file.
+    Replaces vendor gtx_npu_core.cc:61-73 std::atexit port. The original
+    atexit registration was removed because pyspike's pybind11 embedded
+    interpreter tears down torch _C state before atexit hooks run, causing
+    SIGSEGV when this function indexes torch tensors.
 
-    Single-NPU model (D-05 / RESEARCH §NPU Instance Lookup): looks up
-    riscv.gtx.npu._LAST_NPU module global. v1 single-hart scope.
+    Inline trigger semantics (control.py WJOIN handlers, both custom1 and
+    custom0 variants):
+      - Single-tile firmware (NEG/EXP/etc.): one WJOIN call → one dump.
+      - Multi-tile firmware (ABS, 96 iters): N WJOIN calls → N dumps.
+        Each call overwrites the file; the final call captures the final
+        DDR state. Semantics match vendor atexit-once "final state wins".
 
-    SAFETY (RESEARCH §Pitfall 3, CPython issue #103512): this function MUST
-    NOT raise SystemExit. All error paths use early `return` and
-    `print(..., file=sys.stderr)`.
+    SAFETY: must NOT raise SystemExit. All error paths use early return.
     """
     # Lazy-import the npu MODULE (not _LAST_NPU directly) to capture the live
     # value at hook-fire time. `from .npu import _LAST_NPU` would bind the
