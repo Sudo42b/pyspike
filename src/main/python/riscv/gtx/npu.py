@@ -13,7 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""GtxNpu -- riscv.isa.ROCC subclass, registered as 'gtx' (CORE-01, D-14)."""
+"""GtxNpu -- riscv.isa.ROCC subclass, registered as 'gtx' (CORE-01, D-14).
+
+FSM-driven dispatch with NPU context awareness — see ORDER.md.
+"""
+import enum
 from typing import List
 import torch
 # pylint: disable=import-error,no-name-in-module
@@ -25,9 +29,38 @@ from riscv.processor import insn_desc_t, processor_t
 from .memory import GtxMemory
 from .warp_state import WarpState
 from .params import (GTX_NEST_NUM, GTX_SPU_NUM)
+from .npu_context import (
+    NpuContext, INITIAL_CONTEXT, apply_transition, is_warp_marker,
+)
 from . import _registry  # noqa: F401  -- imported for completeness
 from . import ops as _ops  # noqa: F401  -- triggers @handler decorators
 from .dispatch import build_custom0_table, build_custom1_table
+
+
+# OPSET funct7 — kept as a module-level literal to avoid encoding import cycle.
+_OPSET_FUNCT7 = 0x4A
+# GSPR addresses cleared after every non-OPSET dispatch (vendor parity).
+_GSPR_OPERAND3 = 0x003
+_GSPR_OPERAND4 = 0x005
+
+
+class _NpuState(enum.Enum):
+    """One-instruction FSM states for GtxNpu.custom0/custom1 dispatch.
+
+    Pipeline (per pyspike functional model — not cycle-accurate):
+
+        IDLE → DECODE → DISPATCH → EXECUTE → WRITEBACK → IDLE
+
+    C1/C2/C3/C4 are NPU *contexts* (persistent across instructions, see
+    npu_context.py), not sub-states of EXECUTE. Context validity and
+    transitions are handled in DISPATCH (context-aware handler lookup)
+    and WRITEBACK (warp-marker → apply_transition).
+    """
+    IDLE = enum.auto()
+    DECODE = enum.auto()
+    DISPATCH = enum.auto()
+    EXECUTE = enum.auto()
+    WRITEBACK = enum.auto()
 
 # P6 D-04/D-05: single-global NPU instance pointer for atexit dump hook.
 # Direct port of vendor gtx_npu_core.cc:59
@@ -46,11 +79,11 @@ class GtxNpu(isa.ROCC):
         super().__init__()
         self.mem = GtxMemory()
         self.warp = WarpState()
-        # P3 D-05: deferred S-loop L2->DDR store queue. Pushed by ops/dma.py
+        # deferred S-loop L2->DDR store queue. Pushed by ops/dma.py
         # @handler firmware_dma_store (S-loop branch), flushed by ops/control.py
         # end_p (when !wsplit_seen) or ops/dma.py credit_st_chk (when is_sloop).
         self.deferred_ddr_stores: list = []
-        # Layered SPR storage (D-11 + research §390-396 strong recommendation):
+        # Layered SPR storage
         #   gspr: flat dict (single instance)
         #   nspr: list of dict, length GTX_NEST_NUM
         #   lspr: list of list of dict, [NEST][SPU]
@@ -59,47 +92,28 @@ class GtxNpu(isa.ROCC):
         self.lspr: list = [
             [dict() for _ in range(GTX_SPU_NUM)] for _ in range(GTX_NEST_NUM)
         ]
-        # mxe_accum: 2D scalar accumulator per (NEST, SPU). FP32. CORRECTED
-        # from CONTEXT.md D-06 (4D was wrong -- see C++ gtx_npu.h:1254).
-        self._mxe_accum: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.float32
-        )
-        # P8 (2026-05-11) — per-NEST/per-SPU credit counters (vendor parity).
-        # gtx_npu.h:624-625 declares these on the nest struct; pyspike collapses
-        # to a single [NEST][SPU] 2D array per type. Functional model NOPs the
-        # check variants ("always true — DMA is instantaneous") so the counters
-        # are stat-only; kept for vendor 1:1 diff invariance and to surface any
-        # future check-path coupling without re-architecting.
-        self._credit_ld: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32
-        )
-        self._credit_st: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32
-        )
-        # Disasm cache (plan 04 fills via _registry.collect_disasms)
+
+        
+        self._mxe_accum: torch.Tensor = torch.zeros((GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.float32)
+
+        self._credit_ld: torch.Tensor = torch.zeros((GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32)
+        self._credit_st: torch.Tensor = torch.zeros((GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32)
+        
         self._disasm_entries: List[disasm_insn_t] = []
-        # Dispatch tables (plan 02-03 fill _registry.HANDLERS)
+        
         self._custom0 = build_custom0_table(self)
         self._custom1 = build_custom1_table(self)
-        # P6 follow-up (vendor gtx_npu_core.cc:120): GTX_DDR_INIT pre-stage —
-        # symmetric pair to atexit dump. Must run BEFORE _LAST_NPU registration
-        # so atexit hook never sees a half-initialized DDR. P5 Plan 02 added
-        # only the dump half; the init half was missing until this commit.
+
+        # FSM scaffold — _state is the current pipeline state, _ctx holds
+        # transient per-instruction values produced/consumed by state methods.
+        self._state: _NpuState = _NpuState.IDLE
+        self._ctx: dict = {}
+        # NPU execution context (persistent across instructions; warp markers
+        # mutate via apply_transition in WRITEBACK). See npu_context.py.
+        self._context: NpuContext = INITIAL_CONTEXT
+
         from .ddr import _init_ddr_from_env
         _init_ddr_from_env(self)
-
-        # P6 D-04/D-05: register self as the latest GtxNpu (vendor gtx_npu_core.cc:59
-        # `g_gtx_instance = this;` direct port). Last-instance-wins. Single-hart
-        # invariant; tests use subprocess isolation for per-instance lookup.
-        global _LAST_NPU
-        _LAST_NPU = self
-
-    # NOTE: do NOT override get_instructions(). The C++ rocc_t base
-    # (vendor/spike/riscv/rocc.cc:34-42) returns the c0/c1/c2/c3 dispatch
-    # entries for opcodes 0x0b/0x2b/0x5b/0x7b. Returning [] from Python
-    # blanks that out and makes the decoder reject custom1 as illegal —
-    # see tests/test_extension.py::MyDummyROCC for the canonical pattern
-    # (no override, n_insn==4).
 
     def get_disasms(self, proc: processor_t) -> List[disasm_insn_t]:
         # Plan 04 populates self._disasm_entries on demand
@@ -156,42 +170,25 @@ class GtxNpu(isa.ROCC):
         self.deferred_ddr_stores.clear()
         # Warp state reset
         self.warp.reset()
+        # FSM scaffold reset
+        self._state = _NpuState.IDLE
+        self._ctx = {}
+        # Context reset — back to C1 (plan outside).
+        self._context = INITIAL_CONTEXT
 
     def custom0(self, proc, insn, xs1, xs2) -> int:
-        """2-level dispatch: funct7 -> {funct3-or-None: handler}.
+        """RoCC custom0 entry. Drives the one-instruction FSM pipeline.
 
-        Tries the no-sub-decomposition entry first (sentinel inner key None for
-        P2 backwards-compat); if absent, synthesizes funct3 from RoCC R-type
-        flags and tries the integer-keyed sub-table (P3+ mask_funct3=True path).
-        Unmapped routes return 0 (silent NOP, P5/P6 may upgrade to illegal).
-
-        P8 (2026-05-11) — port of vendor outer wrapper `gtx_npu_t::custom0`
-        (~/NIGHTLY/gtx_spike/gtx/src/gtx_npu_custom0.cc:1042-1058):
-        OPSET (funct7=0x4A) is the only instruction that LEAVES OPERAND3
-        (0x003) and OPERAND4 (0x005) staging slots populated for the next
-        instruction to consume. Every OTHER instruction must CLEAR both
-        slots AFTER its handler returns, so stale stage values do not leak
-        into subsequent unrelated instructions. Without this clear, vendor
-        single-tile sweep ops (NEG/EXP/EXPM1/CUMSUM) inherited stale OPSET
-        state from prior multi-tile ops and dumped zero / garbage output.
+        Dispatch semantics (preserved verbatim from pre-FSM port; see
+        vendor gtx_npu_custom0.cc:1042-1058):
+          - 2-level lookup: funct7 -> {funct3-or-None: handler}
+          - sub_table[None] tried first (P2 back-compat, no funct3 decomp)
+          - fallback: funct3 synthesized from RoCC R-type flags
+          - unmapped routes return 0 (silent NOP)
+          - OPSET (funct7=0x4A) leaves OPERAND3/4 staging populated;
+            every other instruction clears them post-dispatch.
         """
-        funct7 = insn.funct
-        sub_table = self._custom0.get(funct7)
-        result = 0
-        if sub_table is not None:
-            # P2 backwards-compat: try the non-decomposed entry first
-            handler = sub_table.get(None)
-            if handler is None:
-                funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
-                handler = sub_table.get(funct3)
-            if handler is not None:
-                result = handler(proc, insn, xs1, xs2)
-        # Clear OPSET staging slots after non-OPSET dispatch (vendor parity).
-        # OPSET funct7 = 0x4A; literal kept here to avoid import cycle.
-        if funct7 != 0x4A:
-            self.gspr[0x003] = 0   # GSPR_GTX_OPERAND3
-            self.gspr[0x005] = 0   # GSPR_GTX_OPERAND4 (vendor literal)
-        return result
+        return self._run_pipeline("custom0", proc, insn, xs1, xs2)
 
     def flush_deferred_ddr_stores(self) -> None:
         """Direct port of gtx_npu_dma.cc:415-435.
@@ -225,8 +222,148 @@ class GtxNpu(isa.ROCC):
         self.deferred_ddr_stores.clear()
 
     def custom1(self, proc, insn, xs1, xs2) -> int:
-        funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
-        handler = self._custom1.get(funct3)
-        if handler is None:
-            return 0
-        return handler(proc, insn, xs1, xs2)
+        """RoCC custom1 entry. Drives the one-instruction FSM pipeline.
+
+        Dispatch semantics: single-level funct3 lookup; miss returns 0.
+        No OPSET post-clear (custom0-only invariant).
+        """
+        return self._run_pipeline("custom1", proc, insn, xs1, xs2)
+
+    # ------------------------------------------------------------------
+    # FSM driver -- class-based pipeline (states are methods)
+    # ------------------------------------------------------------------
+    def _run_pipeline(self, kind: str, proc, insn, xs1, xs2) -> int:
+        """Single-instruction FSM driver.
+
+        Per pyspike functional-model contract the pipeline completes within
+        one Python call (no cycle-accurate latency). The FSM exists for
+        structural clarity (state-by-state debugging, future cycle-accurate
+        hook insertion); behavior is identical to the pre-FSM 2-level
+        dispatch.
+        """
+        self._ctx = {
+            "kind": kind,
+            "proc": proc,
+            "insn": insn,
+            "xs1": xs1,
+            "xs2": xs2,
+            "rd": 0,
+        }
+        self._state = _NpuState.DECODE
+        while self._state is not _NpuState.IDLE:
+            self._step()
+        return self._ctx["rd"]
+
+    def _step(self) -> None:
+        """Run one state transition. Each state method must set self._state."""
+        s = self._state
+        if s is _NpuState.DECODE:
+            self._state_decode()
+        elif s is _NpuState.DISPATCH:
+            self._state_dispatch()
+        elif s is _NpuState.EXECUTE:
+            self._state_execute()
+        elif s is _NpuState.WRITEBACK:
+            self._state_writeback()
+        else:
+            raise RuntimeError(f"GtxNpu FSM: unreachable state {s!r}")
+
+    def _state_decode(self) -> None:
+        """DECODE: extract funct7 + funct3 from the RoCC R-type instruction."""
+        insn = self._ctx["insn"]
+        self._ctx["funct7"] = insn.funct
+        self._ctx["funct3"] = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
+        self._state = _NpuState.DISPATCH
+
+    def _state_dispatch(self) -> None:
+        """DISPATCH: context-aware handler lookup.
+
+        Layout:
+          custom0: funct7 → context → {funct3-or-None: handler}  (3-level)
+          custom1: funct3 → context → handler                    (2-level)
+
+        For each level keyed by NpuContext, try the current context first.
+        On miss, fall back to the universal key (None) — that's where
+        legacy @handler calls without context= live, semantically "valid in
+        any context". Per-context entries override the universal entry
+        when current context matches.
+
+        Sets ctx['handler'] (Callable or None) and ctx['mnemonic'] (str or
+        None) for downstream WRITEBACK / trace consumption.
+        """
+        kind = self._ctx["kind"]
+        f7 = self._ctx["funct7"]
+        f3 = self._ctx["funct3"]
+        ctx_now = self._context
+
+        handler = None
+        if kind == "custom0":
+            sub_table = self._custom0.get(f7)
+            if sub_table is not None:
+                # Middle-level context lookup: prefer current-context table,
+                # fall back to the universal (None) table.
+                ctx_table = sub_table.get(ctx_now)
+                if ctx_table is None:
+                    ctx_table = sub_table.get(None)
+                if ctx_table is not None:
+                    # Inner-level: P2 back-compat — None-key (no funct3
+                    # decomp) before funct3-key (mask_funct3=True case).
+                    handler = ctx_table.get(None)
+                    if handler is None:
+                        handler = ctx_table.get(f3)
+        elif kind == "custom1":
+            inner = self._custom1.get(f3)
+            if inner is not None:
+                handler = inner.get(ctx_now) or inner.get(None)
+        # else: custom2/3 are inherited NOPs; should never reach here.
+
+        self._ctx["handler"] = handler
+        self._ctx["mnemonic"] = (
+            getattr(handler, "gtx_mnemonic", None) if handler is not None else None
+        )
+        self._state = _NpuState.EXECUTE
+
+    def _state_execute(self) -> None:
+        """EXECUTE: invoke the resolved handler.
+
+        Miss (handler=None — funct7/context/funct3 unmapped) leaves rd=0
+        (silent NOP), matching pre-FSM dispatch semantics and vendor parity.
+        """
+        handler = self._ctx["handler"]
+        if handler is not None:
+            self._ctx["rd"] = handler(
+                self._ctx["proc"],
+                self._ctx["insn"],
+                self._ctx["xs1"],
+                self._ctx["xs2"],
+            )
+        self._state = _NpuState.WRITEBACK
+
+    def _state_writeback(self) -> None:
+        """WRITEBACK: OPSET staging clear + NPU context transition.
+
+        (1) vendor-parity OPSET staging clear (custom0 only):
+            gtx_npu_custom0.cc:1042-1058 — every non-OPSET custom0
+            instruction clears GSPR_OPERAND3 (0x003) and GSPR_OPERAND4
+            (0x005) so stale staging values do not leak across unrelated
+            instructions.
+
+        (2) NPU context transition (any kind):
+            If the just-executed instruction is a warp marker (START_P/S/T
+            or END_P/S/T), apply the corresponding context change so the
+            NEXT instruction sees the new context. SPLIT/JOIN are markers
+            but cause no transition (structural only). Illegal transitions
+            (current context ≠ expected source) are silently ignored —
+            see npu_context.apply_transition.
+        """
+        # (1) OPSET staging clear
+        if self._ctx["kind"] == "custom0" and self._ctx["funct7"] != _OPSET_FUNCT7:
+            self.gspr[_GSPR_OPERAND3] = 0
+            self.gspr[_GSPR_OPERAND4] = 0
+
+        # (2) Context transition (warp markers only)
+        mnemonic = self._ctx.get("mnemonic")
+        if mnemonic is not None and is_warp_marker(mnemonic):
+            self._context = apply_transition(self._context, mnemonic)
+
+        self._state = _NpuState.IDLE
