@@ -1,1 +1,10 @@
-4.5
+# P8 VTW-03: HAS_NUMBA=False baseline rerecording (replaces P7 NJIT-06 placeholder 4.5)
+# Recorded: 2026-05-11 on DESKTOP-ADRHA0T x86_64 (WSL2, Linux 6.6.87.2)
+# venv: /tmp/p8-vtw03-numpy-only (base pip install -e ., numba NOT installed)
+# Sweep: full 84-op vendor sweep under GTX_VENDOR_TEST_DIR=/mnt/e/14_NIGHTLY/pyspike/test/
+# Command: time pytest tests/gtx/test_regression_fw_full_sweep.py --no-cov -q
+# Result line: ..FFFFFFF.sFF.F.F.F.FFFFFF.FF.FFF (mixed pass/fail/skip — P9 deferred ops dominate)
+# Time: real 85m4.646s = 5104.646s
+# Threshold: must be > 30.0s (test_njit_perf.py skip gate) -- 170x above threshold
+# 5x gate: numba mean must be <= 5104.646 / 5 = 1020.929s for test_vendor_sweep_walltime_5x PASS
+5104.646

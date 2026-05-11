@@ -96,7 +96,15 @@ def test_vendor_sweep_walltime_5x(benchmark, baseline_walltime) -> None:
             "Re-record after building vendor .elf to enable 5x assertion."
         )
 
-    # Force a fresh subprocess to avoid in-process numba state leaks
+    # Force a fresh subprocess to avoid in-process numba state leaks.
+    # subprocess timeout is baseline-aware: prior P7 hardcode 600s assumed the
+    # placeholder baseline (4.5s, 5x = 22.5s); with the real HAS_NUMBA=False
+    # baseline at ~5000s the 84-op sweep cannot finish inside 600s even at the
+    # nominal 5x speedup. Use 1.5x baseline as the per-iteration cap so a
+    # numba run that meets the 5x target completes well inside the window,
+    # while a degenerate (numba off / slow) run is still bounded.
+    sweep_timeout = max(int(baseline_walltime * 1.5), 600)
+
     def run_sweep() -> float:
         cmd = [
             sys.executable, "-m", "pytest",
@@ -105,7 +113,7 @@ def test_vendor_sweep_walltime_5x(benchmark, baseline_walltime) -> None:
             "-o", "addopts=",
         ]
         t0 = time.perf_counter()
-        subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, timeout=600)
+        subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, timeout=sweep_timeout)
         return time.perf_counter() - t0
 
     # benchmark() runs the function multiple times; warmup discards JIT compile
