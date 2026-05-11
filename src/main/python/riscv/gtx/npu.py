@@ -64,6 +64,18 @@ class GtxNpu(isa.ROCC):
         self._mxe_accum: np.ndarray = np.zeros(
             (GTX_NEST_NUM, GTX_SPU_NUM), dtype=np.float32
         )
+        # P8 (2026-05-11) — per-NEST/per-SPU credit counters (vendor parity).
+        # gtx_npu.h:624-625 declares these on the nest struct; pyspike collapses
+        # to a single [NEST][SPU] 2D array per type. Functional model NOPs the
+        # check variants ("always true — DMA is instantaneous") so the counters
+        # are stat-only; kept for vendor 1:1 diff invariance and to surface any
+        # future check-path coupling without re-architecting.
+        self._credit_ld: np.ndarray = np.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=np.int32
+        )
+        self._credit_st: np.ndarray = np.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=np.int32
+        )
         # Disasm cache (plan 04 fills via _registry.collect_disasms)
         self._disasm_entries: List[disasm_insn_t] = []
         # Dispatch tables (plan 02-03 fill _registry.HANDLERS)
@@ -112,6 +124,9 @@ class GtxNpu(isa.ROCC):
             pass
         # mxe_accum zero-init
         self._mxe_accum.fill(0.0)
+        # P8: credit counter zero-init (vendor parity)
+        self._credit_ld.fill(0)
+        self._credit_st.fill(0)
         # Memory zero-init
         self.mem._l0_bytes.fill(0)
         self.mem._l1_bytes.fill(0)
@@ -149,19 +164,34 @@ class GtxNpu(isa.ROCC):
         P2 backwards-compat); if absent, synthesizes funct3 from RoCC R-type
         flags and tries the integer-keyed sub-table (P3+ mask_funct3=True path).
         Unmapped routes return 0 (silent NOP, P5/P6 may upgrade to illegal).
+
+        P8 (2026-05-11) — port of vendor outer wrapper `gtx_npu_t::custom0`
+        (~/NIGHTLY/gtx_spike/gtx/src/gtx_npu_custom0.cc:1042-1058):
+        OPSET (funct7=0x4A) is the only instruction that LEAVES OPERAND3
+        (0x003) and OPERAND4 (0x005) staging slots populated for the next
+        instruction to consume. Every OTHER instruction must CLEAR both
+        slots AFTER its handler returns, so stale stage values do not leak
+        into subsequent unrelated instructions. Without this clear, vendor
+        single-tile sweep ops (NEG/EXP/EXPM1/CUMSUM) inherited stale OPSET
+        state from prior multi-tile ops and dumped zero / garbage output.
         """
         funct7 = insn.funct
         sub_table = self._custom0.get(funct7)
-        if sub_table is None:
-            return 0
-        # P2 backwards-compat: try the non-decomposed entry first
-        handler = sub_table.get(None)
-        if handler is None:
-            funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
-            handler = sub_table.get(funct3)
-        if handler is None:
-            return 0
-        return handler(proc, insn, xs1, xs2)
+        result = 0
+        if sub_table is not None:
+            # P2 backwards-compat: try the non-decomposed entry first
+            handler = sub_table.get(None)
+            if handler is None:
+                funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
+                handler = sub_table.get(funct3)
+            if handler is not None:
+                result = handler(proc, insn, xs1, xs2)
+        # Clear OPSET staging slots after non-OPSET dispatch (vendor parity).
+        # OPSET funct7 = 0x4A; literal kept here to avoid import cycle.
+        if funct7 != 0x4A:
+            self.gspr[0x003] = 0   # GSPR_GTX_OPERAND3
+            self.gspr[0x005] = 0   # GSPR_GTX_OPERAND4 (vendor literal)
+        return result
 
     def flush_deferred_ddr_stores(self) -> None:
         """Direct port of gtx_npu_dma.cc:415-435.

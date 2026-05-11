@@ -329,21 +329,43 @@ def _copy_mem_stub(npu, proc, insn, xs1, xs2):
 # subsequent flush trigger that never landed in the expected dispatch slot.
 @handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_LD, mnemonic='credit_ld')
 def _credit_ld(npu, proc, insn, xs1, xs2):
-    """Port of vendor gtx_npu_custom0.cc:857-872 (credit.ld).
+    """Port of vendor dispatch.cc:950-962 (credit.ld) — full counter logic.
 
-    Functional-model NOP: increments per-NEST/per-SPU credit counters that
-    only matter for cycle-accurate HW sync. pyspike's sequential model makes
-    DMA effectively instantaneous, so the counter state is unobserved.
+    Loop-context-dependent per-NEST/per-SPU credit_ld counter update:
+      S-loop (is_sloop): DMA load done → increment credit_ld[s] for all SPUs in NEST
+      T-loop (is_tloop): SPU consumes load credit → decrement credit_ld[curr_id]
+
+    pyspike's sequential model makes the *_chk variants pass unconditionally,
+    so the counter state is currently unobserved by control flow. Tracked
+    anyway for vendor 1:1 parity and to surface future check-path coupling.
     """
+    warp = npu.warp
+    nest_id = warp.tmu_id if warp.is_ploop else 0
+    if nest_id < GTX_NEST_NUM:
+        if warp.is_sloop:
+            for s in range(GTX_SPU_NUM):
+                npu._credit_ld[nest_id, s] += 1
+        elif warp.is_tloop and warp.curr_id < GTX_SPU_NUM:
+            npu._credit_ld[nest_id, warp.curr_id] -= 1
     return 0
 
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_ST, mnemonic='credit_st')
 def _credit_st(npu, proc, insn, xs1, xs2):
-    """Port of vendor gtx_npu_custom0.cc:873-888 (credit.st).
+    """Port of vendor dispatch.cc:963-974 (credit.st) — full counter logic.
 
-    Same NOP-in-functional-model rationale as credit_ld above.
+    Loop-context-dependent per-NEST/per-SPU credit_st counter update:
+      T-loop (is_tloop): SPU done computing → increment credit_st[curr_id]
+      S-loop (is_sloop): DMA store consumes credit → decrement credit_st[s] for all SPUs
     """
+    warp = npu.warp
+    nest_id = warp.tmu_id if warp.is_ploop else 0
+    if nest_id < GTX_NEST_NUM:
+        if warp.is_tloop and warp.curr_id < GTX_SPU_NUM:
+            npu._credit_st[nest_id, warp.curr_id] += 1
+        elif warp.is_sloop:
+            for s in range(GTX_SPU_NUM):
+                npu._credit_st[nest_id, s] -= 1
     return 0
 
 
