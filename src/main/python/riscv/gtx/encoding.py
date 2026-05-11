@@ -73,6 +73,8 @@ GTX_ISS_F7_DMA_MCAST_S2L: int = 0x42  # disasm-only stub in P3
 GTX_ISS_F7_DMA_LD_SVR_L1: int = 0x43  # load_svr_l1 alias
 GTX_ISS_F7_DMA_MCAST_GS: int = 0x44   # disasm-only stub (mcast_g2s/mcast_s2s/copy_mem share funct7)
 GTX_ISS_F7_DMA_ST_SVR_L1: int = 0x45  # store_svr_l1 alias
+GTX_ISS_F7_CREDIT_LD: int = 0x50      # credit_ld -- per-NEST/SPU counter inc/dec (P8 NEG fix)
+GTX_ISS_F7_CREDIT_ST: int = 0x51      # credit_st -- per-NEST/SPU counter inc/dec (P8 NEG fix)
 GTX_ISS_F7_CREDIT_LD_CHK: int = 0x52  # credit_ld_chk -- flush trigger when is_sloop (P8 MTDMA-01)
 GTX_ISS_F7_CREDIT_ST_CHK: int = 0x53  # credit_st_chk -- flush trigger when is_sloop
 

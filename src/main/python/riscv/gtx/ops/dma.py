@@ -37,6 +37,7 @@ from ..encoding import (
     GTX_ISS_F7_DMA_LD_ST, GTX_ISS_F7_DMA_3D,
     GTX_ISS_F7_DMA_MCAST_S2L, GTX_ISS_F7_DMA_LD_SVR_L1,
     GTX_ISS_F7_DMA_MCAST_GS, GTX_ISS_F7_DMA_ST_SVR_L1,
+    GTX_ISS_F7_CREDIT_LD, GTX_ISS_F7_CREDIT_ST,
     GTX_ISS_F7_CREDIT_LD_CHK, GTX_ISS_F7_CREDIT_ST_CHK,
 )
 from ..params import GTX_NEST_NUM, GTX_SPU_NUM
@@ -316,6 +317,36 @@ def _copy_mem_stub(npu, proc, insn, xs1, xs2):
 # flushing, the deferred queue accumulates 96+ entries that all read stale L2
 # at exit-time atexit flush, scrambling tiles 0..N-1 with tile N's data.
 # ============================================================================
+# P8 NEG fix (2026-05-11): credit_ld (0x50) and credit_st (0x51) handlers were
+# missing — vendor non-multi-tile firmware (n1s16_neg.c, n1s16_exp.c, etc.) emits
+# both as part of the SPU thread credit-counter dance. In the functional model
+# these are sequential-execution NOPs (per vendor gtx_npu_custom0.cc:857-882:
+# they only inc/dec per-NEST/per-SPU counters that the *_chk variants never
+# actually wait on — gtx_npu_custom0.cc:889-905 comment "always true in
+# functional model — DMA is instantaneous"). However, without these handlers
+# registered, pyspike's default dispatch fell through unexpectedly, causing
+# single-tile vendor sweep ops (NEG/EXP/EXPM1/CUMSUM) to hang waiting on the
+# subsequent flush trigger that never landed in the expected dispatch slot.
+@handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_LD, mnemonic='credit_ld')
+def _credit_ld(npu, proc, insn, xs1, xs2):
+    """Port of vendor gtx_npu_custom0.cc:857-872 (credit.ld).
+
+    Functional-model NOP: increments per-NEST/per-SPU credit counters that
+    only matter for cycle-accurate HW sync. pyspike's sequential model makes
+    DMA effectively instantaneous, so the counter state is unobserved.
+    """
+    return 0
+
+
+@handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_ST, mnemonic='credit_st')
+def _credit_st(npu, proc, insn, xs1, xs2):
+    """Port of vendor gtx_npu_custom0.cc:873-888 (credit.st).
+
+    Same NOP-in-functional-model rationale as credit_ld above.
+    """
+    return 0
+
+
 @handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_LD_CHK,
          mnemonic='credit_ld_chk')
 def _credit_ld_chk(npu, proc, insn, xs1, xs2):
