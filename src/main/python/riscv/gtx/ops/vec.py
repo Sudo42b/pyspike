@@ -26,7 +26,7 @@ from .._registry import handler
 from .. import vec_engine
 from ..encoding import (
     GTX_F7_VEC_SASMD, GTX_F7_VEC_DOT_SUM, GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP,
-    GTX_F7_VEC_SIGN,
+    GTX_F7_VEC_MATH, GTX_F7_VEC_SIGN, GTX_F7_VEC_ROUND,
 )
 
 
@@ -180,14 +180,43 @@ def _exec_arange_v(npu, proc, insn, xs1, xs2):
 
 
 # =========================================================================
-# SIGN family funct7=0x1D (abs/neg/sign/step — sub_op packed in rs1 low bits)
-# vec_engine.py:283 SIGN dispatch already implemented; this @handler closes
-# the missing dispatch entry. Sub-ops: GTX_VEC_VABS=9, VEC_VNEG=10,
-# VEC_VSIGN=11, VEC_VSTEP=12 — disambiguated inside vec_engine via rs1.
-# (P5 Plan 02 omission surfaced by P6 abs.elf — separate from P6 work.)
+# MATH / SIGN / ROUND families (funct7 0x1C / 0x1D / 0x1E)
+# Sub-op selected by funct3:
+#   0x1C: 0=sqrt 1=exp 2=log
+#   0x1D: 0=abs  1=neg 2=sign 3=step
+#   0x1E: 0=ceil 1=trunc 2=floor 3=rne
+# All variants delegate to vec_engine.firmware_vec_op which routes
+# (funct7, funct3 & 3) through _apply_unary.
+# P8 NEG fix (2026-05-11): previous code registered only funct7=0x1D funct3=0
+# (incorrectly mnemonic'd 'sign_v' — that slot is actually abs.v). neg.v
+# emits funct3=1, sign.v funct3=2, step.v funct3=3 — all silent-NOP'd
+# without a handler. Same gap for the entire 0x1C MATH family and 0x1E ROUND
+# family. Disasm precision (one mnemonic per funct3) preserved.
 # =========================================================================
+@handler(kind='custom0', funct7=GTX_F7_VEC_MATH, funct3=0,
+         mnemonic='sqrt_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_MATH, funct3=1,
+         mnemonic='exp_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_MATH, funct3=2,
+         mnemonic='log_v', mask_funct3=True)
 @handler(kind='custom0', funct7=GTX_F7_VEC_SIGN, funct3=0,
+         mnemonic='abs_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_SIGN, funct3=1,
+         mnemonic='neg_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_SIGN, funct3=2,
          mnemonic='sign_v', mask_funct3=True)
-def _exec_sign_family(npu, proc, insn, xs1, xs2):
-    """SIGN family entry — sub_op (abs/neg/sign/step) decoded from rs1 in vec_engine."""
+@handler(kind='custom0', funct7=GTX_F7_VEC_SIGN, funct3=3,
+         mnemonic='step_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_ROUND, funct3=0,
+         mnemonic='ceil_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_ROUND, funct3=1,
+         mnemonic='trunc_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_ROUND, funct3=2,
+         mnemonic='floor_v', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_F7_VEC_ROUND, funct3=3,
+         mnemonic='rne_v', mask_funct3=True)
+def _exec_unary_family(npu, proc, insn, xs1, xs2):
+    """Element-wise unary entry (MATH/SIGN/ROUND). Sub-op decoded from
+    (funct7, funct3) inside vec_engine.firmware_vec_op._apply_unary.
+    """
     return vec_engine.firmware_vec_op(npu, proc, insn)
