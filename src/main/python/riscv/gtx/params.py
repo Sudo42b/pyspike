@@ -22,6 +22,29 @@ These values are referenced by tests/gtx/test_memory_layout.py and by Phase 2-5 
 GTX_NEST_NUM: int = 4
 GTX_SPU_NUM: int = 16          # SPUs per NEST
 GTX_SPUS_PER_NEST: int = GTX_SPU_NUM   # alias for clarity
+# D-02 default: 4 GiB
+DEFAULT_DDR_SIZE: int = 4 * 1024 * 1024 * 1024
+# D-13: floor for doubling-grow first allocation. 1 MiB picked because:
+#   - covers 32-byte bus-word minimum with ample headroom
+#   - small enough that CI per-test allocations are cheap
+#   - large enough that "single grow per test" is the common case
+INITIAL_FLOOR: int = 1 * 1024 * 1024
+
+# GTX CSR
+"""
+CSR address,	CSR address mapping, 	hex	comment
+[11:10]	        2'b00: global	        000-3FF	 
+                2'b01: shared       	400-7FF	each nest has separate register
+                2'b10: local        	800-BFF	each spu has separate register
+                2'b11: SYSTEM       	C00-FFF	reserved
+-------------------------------------------------------------------------------
+[9:8]	        2'b0x: architecture		
+                2'b10: performance		
+                2'b11: debug & H/W feature		
+-------------------------------------------------------------------------------
+[7]	            1'b0 : Read/Write		
+                1'b1: Read Only		
+"""
 
 # Memory sizes (bytes)
 GTX_L0_SIZE_BYTES: int = 1024                      # 1 KB per SPU

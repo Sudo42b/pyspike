@@ -1,46 +1,9 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-"""GTX disasm support -- D-10 / D-13.
-
-Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:23-36.
-
-Helpers:
-    add_r_custom0(name, funct7)             -- R-type custom0 (funct7 only)
-    add_rf3_custom0(name, funct7, funct3)   -- R-type custom0 with funct3
-    add_warp(name, funct3)                  -- custom1 warp control (funct3)
-
-Each helper builds a disasm_insn_t with mask/match per the formula and the
-three GPR arg formatters (gtx_xrd, gtx_xrs1, gtx_xrs2).
-
-Import-safety: when `_riscv.so` is not available we fall back to a pure-Python
-_PyDisasmInsn namedtuple-style sentinel so unit tests run offline. The real
-runtime always has the binding (wheel ships it).
-"""
 from typing import Any, NamedTuple, Tuple
 
 from .encoding import CUSTOM0_OPCODE, CUSTOM1_OPCODE
 
-
-# --------------------------------------------------------------------------
-# Bind the real disasm_insn_t / arg_t / xpr_name when _riscv.so is available;
-# otherwise fall back to pure-Python sentinels for test-time inspection.
-# --------------------------------------------------------------------------
 _RISCV_DISASM_AVAILABLE = False
 
-# Pure-Python fallback type (always defined so type-checkers see it).
 class _PyDisasmInsn(NamedTuple):
     """Offline fallback for disasm_insn_t -- holds the same surface
     (name, match, mask, args) for unit-test inspection without _riscv.so."""

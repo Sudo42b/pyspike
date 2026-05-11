@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """DDR backing store + hex I/O — Phase 3 fills (D-07/D-08/D-09/D-13).
 
 Doubling-grow ensure_ddr (P3 D-13 — diverges from C++ single-shot 4 GiB
@@ -26,26 +11,10 @@ from typing import TYPE_CHECKING
 
 import torch
 
-if TYPE_CHECKING:
-    from .memory import GtxMemory   # avoid circular import at runtime
+from .memory import GtxMemory
+from .params import GTX_DDR_BASE, DEFAULT_DDR_SIZE, INITIAL_FLOOR
 
-from .params import GTX_DDR_BASE
-
-# D-02 default: 4 GiB
-DEFAULT_DDR_SIZE: int = 4 * 1024 * 1024 * 1024
-
-# D-13: floor for doubling-grow first allocation. 1 MiB picked because:
-#   - covers 32-byte bus-word minimum with ample headroom
-#   - small enough that CI per-test allocations are cheap
-#   - large enough that "single grow per test" is the common case
-INITIAL_FLOOR: int = 1 * 1024 * 1024
-
-
-def get_ddr_cap() -> int:
-    """Read GTX_DDR_SIZE env var; default 4GB. Supports 'G'/'M'/'K' suffixes.
-
-    Examples: '4G' -> 4*1024**3, '64M' -> 64*1024**2, '1024K' -> 1024*1024.
-    """
+def maximum_ddr() -> int:
     val = os.environ.get("GTX_DDR_SIZE")
     if val is None:
         return DEFAULT_DDR_SIZE
@@ -58,25 +27,14 @@ def get_ddr_cap() -> int:
         return int(val[:-1]) * 1024
     return int(val)
 
-
-def ensure_ddr(mem: "GtxMemory", end_offset: int) -> torch.Tensor:
-    """Doubling-grow DDR allocation. P3 D-13 upgrade.
-
-    NOTE: C++ gtx_npu_t::ensure_ddr (gtx_npu_core.cc:198-203) allocates the
-    full GTX_DDR_SIZE (4 GiB) once. We use doubling-grow purely as a CI/test
-    ergonomic so per-test allocations stay small. For regression tests
-    touching the full 4 GiB, behavior is identical (single grow to cap).
-    Cap enforced via GTX_DDR_SIZE env var.
-
-    Strategy: new_size = min(cap, max(end_offset, current_size * 2, INITIAL_FLOOR)).
-    """
-    cap = get_ddr_cap()
+def ensure_ddr(mem: GtxMemory, end_offset: int) -> torch.Tensor:
+    cap = maximum_ddr()
     if end_offset > cap:
         raise ValueError(
             f"DDR access {end_offset:#x} exceeds cap {cap:#x} "
             f"(set GTX_DDR_SIZE env var to raise)"
         )
-    current_size = mem._ddr_bytes.numel() if mem._ddr_bytes is not None else 0
+    current_size = len(mem._ddr_bytes) if mem._ddr_bytes is not None else 0
     if end_offset > current_size:
         new_size = max(end_offset, current_size * 2, INITIAL_FLOOR)
         new_size = min(new_size, cap)
@@ -94,21 +52,7 @@ def _ddr_offset(addr: int) -> int:
     return addr
 
 
-def ddr_init_from_file(mem: "GtxMemory", filename: str) -> None:
-    """Direct port of gtx_npu_dma.cc:438-502.
-
-    Parser rules:
-      - Skip empty lines and lines starting with '#'.
-      - Lines starting with '@HEX' set offset = int(rest, 16).
-      - Hex data lines: nbytes = min(len(line)//2, 32). Consume exactly
-        nbytes bytes and advance offset by nbytes.
-      - GTX_DDR_REVERSED=1: byte at hex-position (nbytes-1-i)*2 goes to
-        ddr[offset + i] (right-to-left). Default LTR.
-
-    D-08: GTX_DDR_REVERSED read per call (no module-level cache).
-    """
-    reversed_mode = bool(os.environ.get("GTX_DDR_REVERSED"))
-
+def ddr_load_from_hex(mem: GtxMemory, filename: str) -> None:
     offset = 0
     with open(filename, "r") as f:
         for raw in f:
@@ -122,8 +66,7 @@ def ddr_init_from_file(mem: "GtxMemory", filename: str) -> None:
             if nbytes == 0:
                 continue
             chunk = bytes.fromhex(line[: nbytes * 2])
-            if reversed_mode:
-                chunk = chunk[::-1]
+            chunk = chunk[::-1]
             ensure_ddr(mem, offset + nbytes)
             # torch.frombuffer requires writable buffer; bytes is read-only,
             # so go via bytearray (copy is cheap for 32-byte chunks).
@@ -133,30 +76,12 @@ def ddr_init_from_file(mem: "GtxMemory", filename: str) -> None:
             offset += nbytes
 
 
-def ddr_dump_to_file(mem: "GtxMemory", filename: str,
+def ddr_save_to_hex(mem: GtxMemory, filename: str,
                      addr: int, size: int) -> None:
-    """Direct port of gtx_npu_dma.cc:509-558.
-
-    D-09: only `addr` and `size` are accepted as args — does NOT consult
-    any dump-related env vars (those are CLI/P6 territory).
-    D-08: GTX_DDR_REVERSED read per call.
-
-    Output format: 32 bytes/line, hex-encoded, '\\n'-terminated.
-    Out-of-range bytes are zero-padded (matches C++ idx>=GTX_DDR_SIZE branch).
-    """
-    reversed_mode = bool(os.environ.get("GTX_DDR_REVERSED"))
     off = _ddr_offset(addr)
 
-    if mem._ddr_bytes is None:
-        # Match C++ has_ddr() check — write empty file so callers can do
-        # path/exists checks without special-casing.
-        with open(filename, "w"):
-            pass
-        return
-
-    # atexit-safe: .detach().cpu() once outside the loop.
-    ddr_src = mem._ddr_bytes.detach().cpu()
-    ddr_size = ddr_src.numel()
+    ddr_src = mem._ddr_bytes
+    ddr_size = len(ddr_src)
     with open(filename, "w") as f:
         for i in range(0, size, 32):
             chunk_off = off + i
@@ -168,90 +93,5 @@ def ddr_dump_to_file(mem: "GtxMemory", filename: str,
                     buf[j] = int(ddr_src[src_idx])
                 # else: leave 0 (zero-pad)
             chunk = bytes(buf)
-            if reversed_mode:
-                chunk = chunk[::-1]
+            chunk = chunk[::-1]
             f.write(chunk.hex() + "\n")
-
-
-def _init_ddr_from_env(npu) -> None:
-    """vendor gtx_npu_core.cc:120 1:1 port — GTX_DDR_INIT pre-stage.
-
-    Symmetric pair to ``_atexit_ddr_dump()``: input pre-stage at NPU construction
-    time. Vendor calls this from ``gtx_npu_t`` constructor right before
-    registering the atexit dump hook; we mirror that order in ``GtxNpu.__init__``.
-
-    No-op (early return) when:
-      - GTX_DDR_INIT env var unset
-      - referenced file does not exist (defensive — vendor crashes silently)
-
-    SAFETY: errors propagate (unlike _atexit_ddr_dump) since this fires during
-    NPU construction, not at interpreter shutdown — failures should surface
-    immediately so the operator sees them.
-    """
-    init_path = os.environ.get('GTX_DDR_INIT')
-    if not init_path:
-        return
-    if not os.path.exists(init_path):
-        return
-    ddr_init_from_file(npu.mem, init_path)
-
-
-def _run_ddr_dump() -> None:
-    """Inline DDR dump (called by WJOIN handler, not atexit — 2026-05-11).
-
-    Replaces vendor gtx_npu_core.cc:61-73 std::atexit port. The original
-    atexit registration was removed because pyspike's pybind11 embedded
-    interpreter tears down torch _C state before atexit hooks run, causing
-    SIGSEGV when this function indexes torch tensors.
-
-    Inline trigger semantics (control.py WJOIN handlers, both custom1 and
-    custom0 variants):
-      - Single-tile firmware (NEG/EXP/etc.): one WJOIN call → one dump.
-      - Multi-tile firmware (ABS, 96 iters): N WJOIN calls → N dumps.
-        Each call overwrites the file; the final call captures the final
-        DDR state. Semantics match vendor atexit-once "final state wins".
-
-    SAFETY: must NOT raise SystemExit. All error paths use early return.
-    """
-    # Lazy-import the npu MODULE (not _LAST_NPU directly) to capture the live
-    # value at hook-fire time. `from .npu import _LAST_NPU` would bind the
-    # value AT IMPORT TIME (None), missing any later GtxNpu.__init__ assignment.
-    from . import npu as _npu_mod
-    last_npu = _npu_mod._LAST_NPU
-    if last_npu is None:
-        return  # No NPU was instantiated — nothing to dump
-    if last_npu.mem is None:
-        return  # No memory subsystem — defensive
-
-    # P3 D-05: flush deferred S-loop stores before dumping (mirrors vendor
-    # gtx_npu_core.cc:64 flush_deferred_ddr_stores()).
-    last_npu.flush_deferred_ddr_stores()
-
-    dump_file = os.environ.get('GTX_DDR_DUMP')
-    if not dump_file:
-        return  # Defensive — registration is gated, but env may have changed.
-
-    # Vendor gtx_npu_core.cc:68-71: hex parse with stoull base=16; defaults
-    # 0x37f000000 (= GTX_DDR_BASE + 0x0F000000) and 0x400 (= 1024 bytes).
-    addr_s = os.environ.get('GTX_DDR_DUMP_ADDR')
-    size_s = os.environ.get('GTX_DDR_DUMP_SIZE')
-    try:
-        addr = int(addr_s, 16) if addr_s else 0x37f000000
-        size = int(size_s, 16) if size_s else 0x400
-    except ValueError as exc:
-        import sys
-        print("GTX_DDR_DUMP: invalid hex int in env vars (" + str(exc) + "); skip dump",
-              file=sys.stderr)
-        return
-
-    # Ensure DDR is allocated for the requested dump range. Vendor C++ pre-
-    # allocates DDR in the constructor (gtx_npu_core.cc:167 ensure_ddr() in
-    # reset()) so has_ddr() is always true. Our pyspike lazy-allocates per
-    # P3 D-13 doubling-grow ergonomic; here we materialize the requested
-    # range so a clean firmware that never touches DDR still produces a
-    # zero-padded dump file (matches vendor `ddr_dump_to_file` zero-pad
-    # branch at gtx_npu_dma.cc:509-558 + ensures has_ddr() parity).
-    end_offset = _ddr_offset(addr) + size
-    ensure_ddr(last_npu.mem, end_offset)
-
-    ddr_dump_to_file(last_npu.mem, dump_file, addr, size)

@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """DMA engine -- spike-independent DMA helpers + DeferredDdrStore + decoder.
 
 Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_dma.cc:25-435.
@@ -38,10 +23,6 @@ from .ddr import ensure_ddr  # Phase 3 plan 03 upgrades to doubling-grow
 if TYPE_CHECKING:
     from .memory import GtxMemory
 
-
-# ============================================================================
-# DeferredDdrStore -- frozen dataclass, exact 7 fields per gtx_npu.h:1257-1266
-# ============================================================================
 @dataclass(frozen=True)
 class DeferredDdrStore:
     """S-loop deferred L2->DDR store request.

@@ -1,28 +1,17 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """GTX RoCC instruction encoding constants.
 
-Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu.h:266-353.
+Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu.h
+
 Phase 2 (D-11): full funct7 set + custom1 funct3 + opcode constants.
 """
-# ----- RoCC custom opcodes -----
-CUSTOM0_OPCODE: int = 0x0b      # custom-0
-CUSTOM1_OPCODE: int = 0x2b      # custom-1
+from enum import Enum
 
-# ----- gem5-simplified funct7 (custom0) -- gtx_npu.h:266-273 -----
+class CUSTOM_OPCODE(Enum):
+    # ----- RoCC custom opcodes -----
+    CUSTOM0 = 0x0b # custom-0
+    CUSTOM1 = 0x2b # custom-1
+
+# ----- funct7 (custom0) -- gtx_npu.h:266-273 -----
 GTX_F7_WRSPR: int = 0x00        # WRSPR (gem5) / MM ISS-full (rs1!=0 -> P4 MM)
 GTX_F7_RDSPR: int = 0x01        # RDSPR (gem5) / MMC ISS-full (rs1!=0 -> P4 MMC)
 GTX_F7_WSPLIT: int = 0x02

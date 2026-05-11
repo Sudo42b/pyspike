@@ -1,38 +1,8 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-"""MM engine -- spike-bound dispatcher for firmware_mm_op.
-
-Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_mm.cc:333-389 (firmware_mm_op)
-and per-variant exec_mm_* (lines 106-315).
-
-Per CONTEXT D-01: spike-bound layer (reads npu/proc/insn). Pure GEMM kernel
-delegated to gemm_core.py (Plan 02). @handler entries live in ops/mm.py (Plan 04).
-
-Per RESEARCH Pitfall B: MM_O/MMC_O/MM_V/MMC_V touch npu._mxe_accum;
-MM_S/MMC_S/MM/MMC/MM_T/MMC_T use ADDRC FP32 staging only.
-
-Per RESEARCH Pitfall G: nest = warp.tmu_id if is_ploop else 0;
-                        spu  = warp.curr_id if is_tloop else 0.
-
-Phase 4 plan 03 Task 1.
-"""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
 
 from .gemm_core import gemm_core, gemm_reduce_sum_a, gemm_dot
 from .encoding import (

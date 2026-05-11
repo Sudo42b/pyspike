@@ -1,0 +1,229 @@
+//==================================================================
+// Copyright   : (C) Supergate - All Rights Reserved
+// Project     : GSF / VTS
+// Test        : n1s1_conv_2d (1 NEST x 1 SPU = 1 SPU)
+// Description : 2D Convolution (single channel, single filter)
+//
+//               input:  [10][10] FP16 at 0x1000000 (200B)
+//               kernel: [9]     FP16 at 0x2000000 (18B)  (3x3 flattened)
+//               output: [8][8]=64 FP16 at 0xf000000 (128B)
+//
+//               3x3 kernel, stride 1, no padding
+//               output[r][c] = dot(patch_3x3(r,c), kernel)
+//
+//               Parallelization: each SPU computes 1 output element.
+//               NEST i -> output elements [i*16 .. i*16+15]
+//               SPU tid -> output element idx = i*16 + tid
+//               output row = idx / 8, output col = idx % 8
+//
+//               CPU gathers 3x3 patches into contiguous buffer at 0x3000000.
+//               gather_buf[64][10] (9 data + 1 pad) at 0x3000000 (1280B)
+//
+//               Thread: loads gathered patch (10 elems) to Bank A,
+//                       loads kernel (10 elems, 9+1pad) to Bank B,
+//                       __dot_product(9,0) -> scalar result.
+//                       Store via __store_svr + __copy pattern.
+//
+// Author      : sw.lee
+//==================================================================
+
+#ifndef N1S1_CONV_2D_C
+#define N1S1_CONV_2D_C
+
+#include "intrin.h"
+#include "gtx/address.h"
+#include "gtx_csr.h"
+
+// Hardware
+#define NEST_NUM            1
+#define SPU_NUM_PER_NEST    1
+#define ELEMS_PER_NEST      (NUM_OUTPUTS / NEST_NUM)
+#define ELEMS_PER_SPU       (ELEMS_PER_NEST / SPU_NUM_PER_NEST)
+#define ROWS_PER_SPU        ELEMS_PER_SPU
+
+// Input dimensions
+#define IN_H                10
+#define IN_W                10
+
+// Kernel / stride
+#define K_H                 3
+#define K_W                 3
+#define K_ELEMS             9       // K_H * K_W
+#define STRIDE              1
+
+// Output dimensions
+#define OUT_H               8       // (IN_H - K_H) / STRIDE + 1
+#define OUT_W               8       // (IN_W - K_W) / STRIDE + 1
+#define NUM_OUTPUTS         64      // OUT_H * OUT_W
+
+// Gather buffer: 10 elements per patch (9 data + 1 pad) for alignment
+#define GATHER_ELEMS        10
+#define GATHER_ELEM_BYTES   (GATHER_ELEMS * 2)              // 20B
+
+// DDR addresses
+#define BASE_DDR_A          0x1000000   // input[10][10] FP16 = 200B
+#define BASE_DDR_K          0x2000000   // kernel[9] FP16 = 18B
+#define BASE_DDR_GATHER     0x3000000   // gather_buf[64][10] FP16 = 1280B
+#define BASE_DDR_RESULT     0xf000000   // output[64] FP16 = 128B
+
+// Padded kernel at 0x4000000: [10] FP16 = 20B (9 + 1 zero pad)
+#define BASE_DDR_KPAD       0x4000000
+
+// L2 SPM addresses
+#define L2_GATHER           0x000000    // 16 patches x 20B = 320B per NEST
+#define L2_KERNEL           0x001000    // padded kernel 20B (shared)
+#define L2_RESULT           0x002000    // 16 scalars x 2B = 32B per NEST
+
+// L1 SPM bank addresses
+#define BANK_A              0x00000
+#define BANK_B              0x20000
+#define BANK_C              0x30000
+#define BANK_R              0x50000
+
+#define FP16_B              2
+#define SVR_BYTES           32
+
+// Sizes
+#define KERNEL_PAD_BYTES    (GATHER_ELEMS * FP16_B)         // 20B
+#define GATHER_NEST_BYTES   (ELEMS_PER_NEST * GATHER_ELEM_BYTES)  // 320B
+#define RESULT_NEST_BYTES   (ELEMS_PER_NEST * FP16_B)       // 32B
+
+// Stack (required for multi-NEST)
+
+int main(void) {
+
+    //=============================================================
+    // CPU: Gather 3x3 patches + prepare padded kernel
+    //=============================================================
+    volatile uint16_t *input  = (volatile uint16_t *)(uintptr_t)GTX_MAIN_ADDR(BASE_DDR_A);
+    volatile uint16_t *kernel = (volatile uint16_t *)(uintptr_t)GTX_MAIN_ADDR(BASE_DDR_K);
+    volatile uint16_t *gather = (volatile uint16_t *)(uintptr_t)GTX_MAIN_ADDR(BASE_DDR_GATHER);
+    volatile uint16_t *kpad   = (volatile uint16_t *)(uintptr_t)GTX_MAIN_ADDR(BASE_DDR_KPAD);
+
+    // Gather patches
+    for (uint16_t idx = 0; idx < NUM_OUTPUTS; idx++) {
+        uint16_t pr = idx / OUT_W;
+        uint16_t pc = idx % OUT_W;
+        uint16_t g_base = idx * GATHER_ELEMS;
+
+        for (uint16_t kh = 0; kh < K_H; kh++) {
+            for (uint16_t kw = 0; kw < K_W; kw++) {
+                uint16_t in_r = pr * STRIDE + kh;
+                uint16_t in_c = pc * STRIDE + kw;
+                gather[g_base + kh * K_W + kw] = input[in_r * IN_W + in_c];
+            }
+        }
+        gather[g_base + K_ELEMS] = 0;   // padding element
+    }
+
+    // Padded kernel: copy 9 elements + 1 zero
+    for (uint16_t i = 0; i < K_ELEMS; i++) {
+        kpad[i] = kernel[i];
+    }
+    kpad[K_ELEMS] = 0;  // padding zero
+
+    //=============================================================
+    // Stack save/restore setup
+    //=============================================================
+
+    __split();
+
+    {
+        uint8_t nest_id = 0;
+
+        __start_plan(nest_id);
+
+            //=========================================================
+            // Shared: DDR <-> L2
+            //=========================================================
+            __start_shared();
+
+                // Load gathered patches for this NEST (320B)
+                uint64_t gather_nest_ddr = GTX_MAIN_ADDR(BASE_DDR_GATHER)
+                    + (uint32_t)nest_id * GATHER_NEST_BYTES;
+                __load(
+                    gather_nest_ddr, L2_GATHER,
+                    (uint32_t)GATHER_NEST_BYTES,
+                    (uint16_t)GATHER_NEST_BYTES,
+                    1, (uint16_t)GATHER_NEST_BYTES
+                );
+
+                // Load padded kernel [20B] with credit to all 1 SPU
+                __load_cr(
+                    GTX_MAIN_ADDR(BASE_DDR_KPAD), L2_KERNEL,
+                    (uint32_t)KERNEL_PAD_BYTES,
+                    (uint16_t)KERNEL_PAD_BYTES,
+                    1, (uint16_t)KERNEL_PAD_BYTES,
+                    1, 0x0001, 0xBEEF
+                );
+
+                // Wait for all SPUs to finish
+                __credit_chk(0x0001);
+
+                // Store result: 16 scalars = 32B
+                uint64_t dst_nest_ddr = GTX_MAIN_ADDR(BASE_DDR_RESULT)
+                    + (uint32_t)nest_id * RESULT_NEST_BYTES;
+                __store_cr(
+                    L2_RESULT, dst_nest_ddr,
+                    (uint32_t)RESULT_NEST_BYTES,
+                    (uint16_t)RESULT_NEST_BYTES,
+                    1, (uint16_t)RESULT_NEST_BYTES,
+                    1, 0x0001
+                );
+
+            __end_shared();
+
+            //=========================================================
+            // Threads: compute 2D convolution per output element
+            //=========================================================
+            for (uint8_t tid = 0; tid < SPU_NUM_PER_NEST; tid++) {
+
+                __start_thread(tid);
+                    for (uint8_t r = 0; r < ROWS_PER_SPU; r++) {
+
+                        __set_spm_addr(BANK_R, BANK_C, BANK_B, BANK_A);
+                        __credit_chk(0xBEEF);   // wait for L2 load
+
+                        // Load gathered patch [20B] from L2 to Bank A
+                        __load(
+                            L2_GATHER + (uint32_t)(tid * ROWS_PER_SPU + r) * GATHER_ELEM_BYTES,
+                            BANK_A,
+                            GATHER_ELEM_BYTES, (uint16_t)GATHER_ELEM_BYTES,
+                            1, (uint16_t)GATHER_ELEM_BYTES
+                        );
+
+                        // Load padded kernel [20B] from L2 to Bank B
+                        __load(
+                            L2_KERNEL, BANK_B,
+                            KERNEL_PAD_BYTES, (uint16_t)KERNEL_PAD_BYTES,
+                            1, (uint16_t)KERNEL_PAD_BYTES
+);
+                        if (r == ROWS_PER_SPU - 1) __credit_ld(tid, nest_id);
+
+                        // dot_product(patch, kernel, K=9) -> SVR[0]
+                        // dot_product uses Bank A and Bank B
+                        __dot_product(K_ELEMS, 0);
+
+                        // Store SVR[0] to BANK_C (32B), then store first 2B scalar to L2
+                        __store_svr(BANK_C, 0);
+
+                        // Store scalar (2B) from L1 to L2
+                        if (r == ROWS_PER_SPU - 1) {
+                            __store_cr(BANK_C, L2_RESULT + (uint32_t)(tid * ROWS_PER_SPU + r) * FP16_B, FP16_B, (uint16_t)FP16_B, 1, (uint16_t)FP16_B, 1, 0x1);
+                        } else {
+                            __store(BANK_C, L2_RESULT + (uint32_t)(tid * ROWS_PER_SPU + r) * FP16_B, FP16_B, (uint16_t)FP16_B, 1, (uint16_t)FP16_B);
+                        }
+
+                    }
+                __end_thread(tid);
+            }
+
+        __end_plan(nest_id);
+    }
+
+    __join();
+
+    return 0;
+}
+
+#endif

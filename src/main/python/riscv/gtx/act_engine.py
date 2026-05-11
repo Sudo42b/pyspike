@@ -1,43 +1,10 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-"""ACT engine -- single bundled engine for activations + pool + format_cvt + L0 imm.
-
-Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_act.cc. Five entry points
-mirror C++ exec_activation / exec_pooling / exec_format_cvt / exec_act_imm /
-exec_softmax_imm.
-
-Per CONTEXT D-02: single bundled engine. Per D-05/D-06: `is_reversed` is
-explicit at @handler entry (D-05); engine receives it as keyword.
-ACT_OPS_REVERSED frozenset in encoding.py is engine-internal consistency check only.
-
-Per RESEARCH Pitfall 4: every C++ `p->get_state()->XPR[i]` becomes Python
-`proc.state.XPR[i]` (P4 04-05 lock). Do NOT use `proc.get_state()`.
-
-Pitfall 8: ESUM is `forward` (is_reversed=False) but writes a single FP16
-scalar to L0 at offset `(GSPR_OPERAND3 & 0x1F) * 32` -- NOT to L1[ADDRR].
-
-Plan 03 GREEN-fills firmware_act + firmware_act_imm + firmware_softmax_imm.
-Plan 04 GREEN-fills firmware_pool + firmware_format.
-"""
 from __future__ import annotations
 
-import numpy as np
+import torch
+from torch import Tensor
 
 from .act_core import (
-    relu, prelu, gelu, tanh_act, sigmoid, softmax, esum,
+    relu, prelu, gelu, tanh, sigmoid, softmax, esum,
     pool_max, pool_avg,
     cvt_qh, cvt_hq, cvt_ih, cvt_hi, cvt_hn, cvt_sh, cvt_hs, cvt_dh, cvt_hd,
 )
@@ -52,23 +19,22 @@ from .params import GTX_NEST_NUM, GTX_SPU_NUM, GTX_L0_SIZE_BYTES
 
 
 # ============================================================================
-# Helpers (mirror vec_engine helpers)
+# Helpers
 # ============================================================================
-def _fp16_low16(packed: int) -> np.float16:
+def _fp16_low16(packed_f16: torch.Tensor) -> torch.Tensor:
     """Decode bits[15:0] of an int as FP16 (LE bit-pattern)."""
-    u16 = np.array([packed & 0xFFFF], dtype=np.uint16)
-    return u16.view(np.float16)[0]
-
-
-def _fp16_high16(packed: int) -> np.float16:
+    # TODO!
+    u16 = packed_f16 & 0xFFFF
+    return u16[0]
+    
+def _fp16_high16(packed: torch.Tensor) -> torch.Tensor:
+    # TODO!
     """Decode bits[31:16] of an int as FP16 (LE bit-pattern)."""
-    u16 = np.array([(packed >> 16) & 0xFFFF], dtype=np.uint16)
-    return u16.view(np.float16)[0]
+    u16 = torch.tensor([(packed >> 16) & 0xFFFF], dtype=torch.uint16)
+    return u16.view(torch.float16)[0]
 
 
 def _resolve_nest_spu(npu) -> tuple[int, int]:
-    """Mirror gtx_npu_act.cc:29 (Pitfall G). Pick (nest, spu) from warp loop
-    state, falling back to 0 when out of HW range."""
     nest = npu.warp.tmu_id if npu.warp.is_ploop else 0
     spu = npu.warp.curr_id if npu.warp.is_tloop else 0
     if nest >= GTX_NEST_NUM:
@@ -123,7 +89,7 @@ def firmware_act(npu, proc, insn, *, op_id: int, is_reversed: bool) -> int:
     if op_id == GTX_ACT_RELU:
         result = relu(view_in)
     elif op_id == GTX_ACT_TANH:
-        result = tanh_act(view_in)
+        result = tanh(view_in)
     elif op_id == GTX_ACT_SOFTMAX:
         result = softmax(view_in)
     elif op_id == GTX_ACT_GELU:
@@ -203,7 +169,7 @@ def firmware_act_imm(npu, proc, insn, *, op_id: int) -> int:
     elif op_id == GTX_ACT_GELU:
         result = gelu(view_in)
     elif op_id == GTX_ACT_TANH:
-        result = tanh_act(view_in)
+        result = tanh(view_in)
     elif op_id == GTX_ACT_SIGMOID:
         result = sigmoid(view_in)
     else:

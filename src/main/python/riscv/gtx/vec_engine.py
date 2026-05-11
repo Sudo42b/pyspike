@@ -75,9 +75,9 @@ def _l0_block_view(npu, nest: int, spu: int, reg: int) -> torch.Tensor:
 
 
 # =========================================================================
-# Public entry: firmware_vec_op
+# Public entry: exec_vec_op
 # =========================================================================
-def firmware_vec_op(npu, proc, insn) -> int:
+def exec_vec_op(npu, proc, insn) -> int:
     """Direct port of gtx_npu_vec.cc:572-754."""
     rs1 = int(proc.state.XPR[insn.rs1])
     vec_size = (rs1 & 0xFFFF) or 0x10000

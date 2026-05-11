@@ -1,0 +1,306 @@
+# GTX C1-C4 Context Instruction Validity Mapping
+# Source: ref/통합 문서1.xlsx Sheet "3 - context"
+# Cross-referenced with: gtx_doxygen/src/intrinsics/1.1.4.1/mainpage.md (모드별 사용 가능 인트린식)
+#                        gtx-risc-vp/vp/src/platform/gtx/nsu.cpp (ISS dispatch logic)
+#
+# 9 instruction groups by context validity pattern + 4 context definitions.
+# All 108 Excel-mapped instructions plus 24 unmapped instructions assigned
+# to their natural patterns (132 total GTX instructions covered).
+#
+# Validity pattern: O = valid, X = invalid
+# SV (gtx_directed_instr_lib.sv) hardcodes exclusion arrays derived from this file.
+# When this YAML changes, SV exclusion arrays must be manually synchronized.
+
+groups:
+  # -------------------------------------------------------------------------
+  # type_a: C1:O  C2:X  C3:O  C4:O  -- 95 instructions
+  # -------------------------------------------------------------------------
+  # MX compute instructions: MM, scalar/vector ops, activation, softmax,
+  # pooling, format conversion (SPM), DMA SVR, SPR (read/non-writeback)
+  type_a:
+    description: "MX compute instructions (C1,C3,C4 valid; C2 invalid)"
+    validity: {C1: O, C2: X, C3: O, C4: O}
+    instructions:
+      # Matrix Multiplication (10)
+      - GTX_MM
+      - GTX_MM_S
+      - GTX_MM_O
+      - GTX_MM_V
+      - GTX_MM_T
+      - GTX_MMC
+      - GTX_MMC_S
+      - GTX_MMC_O
+      - GTX_MMC_V
+      - GTX_MMC_T
+      # Convolution (2)
+      - GTX_IM2COL_N
+      - GTX_IM2COL_D
+      # Scalar Calculation FP (7)
+      - GTX_ADD_VS
+      - GTX_SUB_VS
+      - GTX_MUL_VS
+      - GTX_DIV_VS
+      - GTX_FMADD_VS
+      - GTX_MAX_VS
+      - GTX_MIN_VS
+      # Scalar Calculation INT (7)
+      - GTX_ADD_IS
+      - GTX_SUB_IS
+      - GTX_MUL_IS
+      - GTX_DIV_IS
+      - GTX_FMADD_IS
+      - GTX_MAX_IS
+      - GTX_MIN_IS
+      # Vector Calculation FP (22)
+      - GTX_ADD_VV
+      - GTX_SUB_VV
+      - GTX_MUL_VV
+      - GTX_DIV_VV
+      - GTX_DOT_VVS
+      - GTX_FMADD_VVV
+      - GTX_SUM_VS
+      - GTX_SQRT_V
+      - GTX_EXP_V
+      - GTX_LN_V
+      - GTX_ABS_V
+      - GTX_NEG_V
+      - GTX_SIGN_V
+      - GTX_STEP_V
+      - GTX_CEIL_V
+      - GTX_TRUNC_V
+      - GTX_FLOOR_V
+      - GTX_RNE_V
+      - GTX_CLAMP_MIN_V
+      - GTX_CLAMP_MAX_V
+      - GTX_ACCUM_V
+      - GTX_ARANGE_V
+      # Vector Calculation INT (22)
+      - GTX_ADD_II
+      - GTX_SUB_II
+      - GTX_MUL_II
+      - GTX_DIV_II
+      - GTX_DOT_IIS
+      - GTX_FMADD_III
+      - GTX_SUM_IS
+      - GTX_SQRT_I
+      - GTX_EXP_I
+      - GTX_LN_I
+      - GTX_ABS_I
+      - GTX_NEG_I
+      - GTX_SIGN_I
+      - GTX_STEP_I
+      - GTX_CEIL_I
+      - GTX_TRUNC_I
+      - GTX_FLOOR_I
+      - GTX_RNE_I
+      - GTX_AND_II
+      - GTX_OR_II
+      - GTX_NOT_I
+      - GTX_SHIFT_I
+      # Format Conversion SPM (5)
+      - GTX_SCVT_QH
+      - GTX_SCVT_HQ
+      - GTX_SCVT_IH
+      - GTX_SCVT_HI
+      - GTX_SCVT_HN
+      # Activation FP (4)
+      - GTX_PRELU
+      - GTX_GELU
+      - GTX_TANH
+      - GTX_SIGM
+      # Activation IMM (4)
+      - GTX_PRELU_IMM
+      - GTX_GELU_IMM
+      - GTX_TANH_IMM
+      - GTX_SIGM_IMM
+      # Softmax (4)
+      - GTX_ESUM
+      - GTX_SOFTMAX
+      - GTX_ESUM_I
+      - GTX_SOFTMAX_I
+      # Pooling (2)
+      - GTX_POOL_M
+      - GTX_POOL_A
+      # DMA SVR (2)
+      - GTX_LOAD_SVR
+      - GTX_STORE_SVR
+      # SPR (4) -- RDSPR moved here: ISS T-loop/P-loop dispatch confirmed,
+      #            mainpage.md lists SPR as valid in thread mode
+      - GTX_RDSPR
+      - GTX_WRSPR
+      - GTX_CPSVR
+      - GTX_MVSVR
+
+  # -------------------------------------------------------------------------
+  # c1_only: C1:O  C2:X  C3:X  C4:X  -- 6 instructions
+  # -------------------------------------------------------------------------
+  # RDSPR moved to type_a (ISS confirms C3/C4 valid).
+  # MCAST_S2S moved to shared_mcast (mainpage.md lists in shared mode).
+  c1_only:
+    description: "C1-only instructions (plan outside exclusively)"
+    validity: {C1: O, C2: X, C3: X, C4: X}
+    instructions:
+      - GTX_FCVT_SH
+      - GTX_FCVT_HS
+      - GTX_FCVT_DH
+      - GTX_FCVT_HD
+      - GTX_MCAST_G2S
+      - GTX_COPY_MEM
+
+  # -------------------------------------------------------------------------
+  # dma: C1:X  C2:O  C3:O  C4:X  -- 7 instructions
+  # -------------------------------------------------------------------------
+  dma:
+    description: "DMA transfer instructions (C2,C3 only)"
+    validity: {C1: X, C2: O, C3: O, C4: X}
+    instructions:
+      - GTX_LOAD
+      - GTX_STORE
+      - GTX_COPY
+      - GTX_LOAD_3D
+      - GTX_STORE_3D
+      - GTX_CREDIT_ST
+      - GTX_CREDIT_ST_CHK
+
+  # -------------------------------------------------------------------------
+  # tpose_fill: C1:O  C2:O  C3:X  C4:O  -- 2 instructions
+  # -------------------------------------------------------------------------
+  tpose_fill:
+    description: "Transpose and fill operations (not valid in thread context)"
+    validity: {C1: O, C2: O, C3: X, C4: O}
+    instructions:
+      - GTX_TPOSE
+      - GTX_FILL
+
+  # -------------------------------------------------------------------------
+  # shared_mcast: C1:O  C2:O  C3:X  C4:O  -- 2 instructions
+  # -------------------------------------------------------------------------
+  # mainpage.md: 공유 모드에 Multicast (mcast_s2l, mcast_s2s) 포함.
+  # MCAST_S2L C2 추가: mainpage.md lists in shared mode intrinsics.
+  # MCAST_S2S moved from c1_only: mainpage.md lists in shared mode intrinsics.
+  shared_mcast:
+    description: "Shared multicast operations (C1,C2,C4 valid; C3 invalid)"
+    validity: {C1: O, C2: O, C3: X, C4: O}
+    instructions:
+      - GTX_MCAST_S2L
+      - GTX_MCAST_S2S
+
+  # -------------------------------------------------------------------------
+  # credit_ld: C1:X  C2:O  C3:O  C4:X  -- 1 instruction
+  # -------------------------------------------------------------------------
+  # C1 changed X→O: ISS gives WARNING outside P-loop (nsu.cpp:618).
+  # mainpage.md C1 목록에 credit_ld 없음. C2/C3에서만 사용.
+  credit_ld:
+    description: "Load credit instruction (C2,C3 only)"
+    validity: {C1: X, C2: O, C3: O, C4: X}
+    instructions:
+      - GTX_CREDIT_LD
+
+  # -------------------------------------------------------------------------
+  # all_context: C1:O  C2:O  C3:O  C4:O  -- 1 instruction
+  # -------------------------------------------------------------------------
+  all_context:
+    description: "Valid in all contexts"
+    validity: {C1: O, C2: O, C3: O, C4: O}
+    instructions:
+      - GTX_OPSET
+
+  # -------------------------------------------------------------------------
+  # credit_ld_chk: C1:X  C2:O  C3:O  C4:X  -- 1 instruction
+  # -------------------------------------------------------------------------
+  # Same context validity pattern as dma group
+  credit_ld_chk:
+    description: "Load credit check (C2 and C3 only, same pattern as dma)"
+    validity: {C1: X, C2: O, C3: O, C4: X}
+    instructions:
+      - GTX_CREDIT_LD_CHK
+
+# ---------------------------------------------------------------------------
+# Context Definitions (C1-C4)
+# ---------------------------------------------------------------------------
+# Each context specifies valid_groups and operand notes.
+# Operand notes document per-context behavior differences for instructions
+# that are valid in multiple contexts but have different semantics.
+
+contexts:
+  C1:
+    description: "plan outside - before START_P"
+    valid_groups: [type_a, c1_only, tpose_fill, shared_mcast, all_context]
+    notes:
+      GTX_WRSPR: "GSPR / NSPR (broad) / LSPR (broad)"
+      GTX_RDSPR: "GSPR / NSPR / LSPR (any SPU by id)"
+      GTX_TPOSE: "all nest (broad)"
+      GTX_FILL: "all nest (broad)"
+      GTX_MCAST_S2L: "operand3 target_spu[63:0] = nest3[63:48],nest2[47:32],nest1[31:16],nest0[15:0]"
+      GTX_MCAST_S2S: "L2-to-L2 multicast (broadcast, all TMUs)"
+
+  C2:
+    description: "plan inside & shared inside - inside START_P + START_S"
+    valid_groups: [dma, tpose_fill, shared_mcast, credit_ld, all_context, credit_ld_chk]
+    notes:
+      GTX_LOAD: "DDR -> L2SPM: src_addr[63:27], dst_addr[23:0]"
+      GTX_STORE: "L2SPM -> DDR: dst_addr[63:27], src_addr[23:0]"
+      GTX_COPY: "L2SPM -> L2SPM: dst_addr[55:32], src_addr[23:0]"
+      GTX_TPOSE: "target nest"
+      GTX_FILL: "target nest"
+      GTX_MCAST_S2L: "L2 -> selected L1s (target nest)"
+      GTX_MCAST_S2S: "L2 -> L2 multicast (target nest)"
+      GTX_CREDIT_LD: "load credit inc"
+      GTX_CREDIT_ST: "store credit dec"
+      GTX_CREDIT_ST_CHK: "store credit check"
+      GTX_CREDIT_LD_CHK: "load credit check"
+
+  C3:
+    description: "plan inside & thread inside - inside START_P + START_T"
+    valid_groups: [type_a, dma, credit_ld, all_context, credit_ld_chk]
+    notes:
+      GTX_LOAD: "L2SPM -> L1SPM: src_addr[50:27], dst_addr[18:0]"
+      GTX_STORE: "L1SPM -> L2SPM: dst_addr[50:27], src_addr[18:0]"
+      GTX_COPY: "L1SPM -> L1SPM: dst_addr[50:32], src_addr[18:0]"
+      GTX_RDSPR: "LSPR read (per-SPU)"
+      GTX_WRSPR: "LSPR only"
+      GTX_CREDIT_LD: "load credit dec"
+      GTX_CREDIT_ST: "store credit inc"
+      GTX_CREDIT_ST_CHK: "load credit check"
+      GTX_CREDIT_LD_CHK: "load credit check"
+
+  C4:
+    description: "plan inside & shared/thread outside - inside START_P, outside START_S/START_T"
+    valid_groups: [type_a, tpose_fill, shared_mcast, all_context]
+    notes:
+      GTX_TPOSE: "target nest"
+      GTX_FILL: "target nest"
+      GTX_MCAST_S2L: "operand3 target_nest_spu[15:0]"
+      GTX_MCAST_S2S: "L2-to-L2 multicast (target nest)"
+      GTX_RDSPR: "NSPR / LSPR read"
+      GTX_WRSPR: "NSPR / LSPR (broad)"
+
+# ---------------------------------------------------------------------------
+# Instructions excluded from context filtering
+# ---------------------------------------------------------------------------
+# These 24 instructions are not subject to per-context validity filtering.
+# Warp markers define context boundaries (structural, not data instructions).
+# Control/Sync are already excluded from random generation via
+# unsupported_instr[] or +no_fence=1.
+
+excluded_from_context:
+  warp_markers:
+    - GTX_WARP_START_T
+    - GTX_WARP_END_T
+    - GTX_WARP_START_S
+    - GTX_WARP_END_S
+    - GTX_WARP_START_P
+    - GTX_WARP_END_P
+    - GTX_WARP_SPLIT
+    - GTX_WARP_JOIN
+  control_sync:
+    - GTX_MSYNC
+    - GTX_EOM
+    - GTX_BAR
+    - GTX_WAIT
+    - GTX_HALT
+    - GTX_INTR
+    - GTX_FLUSH
+    - GTX_MEXEC
+    - GTX_MBAR
+  note: "Warp markers define context boundaries. Control/Sync already excluded from random gen via unsupported_instr or +no_fence."
