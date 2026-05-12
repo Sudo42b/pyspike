@@ -37,8 +37,16 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
+import threading
 
 import pytest
+
+try:
+    from tqdm import tqdm
+    _TQDM_AVAILABLE = True
+except ImportError:
+    _TQDM_AVAILABLE = False
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -108,6 +116,44 @@ def _parse_ref(ref_path: pathlib.Path) -> tuple[int, int, pathlib.Path]:
     return addr, data_lines * _BYTES_PER_REF_LINE, stripped
 
 
+_PROGRESS_TAG = "[GTX_PROGRESS] wjoin"
+
+
+def _drain_with_progress(proc: subprocess.Popen, op_id: str) -> bytes:
+    """Read child stderr line-by-line; advance a tqdm bar for every wjoin
+    marker (one per tile). Returns the concatenated stderr bytes so a failed
+    case can still report the tail in its message.
+
+    No-op fallback when tqdm is unavailable: just buffers stderr the same
+    way subprocess.run would.
+    """
+    captured: list[bytes] = []
+    bar = None
+    if _TQDM_AVAILABLE:
+        bar = tqdm(
+            desc=op_id,
+            unit="tile",
+            file=sys.__stderr__,   # pytest captures sys.stderr by default
+            dynamic_ncols=True,
+            leave=False,
+        )
+
+    def _reader():
+        assert proc.stderr is not None
+        for raw in iter(proc.stderr.readline, b""):
+            captured.append(raw)
+            if bar is not None and _PROGRESS_TAG.encode() in raw:
+                bar.update(1)
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    proc.wait()
+    t.join(timeout=5)
+    if bar is not None:
+        bar.close()
+    return b"".join(captured)
+
+
 def _pyspike_cmd() -> list[str] | None:
     """Resolve `pyspike` -- prefer `uv run scripts/pyspike` (dev) over a
     PATH-installed binary."""
@@ -147,20 +193,29 @@ def test_elf_byte_exact(tmp_path, op_id, elf, inp, ref):
         "GTX_DDR_DUMP": str(dump_path),
         "GTX_DDR_DUMP_ADDR": hex(dump_addr),
         "GTX_DDR_DUMP_SIZE": hex(dump_size),
+        "GTX_PROGRESS": "1",   # opt the child into per-tile progress markers
     })
     if inp.exists() and inp.stat().st_size > 0:
         env["GTX_DDR_INIT"] = str(inp)
 
     cmd = [*cmd_base, "--extlib=riscv.gtx", "--extension=gtx", str(elf)]
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
+    timer = threading.Timer(_TIMEOUT, proc.kill)
+    timer.start()
     try:
-        subprocess.run(cmd, env=env, timeout=_TIMEOUT, check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.TimeoutExpired as e:
-        pytest.fail(f"{op_id}: pyspike timed out after {_TIMEOUT}s\n"
-                    f"stderr tail:\n{(e.stderr or b'')[-2000:].decode(errors='replace')}")
-    except subprocess.CalledProcessError as e:
-        pytest.fail(f"{op_id}: pyspike exited {e.returncode}\n"
-                    f"stderr tail:\n{(e.stderr or b'')[-2000:].decode(errors='replace')}")
+        stderr_bytes = _drain_with_progress(proc, op_id)
+    finally:
+        timer.cancel()
+    if proc.returncode is None:
+        proc.wait()
+    if proc.returncode == -9:
+        pytest.fail(f"{op_id}: pyspike killed by timeout after {_TIMEOUT}s\n"
+                    f"stderr tail:\n{stderr_bytes[-2000:].decode(errors='replace')}")
+    if proc.returncode != 0:
+        pytest.fail(f"{op_id}: pyspike exited {proc.returncode}\n"
+                    f"stderr tail:\n{stderr_bytes[-2000:].decode(errors='replace')}")
 
     assert dump_path.exists(), f"{op_id}: dump file not produced at {dump_path}"
     assert dump_path.stat().st_size > 0, f"{op_id}: dump file is empty"

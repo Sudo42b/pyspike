@@ -16,10 +16,22 @@ References:
     WJOIN env-var branch).
 """
 import os
+import sys
 
 from ..._registry import handler
 from .warp_state import WarpState   # noqa: F401  -- type hint reference
 from ...config_params import GTX_NEST_NUM, GTX_SPU_NUM
+
+
+# Per-tile progress marker for the pytest regression harness. Off by default;
+# the harness sets GTX_PROGRESS=1 and reads each emitted line to drive a tqdm
+# bar. One line per wjoin call (≈ one line per firmware tile).
+_PROGRESS_TAG = "[GTX_PROGRESS] wjoin"
+
+
+def _emit_progress() -> None:
+    if os.environ.get("GTX_PROGRESS") == "1":
+        print(_PROGRESS_TAG, file=sys.stderr, flush=True)
 
 
 # ============================================================================
@@ -172,6 +184,7 @@ def wjoin_with_exit(npu, proc, insn, xs1, xs2):
     """
     npu.flush_deferred_ddr_stores()
     npu.mem.dump_via_env()
+    _emit_progress()
     if os.environ.get('GTX_NO_EXIT'):
         return 0
     raise SystemExit(0)
@@ -221,6 +234,7 @@ def wjoin_custom0_no_exit(npu, proc, insn, xs1, xs2):
     """
     npu.flush_deferred_ddr_stores()
     npu.mem.dump_via_env()
+    _emit_progress()
     return 0
 
 
