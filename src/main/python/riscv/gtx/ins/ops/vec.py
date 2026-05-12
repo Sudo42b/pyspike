@@ -22,9 +22,9 @@ Each handler delegates the full decode/dispatch work to
 
 Phase 5 plan 02 task 3.
 """
-from .._registry import handler
-from .. import vec_engine
-from ..encoding import (
+from ..._registry import handler
+from ... import vec_engine
+from ...encoding import (
     GTX_F7_VEC_SASMD, GTX_F7_VEC_DOT_SUM, GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP,
     GTX_F7_VEC_MATH, GTX_F7_VEC_SIGN, GTX_F7_VEC_ROUND,
 )

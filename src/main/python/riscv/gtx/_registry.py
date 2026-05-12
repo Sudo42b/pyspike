@@ -20,7 +20,7 @@ per-context dispatch — see ORDER.md and npu_context.py.
 """
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
-from .npu_context import NpuContext
+from .context import NpuContext
 
 _HANDLER_REGISTRY: List[dict] = []
 

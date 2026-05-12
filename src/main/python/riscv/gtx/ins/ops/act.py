@@ -29,9 +29,9 @@ internal check; @handler literal is the policy).
 Vendor authority for funct7/funct3 values:
   vendor/gtx_cpp_reference/gtx/gtx_npu_disasm.inc:152-157 (verbatim).
 """
-from .._registry import handler
-from .. import act_engine
-from ..encoding import (
+from ..._registry import handler
+from ... import act_engine
+from ...encoding import (
     GTX_F7_ACT_PRELU, GTX_F7_ACT_GELU, GTX_F7_ACT_TANH,
     GTX_F7_ACT_SIGM, GTX_F7_ACT_SOFTMAX,
     GTX_F7_SCVT_QH, GTX_F7_SCVT_IH, GTX_F7_SCVT_HN,

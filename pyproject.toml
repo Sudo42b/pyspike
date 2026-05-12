@@ -23,10 +23,10 @@ before-all = "yum install -y dtc && git submodule update --init --recursive"
 name = "spike"
 dynamic = ["version"]
 authors = [
-    {name = "LIU Yu", email = "liuyu@huimtlab.org"},
+    {name = "SeonWoo", email = "sw.lee@supergate.cc"},
 ]
 license = {file = "LICENSE"}
-description = "Python Bindings of Spike RISC-V ISA Simulator"
+description = "Python Bindings of Spike RISC-V ISA Simulator (PySISS)"
 readme = {file = "README.md", content-type = "text/markdown"}
 keywords = ["RISC-V", "spike", "ISA", "simulator", "verification"]
 classifiers = [
@@ -60,7 +60,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/liuyu81/pyspike"
+Homepage = "https://github.com/Sudo42b/pyspike"
 
 [project.optional-dependencies]
 dev = [

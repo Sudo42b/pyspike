@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """SPR ops -- WRSPR/RDSPR handlers (SPR-02).
 
 Ports vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:56-113 verbatim.
@@ -26,8 +11,8 @@ Four handlers:
 All four read register values directly via proc.state.XPR[insn.rs1] to bypass
 Spike's xs1=0 -> -1 marshalling (CORE-04 / D-05).
 """
-from .._registry import handler
-from ..spr_router import wr_spr, rd_spr
+from ..._registry import handler
+from ...spr_router import wr_spr, rd_spr
 
 
 @handler(kind='custom0', funct7=0x49, mnemonic='wrspr')

@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """MM/MMC op @handler entry points -- spike-bound shim layer (D-04).
 
 Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_mm.cc:333-389 dispatch
@@ -30,9 +15,9 @@ handler checks `insn.rs1 == 0` at entry and NOPs if true.
 
 Phase 4 plan 04 Task 2.
 """
-from .._registry import handler
-from .. import mm_engine
-from ..encoding import (
+from ..._registry import handler
+from ... import mm_engine
+from ...encoding import (
     GTX_F7_WRSPR, GTX_F7_RDSPR,    # 0x00 (MM family) and 0x01 (MMC family)
     GTX_F3_MM_S, GTX_F3_MM_O, GTX_F3_MM, GTX_F3_MM_V, GTX_F3_MM_T,
 )
