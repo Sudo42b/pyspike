@@ -1,7 +1,7 @@
 from __future__ import annotations
 import abc
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import torch
 
@@ -16,81 +16,90 @@ from ..config_params import (
     DEVICE,
 )
 
-"""DDR backing store + hex I/O — Phase 3 fills (D-07/D-08/D-09/D-13).
+"""GTX memory hierarchy.
 
-Doubling-grow ensure_ddr (P3 D-13 — diverges from C++ single-shot 4 GiB
-alloc as a CI ergonomic per 03-RESEARCH 'ensure_ddr semantics divergence'.
-Production firmware that touches the full 4 GiB triggers a single grow to
-cap; small tests stay small).
+L0 / L1 / L2 scratchpads live as three **module-level tensors**
+allocated once at import time on ``DEVICE`` with shapes matched to
+the full NEST × SPU topology::
+
+    _L2_GLOBAL : (NEST_NUM,            GTX_L2_SIZE_BYTES)   uint8
+    _L1_GLOBAL : (NEST_NUM, SPU_NUM,   GTX_L1_SIZE_BYTES)   uint8
+    _L0_GLOBAL : (NEST_NUM, SPU_NUM,   GTX_L0_SIZE_BYTES)   uint8
+
+``GtxMemory`` holds direct references to those tensors and exposes
+per-(NEST, SPU) byte / fp16 views through ``lk_byte`` / ``lk_f16``
+helpers. The single contiguous backing per level keeps DMA-style
+cross-SPU operations to plain tensor slicing
+(``mem.l1[nest, :, off:off+n]``).
+
+``DDR_MEMORY`` keeps its own grow-on-demand path on CPU — DDR is the
+RISC-V system DRAM, not a scratchpad, and the CPU residence keeps
+host↔device traffic confined to the DMA boundary.
 """
 
 
+# =============================================================================
+# Module-level scratchpad tensors — one contiguous block per level, sized
+# to the full NEST × SPU topology so per-(NEST, SPU) buffers are views.
+# =============================================================================
+
+_L2_GLOBAL: torch.Tensor = torch.zeros(
+    (GTX_NEST_NUM, GTX_L2_SIZE_BYTES),
+    dtype=torch.uint8, device=DEVICE,
+)
+_L1_GLOBAL: torch.Tensor = torch.zeros(
+    (GTX_NEST_NUM, GTX_SPU_NUM, GTX_L1_SIZE_BYTES),
+    dtype=torch.uint8, device=DEVICE,
+)
+_L0_GLOBAL: torch.Tensor = torch.zeros(
+    (GTX_NEST_NUM, GTX_SPU_NUM, GTX_L0_SIZE_BYTES),
+    dtype=torch.uint8, device=DEVICE,
+)
+
+
+# =============================================================================
+# Abstract base
+# =============================================================================
+
 class MEMORY(abc.ABC):
+    """Common interface for every memory in the GTX hierarchy."""
+
     @abc.abstractmethod
     def getsize(self) -> int: ...
 
     @abc.abstractmethod
-    def alloc(self, *args, **kwargs) -> torch.Tensor | tuple[torch.Tensor, ...]: ...
-    
-    @abc.abstractmethod
-    def free(self) -> None: ...
+    def clear(self) -> None:
+        """Zero out the memory (does NOT release the backing tensor)."""
 
 
-class SPU_MEMORY(MEMORY):
-    def __init__(self):
-        self._l0_bytes = torch.zeros(GTX_L0_SIZE_BYTES, dtype=torch.uint8,
-                                      device=DEVICE)
-        self._l1_bytes = torch.zeros(GTX_L1_SIZE_BYTES, dtype=torch.uint8,
-                                      device=DEVICE)
+# =============================================================================
+# DDR — grow-on-demand backing store
+# =============================================================================
 
-    def getsize(self) -> int:
-        return GTX_L0_SIZE_BYTES + GTX_L1_SIZE_BYTES
-
-    def alloc(self) -> tuple[torch.Tensor, torch.Tensor]:
-        return self._l0_bytes, self._l1_bytes
-
-    def free(self) -> None:
-        self._l0_bytes.zero_()
-        self._l1_bytes.zero_()
-
-
-class L2_MEMORY(MEMORY):
-    def __init__(self):
-        self._l2_bytes = torch.zeros(GTX_L2_SIZE_BYTES, dtype=torch.uint8,
-                                      device=DEVICE)
-
-    def getsize(self) -> int:
-        return GTX_L2_SIZE_BYTES
-
-    def alloc(self) -> torch.Tensor:
-        return self._l2_bytes
-
-    def free(self) -> None:
-        self._l2_bytes.zero_()
-
-
-class NEST(MEMORY):
-    def __init__(self):
-        self.l2 = L2_MEMORY()
-        self.spus = [SPU_MEMORY() for _ in range(GTX_SPU_NUM)]
-
-    def getsize(self) -> int:
-        return self.l2.getsize() + sum(spu.getsize() for spu in self.spus)
-
-    def alloc(self, spu_id: Optional[int] = None) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        if spu_id is None:
-            return self.l2.alloc()
-        return self.spus[spu_id].alloc()
-
-    def free(self) -> None:
-        self.l2.free()
-        for spu in self.spus:
-            spu.free()
+_DDR_DEVICE = torch.device("cpu")
 
 
 class DDR_MEMORY(MEMORY):
-    def __init__(self):
-        self._ddr_bytes: Optional[torch.Tensor] = None
+    """Doubling-grow DDR — RISC-V *system* DRAM, always on CPU.
+
+    Diverges from C++ single-shot 4 GiB alloc as a CI ergonomic (see
+    03-RESEARCH 'ensure_ddr semantics divergence').
+
+    Device contract (per user-stated hierarchy intent):
+      - DDR lives on **CPU** (this is system memory in the RISC-V model).
+      - L0 / L1 / L2 scratchpads live on **DEVICE** (CUDA when available).
+      - Crossing the boundary happens inside ``read``/``write``: a caller
+        passing a CUDA slice to ``write`` triggers a single ``.cpu()``;
+        the slice returned by ``read`` stays on CPU and is the caller's
+        responsibility to ``.to(scratchpad.device)`` if the destination
+        is a scratchpad. This puts H/D moves at the DMA boundary only,
+        not scattered across every byte access.
+    """
+
+    def __init__(self, size: int = DEFAULT_DDR_SIZE) -> None:
+        self._bytes: Optional[torch.Tensor] = torch.zeros(
+            size, dtype=torch.uint8, device=_DDR_DEVICE,
+        )
 
     @staticmethod
     def maximum_ddr() -> int:
@@ -106,10 +115,23 @@ class DDR_MEMORY(MEMORY):
             return int(val[:-1]) * 1024
         return int(val)
 
+    # --- MEMORY abc ---------------------------------------------------------
     def getsize(self) -> int:
-        return len(self._ddr_bytes) if self._ddr_bytes is not None else 0
+        return len(self._bytes) if self._bytes is not None else 0
 
-    def alloc(self, end_offset: int) -> torch.Tensor:
+    def clear(self) -> None:
+        if self._bytes is not None:
+            self._bytes.zero_()
+
+    # --- DDR-specific lifecycle --------------------------------------------
+    def free(self) -> None:
+        """Release the backing tensor (distinct from ``clear`` which zeros)."""
+        self._bytes = None
+
+    def capacity(self) -> int:
+        return self._bytes.numel() if self._bytes is not None else 0
+
+    def ensure(self, end_offset: int) -> torch.Tensor:
         cap = self.maximum_ddr()
         if end_offset > cap:
             raise ValueError(
@@ -120,54 +142,93 @@ class DDR_MEMORY(MEMORY):
         if end_offset > current_size:
             new_size = max(end_offset, current_size * 2, INITIAL_FLOOR)
             new_size = min(new_size, cap)
-            new_arr = torch.zeros(new_size, dtype=torch.uint8,
-                                   device=DEVICE)
-            if self._ddr_bytes is not None:
-                new_arr[:current_size] = self._ddr_bytes
-            self._ddr_bytes = new_arr
-        return self._ddr_bytes
+            new_arr = torch.zeros(new_size, dtype=torch.uint8, device=_DDR_DEVICE)
+            if self._bytes is not None:
+                new_arr[:current_size] = self._bytes
+            self._bytes = new_arr
+        return self._bytes
 
-    def free(self) -> None:
-        self._ddr_bytes = None
+    # --- byte-level access --------------------------------------------------
+    # Caller convention: ``read`` returns a CPU slice; if you need it on
+    # the scratchpad device, call ``.to(<scratchpad>.device)`` once at the
+    # DMA boundary. ``write`` accepts either CPU or DEVICE input — a single
+    # ``.cpu()`` is applied on cross-device input.
 
+    def read(self, addr: int, n: int) -> torch.Tensor:
+        if self._bytes is None:
+            raise RuntimeError("DDR not allocated — call ensure() first")
+        return self._bytes[addr : addr + n]
+
+    def write(self, addr: int, data: torch.Tensor) -> None:
+        if self._bytes is None:
+            raise RuntimeError("DDR not allocated — call ensure() first")
+        if data.device != self._bytes.device:
+            data = data.to(self._bytes.device)
+        self._bytes[addr : addr + data.numel()] = data
+
+    def view(self, dtype: torch.dtype = torch.uint8) -> torch.Tensor:
+        if self._bytes is None:
+            raise RuntimeError("DDR not allocated — call ensure() first")
+        return self._bytes if dtype == torch.uint8 else self._bytes.view(dtype)
+
+    def raw(self) -> Optional[torch.Tensor]:
+        return self._bytes
+
+
+# =============================================================================
+# Top-level facade — references the module-level scratchpad tensors and
+# owns DDR + the legacy SPR dict.
+# =============================================================================
 
 class GtxMemory(MEMORY):
-    """GTX NPU memory layer — L0/L1/L2/DDR memory hierarchy."""
+    """GTX NPU memory layer — L0/L1/L2/DDR hierarchy facade."""
+
     def __init__(self) -> None:
-        self.nests: list[NEST] = [NEST() for _ in range(GTX_NEST_NUM)]
+        # Scratchpads share the module-level globals (single contiguous
+        # tensor per level — see top of file).
+        self.l2: torch.Tensor = _L2_GLOBAL
+        self.l1: torch.Tensor = _L1_GLOBAL
+        self.l0: torch.Tensor = _L0_GLOBAL
         self.ddr = DDR_MEMORY()
         self.spr: dict[int, int] = {}
 
     def getsize(self) -> int:
-        return sum(nest.getsize() for nest in self.nests) + self.ddr.getsize()
+        return (self.l0.numel() + self.l1.numel() + self.l2.numel()
+                + self.ddr.getsize())
 
-    def alloc(self, nest_id: int, spu_id: Optional[int] = None) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        return self.nests[nest_id].alloc(spu_id)
+    def clear(self) -> None:
+        """Zero everything (scratchpads + DDR). Keeps backing tensors."""
+        self.l0.zero_()
+        self.l1.zero_()
+        self.l2.zero_()
+        self.ddr.clear()
+        self.spr.clear()
+
+    def reset_scratchpads(self) -> None:
+        """Zero scratchpads only — DDR is preserved (loaded firmware data
+        must survive a hart reset). See ``GtxNpu.reset``."""
+        self.l0.zero_()
+        self.l1.zero_()
+        self.l2.zero_()
 
     def free(self) -> None:
-        for nest in self.nests:
-            nest.free()
+        """Release backing tensors. Currently only DDR has a release path."""
+        self.l0.zero_()
+        self.l1.zero_()
+        self.l2.zero_()
         self.ddr.free()
         self.spr.clear()
 
-    @property
-    def _ddr_bytes(self) -> Optional[torch.Tensor]:
-        return self.ddr._ddr_bytes
-
-    @_ddr_bytes.setter
-    def _ddr_bytes(self, value: Optional[torch.Tensor]) -> None:
-        self.ddr._ddr_bytes = value
-
-    # ----- Raw byte views (D-10 low-level) -----
+    # ----- Raw byte views (D-10 low-level, kept for in-place strided ops) ---
 
     def l0_byte(self, nest: int, spu: int) -> torch.Tensor:
-        return self.nests[nest].spus[spu]._l0_bytes
+        return self.l0[nest, spu]
 
     def l1_byte(self, nest: int, spu: int) -> torch.Tensor:
-        return self.nests[nest].spus[spu]._l1_bytes
+        return self.l1[nest, spu]
 
     def l2_byte(self, nest: int) -> torch.Tensor:
-        return self.nests[nest].l2._l2_bytes
+        return self.l2[nest]
 
     # ----- Halfword fp16 views (D-10 named, D-12 view guarantee) -----
 
@@ -181,7 +242,7 @@ class GtxMemory(MEMORY):
         return self.l2_byte(nest).view(torch.float16)
 
     def ensure_ddr(self, end_offset: int) -> torch.Tensor:
-        return self.ddr.alloc(end_offset)
+        return self.ddr.ensure(end_offset)
 
     def _ddr_offset(self, addr: int) -> int:
         """Address-to-offset helper. Direct port of C++ ddr_offset()."""
@@ -210,29 +271,44 @@ class GtxMemory(MEMORY):
                 # frombuffer is CPU-only -- transfer to the DDR tensor's device
                 # so the slice assignment works on GPU backends.
                 src = torch.frombuffer(bytearray(chunk), dtype=torch.uint8)
-                if src.device != self._ddr_bytes.device:
-                    src = src.to(self._ddr_bytes.device)
-                self._ddr_bytes[offset : offset + nbytes] = src
+                ddr_buf = self.ddr.raw()
+                if src.device != ddr_buf.device:
+                    src = src.to(ddr_buf.device)
+                self.ddr.write(offset, src)
                 offset += nbytes
 
     def ddr_save_to_hex(self, filename: str, addr: int, size: int) -> None:
-        off = self._ddr_offset(addr)
+        """Dump ``size`` bytes from DDR at ``addr`` to a vendor hex file.
 
-        ddr_src = self._ddr_bytes
-        ddr_size = len(ddr_src) if ddr_src is not None else 0
+        Single CUDA→CPU snapshot + vectorised 32-byte chunking. Each chunk
+        is reversed in-place and hex-encoded; the whole file is written in
+        one ``f.write`` call. Out-of-range addresses are zero-padded.
+        """
+        off = self._ddr_offset(addr)
+        ddr_src = self.ddr.raw()
+        ddr_size = self.ddr.capacity()
+
+        if ddr_src is not None and ddr_size > 0 and size > 0:
+            start = max(off, 0)
+            end = min(off + size, ddr_size)
+            if start < end:
+                region = bytes(ddr_src[start:end].detach().cpu().contiguous().numpy())
+            else:
+                region = b""
+            pre = max(0 - off, 0)
+            post = size - pre - len(region)
+            data = b"\x00" * pre + region + b"\x00" * post
+        else:
+            data = b"\x00" * size
+
+        # Pad up to a 32-byte boundary so every line is full-width.
+        if size & 0x1F:
+            data = data + b"\x00" * (32 - (size & 0x1F))
+        nlines = (size + 31) // 32
+        lines = [data[i * 32:(i + 1) * 32][::-1].hex() for i in range(nlines)]
         with open(filename, "w") as f:
-            for i in range(0, size, 32):
-                chunk_off = off + i
-                # Build 32-byte chunk with zero-pad on out-of-range
-                buf = bytearray(32)
-                for j in range(32):
-                    src_idx = chunk_off + j
-                    if 0 <= src_idx < ddr_size:
-                        buf[j] = int(ddr_src[src_idx])
-                    # else: leave 0 (zero-pad)
-                chunk = bytes(buf)
-                chunk = chunk[::-1]
-                f.write(chunk.hex() + "\n")
+            f.write("\n".join(lines))
+            f.write("\n")
 
     # ----- Environment-driven I/O (replaces deleted ``ddr.py`` shims) -----
 

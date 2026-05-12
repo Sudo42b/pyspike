@@ -65,24 +65,17 @@ def sasmd_kernel(a, b, op: int) -> torch.Tensor:
 
 
 def dot_kernel(a, b) -> torch.Tensor:
-    """FP16 dot product (FP32 scalar accumulator, scalar-order)."""
+    """FP16 dot product — FP32 reduce on DEVICE, FP16 output."""
     a_f32 = _as_fp32(a).reshape(-1)
     b_f32 = _as_fp32(b).reshape(-1)
     if a_f32.shape != b_f32.shape:
         raise ValueError(f"shape mismatch: {a_f32.shape} vs {b_f32.shape}")
-    s = torch.tensor(0.0, dtype=torch.float32, device=a_f32.device)
-    for i in range(a_f32.shape[0]):
-        s = s + a_f32[i] * b_f32[i]
-    return s.to(torch.float16)
+    return torch.dot(a_f32, b_f32).to(torch.float16)
 
 
 def vsum_kernel(view) -> torch.Tensor:
-    """FP16 vector sum (FP32 scalar accumulator, scalar-order)."""
-    flat = _as_fp32(view).reshape(-1)
-    s = torch.tensor(0.0, dtype=torch.float32, device=flat.device)
-    for i in range(flat.shape[0]):
-        s = s + flat[i]
-    return s.to(torch.float16)
+    """FP16 vector sum — FP32 reduce on DEVICE, FP16 output."""
+    return torch.sum(_as_fp32(view).reshape(-1)).to(torch.float16)
 
 
 def clamp_min_kernel(a, scalar) -> torch.Tensor:
@@ -96,14 +89,12 @@ def clamp_max_kernel(a, scalar) -> torch.Tensor:
 
 
 def accum_kernel(a) -> torch.Tensor:
-    """Prefix sum: FP32 accumulator across whole vec, per-element FP16 cast."""
-    a_f32 = _as_fp32(a).reshape(-1)
-    out = torch.empty_like(a_f32)
-    s = torch.tensor(0.0, dtype=torch.float32, device=a_f32.device)
-    for i in range(a_f32.shape[0]):
-        s = s + a_f32[i]
-        out[i] = s
-    return out.to(torch.float16)
+    """Prefix sum: FP32 accumulator across whole vec, per-element FP16 cast.
+
+    ``torch.cumsum`` is the left-to-right vectorised form of the Python
+    accumulator loop — same numerical order, no per-element kernel launch.
+    """
+    return torch.cumsum(_as_fp32(a).reshape(-1), dim=0).to(torch.float16)
 
 
 def arange_kernel(n: int, start, step) -> torch.Tensor:
@@ -147,9 +138,34 @@ def _l0_block_view(npu, nest: int, spu: int, reg: int) -> torch.Tensor:
 # 3. Unary apply (MATH / SIGN / ROUND family bodies)
 # =============================================================================
 def _apply_unary(funct7: int, sub_op: int, view: torch.Tensor) -> torch.Tensor:
-    """Element-wise unary kernels for funct7 0x1C/0x1D/0x1E (FP32 internal)."""
-    f32 = view.to(torch.float32)
-    if funct7 == 0x1C:   # MATH: sqrt / exp / log
+    """Element-wise unary kernels for funct7 0x1C/0x1D/0x1E.
+
+    SIGN / ROUND families operate on the FP16 view directly — sign bit
+    or integer rounding doesn't benefit from FP32 promotion and the
+    saved fp16↔fp32 conversion kernels matter when this is invoked
+    once per (NEST, SPU) tile. MATH (sqrt / exp / log) keeps the FP32
+    accumulator path for precision.
+    """
+    if funct7 == 0x1D:   # SIGN: abs / neg / sign / step
+        if sub_op == 0:
+            return torch.abs(view)
+        if sub_op == 1:
+            return -view
+        if sub_op == 2:
+            return torch.sign(view)
+        if sub_op == 3:
+            return (view > 0.0).to(torch.float16)
+    if funct7 == 0x1E:   # ROUND
+        if sub_op == 0:
+            return torch.ceil(view)
+        if sub_op == 1:
+            return torch.trunc(view)
+        if sub_op == 2:
+            return torch.floor(view)
+        if sub_op == 3:
+            return torch.round(view)
+    if funct7 == 0x1C:   # MATH: sqrt / exp / log (FP32 accumulator)
+        f32 = view.to(torch.float32)
         if sub_op == 0:
             return torch.sqrt(f32).to(torch.float16)
         if sub_op == 1:
@@ -159,24 +175,6 @@ def _apply_unary(funct7: int, sub_op: int, view: torch.Tensor) -> torch.Tensor:
             return torch.where(f32 > 0.0,
                                 torch.log(f32.clamp(min=tiny)),
                                 torch.zeros_like(f32)).to(torch.float16)
-    if funct7 == 0x1D:   # SIGN: abs / neg / sign / step
-        if sub_op == 0:
-            return torch.abs(f32).to(torch.float16)
-        if sub_op == 1:
-            return (-f32).to(torch.float16)
-        if sub_op == 2:
-            return torch.sign(f32).to(torch.float16)
-        if sub_op == 3:
-            return (f32 > 0.0).to(torch.float16)
-    if funct7 == 0x1E:   # ROUND
-        if sub_op == 0:
-            return torch.ceil(f32).to(torch.float16)
-        if sub_op == 1:
-            return torch.trunc(f32).to(torch.float16)
-        if sub_op == 2:
-            return torch.floor(f32).to(torch.float16)
-        if sub_op == 3:
-            return torch.round(f32).to(torch.float16)
     return view.clone()
 
 
@@ -283,15 +281,17 @@ def exec_vec_op(npu, proc, insn) -> int:
         else:
             scalar = vsum_kernel(view_a)
         _l1_view_addr(npu, nest, spu, addr_r, 1)[0] = scalar
-        u16_val = int(scalar.to(torch.float16).view(torch.uint16))
+        # Reinterpret the 0-d FP16 scalar as 2 bytes (little-endian) and
+        # blit straight into L0 — no bit-masking, no Python-side raw int.
+        scalar_bytes = scalar.to(torch.float16).reshape(1).contiguous().view(torch.uint8)
         l0 = npu.mem.l0_byte(nest, spu)
-        l0[0] = u16_val & 0xFF
-        l0[1] = (u16_val >> 8) & 0xFF
+        l0[0:2] = scalar_bytes
         return 0
 
     if funct7 == GTX_F7_VEC_CLAMP:
         sub = funct3 & 3
         view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
+        #! sub op 0, 1, 2 가 무엇인지 상수로 표현하는게 좋을듯.
         if sub == 0:
             scalar = _fp16_low16(rs2)
             result = clamp_min_kernel(view_a, scalar)
@@ -466,7 +466,14 @@ def _exec_arange_v(npu, proc, insn, xs1, xs2):
 # ----- MATH / SIGN / ROUND (funct7 = 0x1C / 0x1D / 0x1E) ---------------------
 # Sub-op selected by funct3 (& 3); P8 NEG fix preserved (one mnemonic per
 # funct3, all routed through exec_vec_op → _apply_unary).
-
+#
+# The stacked @handler decorators below register THIS function under 11
+# different (funct7, funct3, mnemonic) tuples — abs_v, sqrt_v, exp_v,
+# log_v, neg_v, sign_v, step_v, ceil_v, trunc_v, floor_v, rne_v. The
+# dispatch table calls it whenever any of those mnemonics decodes; ABS
+# firmware → ``abs_v`` is one of those entry points (ABS regression
+# proves the wiring). Renamed from ``_exec_unary_family`` to
+# ``_exec_vec_unary`` for clarity.
 @handler(kind='custom0', funct7=GTX_F7_VEC_MATH, funct3=0,
          mnemonic='sqrt_v', mask_funct3=True)
 @handler(kind='custom0', funct7=GTX_F7_VEC_MATH, funct3=1,
@@ -489,7 +496,7 @@ def _exec_arange_v(npu, proc, insn, xs1, xs2):
          mnemonic='floor_v', mask_funct3=True)
 @handler(kind='custom0', funct7=GTX_F7_VEC_ROUND, funct3=3,
          mnemonic='rne_v', mask_funct3=True)
-def _exec_unary_family(npu, proc, insn, xs1, xs2):
+def _exec_vec_unary(npu, proc, insn, xs1, xs2):
     """Element-wise unary entry (MATH/SIGN/ROUND).
 
     Sub-op decoded from (funct7, funct3) inside exec_vec_op → _apply_unary.

@@ -37,7 +37,7 @@ def _in_range(addr: int, base: int, end: int) -> bool:
 def wr_spr(npu, addr: int, value: int) -> None:
     """Write SPR. Port of gtx_npu_t::wr_spr (gtx_npu_spr.cc:16-78)."""
     addr &= 0xFFFF
-    # Loop control side-effects (gem5 v2.0 convention) -- lazy import to avoid
+    # Loop control side-effects -- lazy import to avoid
     # plan 02 / plan 03 circular dependency; plan 03 fills ops.control._do_*.
     if addr == GSPR_STARTP:
         from . import control as _ctrl
@@ -69,8 +69,14 @@ def wr_spr(npu, addr: int, value: int) -> None:
                 and npu.warp.curr_id < GTX_SPU_NUM):
             npu.lspr[npu.warp.tmu_id][npu.warp.curr_id][addr] = value
         elif npu.warp.is_ploop and npu.warp.tmu_id < GTX_NEST_NUM:
-            for s in range(GTX_SPU_NUM):
-                npu.lspr[npu.warp.tmu_id][s][addr] = value   # broadcast
+            # P-loop: same value into every SPU's LSPR within the active
+            # nest. C++ vendor writes each SPU RF separately
+            # (gtx_npu_spr.cc:24-25) — semantically equivalent to the
+            # docstring's "broadcast across SPUs in the NEST", so a
+            # tight per-SPU loop matches both.
+            nest_lsprs = npu.lspr[npu.warp.tmu_id]
+            for spu_rf in nest_lsprs:
+                spu_rf[addr] = value
         else:
             npu.lspr[0][0][addr] = value   # fallback NEST 0, SPU 0
         return
