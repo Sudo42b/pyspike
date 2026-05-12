@@ -269,6 +269,27 @@ class GtxNpu(isa.ROCC):
             # Inline DECODE + DISPATCH for the fast path. The full FSM
             # would do the same lookups via separate state functions.
             funct7 = insn.funct
+
+            # Hoist hot dicts to locals — bypasses RegisterFile's
+            # ``isinstance`` + ``int(...)`` per access (~250 ns each)
+            # and saves the attribute lookup on ``self.gspr``. Safe
+            # because every key here is a plain int constant.
+            gspr_regs = self.gspr.regs
+            state = proc.state
+            xpr = state.XPR
+
+            # OPSET fast-path — 786 K calls on ABS, the second-largest
+            # T-loop slice after the bufferable triples. The opset
+            # handler is just an XPR read pair + a staging GSPR write,
+            # and ``state_writeback`` skips its OPSET clear, so we can
+            # short-circuit the entire FSM cycle.
+            if funct7 == _F7_OPSET:
+                if (int(xpr[insn.rs1]) & 1) == 0:
+                    gspr_regs[_GSPR_OP3] = int(xpr[insn.rs2])
+                else:
+                    gspr_regs[_GSPR_OP5] = int(xpr[insn.rs2])
+                return 0
+
             xd = insn.xd
             xs1_bit = insn.xs1
             xs2_bit = insn.xs2
@@ -283,26 +304,29 @@ class GtxNpu(isa.ROCC):
                 handler = None
 
             if handler is not None:
-                mnemonic = getattr(handler, "gtx_mnemonic", None)
+                # Every bound handler in ``dispatch._bind`` carries
+                # ``gtx_mnemonic`` (possibly None), so direct attribute
+                # access is safe and saves ~150 ns vs ``getattr(...,
+                # default)``.
+                mnemonic = handler.gtx_mnemonic
                 if mnemonic in _TLOOP_BUFFERABLE:
                     # Inline snapshot — replaces the entire FSM cycle
                     # for ~60 % of custom0 calls on ABS.
-                    state = proc.state
                     buf.append(_TLoopEntry(
                         handler, mnemonic,
-                        int(state.XPR[insn.rs1]),
-                        int(state.XPR[insn.rs2]),
-                        int(self.gspr.get(_GSPR_OP3, 0)),
-                        int(self.gspr.get(_GSPR_OP5, 0)),
+                        int(xpr[insn.rs1]),
+                        int(xpr[insn.rs2]),
+                        gspr_regs.get(_GSPR_OP3, 0),
+                        gspr_regs.get(_GSPR_OP5, 0),
                         funct7, xd, xs1_bit, xs2_bit, insn.rd,
                     ))
                     # Mirror WRITEBACK's OPSET-aware clear (every
                     # bufferable mnemonic is non-OPSET): zero the
                     # staging GSPRs so the next opset cleanly stages a
-                    # fresh value. Cheap dict writes, much smaller than
-                    # the FSM cycle we just skipped.
-                    self.gspr[_GSPR_OP3] = 0
-                    self.gspr[_GSPR_OP5] = 0
+                    # fresh value. Direct dict writes — much smaller
+                    # than the FSM cycle we just skipped.
+                    gspr_regs[_GSPR_OP3] = 0
+                    gspr_regs[_GSPR_OP5] = 0
                     return 0
                 # Non-bufferable but in T-loop: drain pending buffer
                 # before the eager handler executes, so state mutations
