@@ -54,8 +54,7 @@ def _extract_id(rs1: int, rs2: int) -> int:
 def _do_startp(npu, rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::startp. Sets is_ploop, tmu_id."""
     nest_id = _extract_id(rs1, rs2)
-    if nest_id >= GTX_NEST_NUM:
-        nest_id = 0
+    assert 0 <= nest_id < GTX_NEST_NUM, f"Invalid NEST ID {nest_id} in startp (is_ploop={npu.warp.is_ploop})"
     npu.warp.tmu_id = nest_id
     npu.warp.is_ploop = True
 
@@ -77,8 +76,7 @@ def _do_endp(npu, rs1: int, rs2: int) -> None:
 def _do_startt(npu, rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::startt. Sets is_tloop, curr_id."""
     spu_id = _extract_id(rs1, rs2)
-    if spu_id >= GTX_SPU_NUM:
-        spu_id = 0
+    assert spu_id < GTX_SPU_NUM, f"Invalid SPU ID {spu_id} in startt (is_tloop={npu.warp.is_tloop})"
     npu.warp.curr_id = spu_id
     npu.warp.is_tloop = True
 
@@ -95,8 +93,7 @@ def _do_starts(npu, rs1: int, rs2: int) -> None:
     against GTX_NEST_NUM.
     """
     gdmac_id = _extract_id(rs1, rs2)
-    if gdmac_id >= GTX_NEST_NUM:   # GDMAC_NUM == NEST_NUM
-        gdmac_id = 0
+    assert 0 <= gdmac_id < GTX_NEST_NUM, f"Invalid GDMAC ID {gdmac_id} in starts (is_sloop={npu.warp.is_sloop})"
     npu.warp.curr_id = gdmac_id
     npu.warp.is_sloop = True
 
@@ -164,30 +161,18 @@ def wsplit(npu, proc, insn, xs1, xs2):
 
 @handler(kind='custom1', funct3=0b101, mnemonic='warp_join')
 def wjoin_with_exit(npu, proc, insn, xs1, xs2):
-    """WJOIN -- CORE-03 / D-07 / D-08 + 2026-05-11 inline DDR dump.
+    """WJOIN — flush deferred stores and emit progress, no exit.
 
-    Per D-07: read GTX_NO_EXIT every call (no caching).
-
-    Truthiness rule (matches Python bool()):
-        unset / empty string  -> raises SystemExit (testable via pytest.raises)
-        any non-empty value   -> returns 0 (firmware loop continues)
-
-    Inline DDR dump (2026-05-11): when GTX_DDR_DUMP is set, run the dump
-    BEFORE returning/exiting. Replaces the atexit hook that crashed under
-    pybind11 embedded interpreter teardown. Multi-tile firmware (ABS, 96
-    iters) calls WJOIN per tile; each dump overwrites the file, final
-    iteration wins (matches vendor atexit-once semantics).
-
-    Deferred-store drain (2026-05-12): flush any S-loop stores still queued
-    BEFORE dumping. Without this, default-exit firmware that pushed a tile
-    but never re-entered an S-loop credit_chk loses the last tile's data.
+    Multi split-join firmware (e.g. abs.elf with 97 tiles) calls WJOIN
+    once per tile, so this handler no longer raises ``SystemExit`` —
+    spike continues into the next tile's instructions and exits
+    naturally when the firmware's ``main`` returns. The DDR dump
+    happens once via :class:`GtxNpu`'s ``atexit`` hook instead of
+    every join.
     """
     npu.flush_deferred_ddr_stores()
-    npu.mem.dump_via_env()
     _emit_progress()
-    if os.environ.get('GTX_NO_EXIT'):
-        return 0
-    raise SystemExit(0)
+    return 0
 
 
 @handler(kind='custom1', funct3=0b110, mnemonic='warp_start_p')

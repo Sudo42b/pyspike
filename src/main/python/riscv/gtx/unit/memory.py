@@ -191,6 +191,32 @@ class GtxMemory(MEMORY):
         self.l0: torch.Tensor = _L0_GLOBAL
         self.ddr = DDR_MEMORY()
         self.spr: dict[int, int] = {}
+        # Pre-built per-(NEST, SPU) views — every ``l[012]_byte`` /
+        # ``l[012]_f16`` lookup pulled ~1.5M live slices on the abs
+        # regression alone (cProfile: ~13s in ``l1_byte``). Caching the
+        # slices once at construction collapses the hot path to a list
+        # index, and the f16 view caches reuse the same storage so the
+        # ``.view(torch.float16)`` cost is paid once.
+        self._l0_views: list[list[torch.Tensor]] = [
+            [self.l0[n, s] for s in range(GTX_SPU_NUM)]
+            for n in range(GTX_NEST_NUM)
+        ]
+        self._l1_views: list[list[torch.Tensor]] = [
+            [self.l1[n, s] for s in range(GTX_SPU_NUM)]
+            for n in range(GTX_NEST_NUM)
+        ]
+        self._l2_views: list[torch.Tensor] = [
+            self.l2[n] for n in range(GTX_NEST_NUM)
+        ]
+        self._l0_f16_views: list[list[torch.Tensor]] = [
+            [v.view(torch.float16) for v in row] for row in self._l0_views
+        ]
+        self._l1_f16_views: list[list[torch.Tensor]] = [
+            [v.view(torch.float16) for v in row] for row in self._l1_views
+        ]
+        self._l2_f16_views: list[torch.Tensor] = [
+            v.view(torch.float16) for v in self._l2_views
+        ]
 
     def getsize(self) -> int:
         return (self.l0.numel() + self.l1.numel() + self.l2.numel()
@@ -222,24 +248,24 @@ class GtxMemory(MEMORY):
     # ----- Raw byte views (D-10 low-level, kept for in-place strided ops) ---
 
     def l0_byte(self, nest: int, spu: int) -> torch.Tensor:
-        return self.l0[nest, spu]
+        return self._l0_views[nest][spu]
 
     def l1_byte(self, nest: int, spu: int) -> torch.Tensor:
-        return self.l1[nest, spu]
+        return self._l1_views[nest][spu]
 
     def l2_byte(self, nest: int) -> torch.Tensor:
-        return self.l2[nest]
+        return self._l2_views[nest]
 
     # ----- Halfword fp16 views (D-10 named, D-12 view guarantee) -----
 
     def l0_f16(self, nest: int, spu: int) -> torch.Tensor:
-        return self.l0_byte(nest, spu).view(torch.float16)
+        return self._l0_f16_views[nest][spu]
 
     def l1_f16(self, nest: int, spu: int) -> torch.Tensor:
-        return self.l1_byte(nest, spu).view(torch.float16)
+        return self._l1_f16_views[nest][spu]
 
     def l2_f16(self, nest: int) -> torch.Tensor:
-        return self.l2_byte(nest).view(torch.float16)
+        return self._l2_f16_views[nest]
 
     def ensure_ddr(self, end_offset: int) -> torch.Tensor:
         return self.ddr.ensure(end_offset)

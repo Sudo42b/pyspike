@@ -6,6 +6,7 @@ FSM-driven dispatch (see :mod:`fsm`) with NPU context awareness
 typed name (``self.gspr["GSPR_GTX_OPERAND3"]``) wherever the source
 register is declared in :mod:`unit.csr`.
 """
+import os
 from typing import List
 
 import torch
@@ -76,16 +77,6 @@ _LSPR_RESET_DEFAULTS = {
     LSPR_SPM_ADDRR: 0,
 }
 
-
-# P6 D-04/D-05: single-global NPU instance pointer for atexit dump hook.
-# Direct port of vendor gtx_npu_core.cc:59
-#   static gtx_npu_t *g_gtx_instance = nullptr;
-# The atexit handler in ddr.py reads this at interpreter shutdown.
-# Single-global is correct for v1 single-hart scope; v2 multi-hart may
-# upgrade to weakref.WeakValueDictionary.
-_LAST_NPU = None  # type: ignore[var-annotated]
-
-
 @isa.register("gtx")
 class GtxNpu(isa.ROCC):
     """GTX NPU functional model — RoCC ``custom0``/``custom1`` dispatch."""
@@ -114,7 +105,7 @@ class GtxNpu(isa.ROCC):
             [RegisterFile(_LSPR_DEFS) for _ in range(GTX_SPU_NUM)]
             for _ in range(GTX_NEST_NUM)
         ]
-
+        #!TODO: 굳이 없어도 될 것 같은데? 없자피 l1, l0에 저장하는건데.
         self._mxe_accum: torch.Tensor = torch.zeros(
             (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.float32,
             device=DEVICE)
@@ -140,6 +131,35 @@ class GtxNpu(isa.ROCC):
         self._context: NpuContext = INITIAL_CONTEXT
 
         self.mem.load_via_env()
+
+        # WJOIN no longer dumps DDR (control.wjoin_with_exit) — register
+        # the dump as an atexit hook so multi-tile firmware pays the
+        # cost once at process teardown instead of per-tile.
+        import atexit as _atexit
+        _atexit.register(self.mem.dump_via_env)
+
+        if os.environ.get("GTX_PROFILE"):
+            import cProfile, atexit, pstats, sys
+            self._profiler = cProfile.Profile()
+            self._profiler.enable()
+
+            def _dump_profile() -> None:
+                try:
+                    self._profiler.disable()
+                except Exception:
+                    pass
+                ps = pstats.Stats(self._profiler).sort_stats("cumulative")
+                print("\n========== GTX_PROFILE (cumulative, top 40) ==========",
+                      file=sys.stderr)
+                ps.stream = sys.stderr
+                ps.print_stats(40)
+                print("========== GTX_PROFILE (tottime, top 30) ==========",
+                      file=sys.stderr)
+                ps2 = pstats.Stats(self._profiler).sort_stats("tottime")
+                ps2.stream = sys.stderr
+                ps2.print_stats(30)
+
+            atexit.register(_dump_profile)
 
     # ------------------------------------------------------------------
     # ROCC virtual methods
@@ -171,13 +191,10 @@ class GtxNpu(isa.ROCC):
         self._credit_ld.fill_(0)
         self._credit_st.fill_(0)
 
-        # Scratchpad zero-init — walk the memory hierarchy directly
-        # (GtxMemory.free() also frees DDR, which we do NOT want here).
-        for nest in self.mem.nests:
-            nest.l2._l2_bytes.zero_()
-            for spu in nest.spus:
-                spu._l0_bytes.zero_()
-                spu._l1_bytes.zero_()
+        # Scratchpad zero-init — DDR is preserved (firmware-loaded data
+        # must survive a hart reset). reset_scratchpads is the OOP entry
+        # point that recurses through nests→(L2, SPUs→(L0, L1)).clear().
+        self.mem.reset_scratchpads()
 
         # SPR zero-init + vendor defaults (gtx_npu_core.cc:80-109 verbatim,
         # routed through RegisterFile.reset for name-based readability).
@@ -245,17 +262,22 @@ class GtxNpu(isa.ROCC):
         # interpreter shutdown).
         import torch  # noqa: F401  -- pin module reference
         for req in self.deferred_ddr_stores:
-            l2_src = self.mem.l2_byte(req.nest).detach().cpu().contiguous()
+            # Hierarchy contract: L2 is on DEVICE (CUDA), DDR is on CPU.
+            # Per-request single H→D snapshot of L2; all row writes then
+            # stay CPU↔CPU (no per-row sync). Single ``ensure_ddr`` grow
+            # up-front so capacity is stable across the inner loop.
+            l2_src = self.mem.l2_byte(req.nest).cpu()
+            max_off = req.ddr_off + (req.height - 1) * req.ddr_stride + req.length
+            self.mem.ensure_ddr(max_off)
+            cap = self.mem.ddr.capacity()
             for row in range(req.height):
                 ddr_off = req.ddr_off + row * req.ddr_stride
                 l2_off = (req.l2_off + row * req.l2_stride) % GTX_L2_SIZE_BYTES
                 copy_len = req.length
-                self.mem.ensure_ddr(ddr_off + copy_len)
-                ddr_buf = self.mem._ddr_bytes
-                copy_len = min(copy_len, ddr_buf.numel() - ddr_off)
+                copy_len = min(copy_len, cap - ddr_off)
                 copy_len = min(copy_len, GTX_L2_SIZE_BYTES - l2_off)
                 if copy_len > 0:
-                    ddr_buf[ddr_off:ddr_off + copy_len] = (
-                        l2_src[l2_off:l2_off + copy_len]
+                    self.mem.ddr.write(
+                        ddr_off, l2_src[l2_off:l2_off + copy_len]
                     )
         self.deferred_ddr_stores.clear()
