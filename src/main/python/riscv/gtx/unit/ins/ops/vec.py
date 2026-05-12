@@ -1,198 +1,472 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-"""VEC op @handler entries -- D-04 thin shim layer (mirror of ops/mm.py).
+"""VEC op @handler entries + vector kernels + firmware dispatcher.
 
-Each handler delegates the full decode/dispatch work to
-`vec_engine.firmware_vec_op`. The disasm layer is fed by
-`@handler(mnemonic=..., mask_funct3=True)` -- one mnemonic per
-(funct7, funct3) tuple, matching `gtx_npu_disasm.inc:67-142`.
+Single-file consolidation of the former three-layer split
+(``vec_core`` element-wise kernels + ``vec_engine`` decode/dispatch +
+``ops/vec`` @handler decorators). Layout:
 
-Phase 5 plan 02 task 3.
+  1. SASMD / DOT / SUM / clamp / accum / arange kernels.
+  2. Helpers: FP16 bit-pattern decoders, L1 / L0 views.
+  3. Unary helper (``_apply_unary``) shared by MATH / SIGN / ROUND.
+  4. Sub-dispatchers for SASMD / arith L0II / unary L0.
+  5. ``exec_vec_op`` / ``firmware_vec_op`` main dispatcher.
+  6. @handler entries -- one per (funct7, funct3) tuple matching
+     ``gtx_npu_disasm.inc:67-142``.
+
+Per RESEARCH Pitfall 7: ``vec_size = (rs1 & 0xFFFF) or 0x10000``
+(HW convention: 0 -> 65536).
 """
+from __future__ import annotations
+
+import torch
+
 from ...._registry import handler
-from .. import vec_engine
+from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM
 from ..encoding import (
-    GTX_F7_VEC_SASMD, GTX_F7_VEC_DOT_SUM, GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP,
-    GTX_F7_VEC_MATH, GTX_F7_VEC_SIGN, GTX_F7_VEC_ROUND,
+    GSPR_GTX_OPERAND2, GSPR_GTX_OPERAND3,
+    GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP, GTX_F7_VEC_DOT_SUM,
+    GTX_F7_VEC_MATH, GTX_F7_VEC_ROUND, GTX_F7_VEC_SASMD, GTX_F7_VEC_SIGN,
+    GTX_VEC_ADD, GTX_VEC_DIV, GTX_VEC_MUL, GTX_VEC_SUB,
+    LSPR_SPM_ADDRA, LSPR_SPM_ADDRB, LSPR_SPM_ADDRR,
 )
 
 
-# =========================================================================
-# SASMD scalar arith funct7=0x10 (8 variants: VS funct3=0..3, IS funct3=4..7)
-# disasm.inc:67-74
-# =========================================================================
+# =============================================================================
+# 1. Vector kernels (FP32 internal, FP16 output)
+# =============================================================================
+def _as_fp32(a) -> torch.Tensor:
+    if isinstance(a, torch.Tensor):
+        return a.to(torch.float32)
+    return torch.as_tensor(a, dtype=torch.float32)
+
+
+def sasmd_kernel(a, b, op: int) -> torch.Tensor:
+    """SASMD element-wise FP32 internal, FP16 output. ``b`` scalar or array."""
+    a_f32 = _as_fp32(a)
+    if isinstance(b, torch.Tensor) and b.dim() > 0:
+        b_f32 = b.to(torch.float32)
+    elif hasattr(b, 'shape') and getattr(b, 'shape', ()):
+        b_f32 = torch.as_tensor(b, dtype=torch.float32)
+    else:
+        b_f32 = torch.full_like(a_f32, float(b))
+    if op == GTX_VEC_ADD:
+        out = a_f32 + b_f32
+    elif op == GTX_VEC_SUB:
+        out = a_f32 - b_f32
+    elif op == GTX_VEC_MUL:
+        out = a_f32 * b_f32
+    elif op == GTX_VEC_DIV:
+        # Vendor convention (gtx_npu_vec.cc:333): div-by-zero -> 0.0.
+        safe_b = torch.where(b_f32 == 0.0, torch.ones_like(b_f32), b_f32)
+        raw = a_f32 / safe_b
+        out = torch.where(b_f32 == 0.0, torch.zeros_like(raw), raw)
+    else:
+        raise ValueError(f"unknown SASMD op {op}")
+    return out.to(torch.float16)
+
+
+def dot_kernel(a, b) -> torch.Tensor:
+    """FP16 dot product (FP32 scalar accumulator, scalar-order)."""
+    a_f32 = _as_fp32(a).reshape(-1)
+    b_f32 = _as_fp32(b).reshape(-1)
+    if a_f32.shape != b_f32.shape:
+        raise ValueError(f"shape mismatch: {a_f32.shape} vs {b_f32.shape}")
+    s = torch.tensor(0.0, dtype=torch.float32, device=a_f32.device)
+    for i in range(a_f32.shape[0]):
+        s = s + a_f32[i] * b_f32[i]
+    return s.to(torch.float16)
+
+
+def vsum_kernel(view) -> torch.Tensor:
+    """FP16 vector sum (FP32 scalar accumulator, scalar-order)."""
+    flat = _as_fp32(view).reshape(-1)
+    s = torch.tensor(0.0, dtype=torch.float32, device=flat.device)
+    for i in range(flat.shape[0]):
+        s = s + flat[i]
+    return s.to(torch.float16)
+
+
+def clamp_min_kernel(a, scalar) -> torch.Tensor:
+    """``out[i] = max(a[i], scalar)``."""
+    return torch.clamp(_as_fp32(a), min=float(scalar)).to(torch.float16)
+
+
+def clamp_max_kernel(a, scalar) -> torch.Tensor:
+    """``out[i] = min(a[i], scalar)``."""
+    return torch.clamp(_as_fp32(a), max=float(scalar)).to(torch.float16)
+
+
+def accum_kernel(a) -> torch.Tensor:
+    """Prefix sum: FP32 accumulator across whole vec, per-element FP16 cast."""
+    a_f32 = _as_fp32(a).reshape(-1)
+    out = torch.empty_like(a_f32)
+    s = torch.tensor(0.0, dtype=torch.float32, device=a_f32.device)
+    for i in range(a_f32.shape[0]):
+        s = s + a_f32[i]
+        out[i] = s
+    return out.to(torch.float16)
+
+
+def arange_kernel(n: int, start, step) -> torch.Tensor:
+    """``out[i] = start + i*step`` (FP32 internal)."""
+    from ....config_params import DEVICE
+    idx = torch.arange(int(n), dtype=torch.float32, device=DEVICE)
+    return (float(start) + idx * float(step)).to(torch.float16)
+
+
+# =============================================================================
+# 2. Helpers
+# =============================================================================
+def _fp16_low16(packed: int) -> torch.Tensor:
+    """Decode bits[15:0] of an int as FP16 (LE bit-pattern), 0-d tensor."""
+    u16 = torch.tensor([packed & 0xFFFF], dtype=torch.uint16)
+    return u16.view(torch.float16)[0]
+
+
+def _fp16_high16(packed: int) -> torch.Tensor:
+    """Decode bits[31:16] of an int as FP16 (LE bit-pattern), 0-d tensor."""
+    u16 = torch.tensor([(packed >> 16) & 0xFFFF], dtype=torch.uint16)
+    return u16.view(torch.float16)[0]
+
+
+def _l1_view_addr(npu, nest: int, spu: int, addr_byte: int,
+                   length: int) -> torch.Tensor:
+    """Return an FP16 view of ``L1[addr:addr + length*2]`` (no copy)."""
+    l1_f16 = npu.mem.l1_f16(nest, spu)
+    off = addr_byte // 2
+    return l1_f16[off:off + length]
+
+
+def _l0_block_view(npu, nest: int, spu: int, reg: int) -> torch.Tensor:
+    """Return an FP16 view of ``L0[(reg & 0x1F)*32 .. +32]``; 16 FP16."""
+    l0 = npu.mem.l0_byte(nest, spu)
+    off = ((reg & 0x1F) * 32) % GTX_L0_SIZE_BYTES
+    return l0.view(torch.float16)[off // 2:off // 2 + 16]
+
+
+# =============================================================================
+# 3. Unary apply (MATH / SIGN / ROUND family bodies)
+# =============================================================================
+def _apply_unary(funct7: int, sub_op: int, view: torch.Tensor) -> torch.Tensor:
+    """Element-wise unary kernels for funct7 0x1C/0x1D/0x1E (FP32 internal)."""
+    f32 = view.to(torch.float32)
+    if funct7 == 0x1C:   # MATH: sqrt / exp / log
+        if sub_op == 0:
+            return torch.sqrt(f32).to(torch.float16)
+        if sub_op == 1:
+            return torch.exp(f32).to(torch.float16)
+        if sub_op == 2:
+            tiny = torch.finfo(torch.float32).tiny
+            return torch.where(f32 > 0.0,
+                                torch.log(f32.clamp(min=tiny)),
+                                torch.zeros_like(f32)).to(torch.float16)
+    if funct7 == 0x1D:   # SIGN: abs / neg / sign / step
+        if sub_op == 0:
+            return torch.abs(f32).to(torch.float16)
+        if sub_op == 1:
+            return (-f32).to(torch.float16)
+        if sub_op == 2:
+            return torch.sign(f32).to(torch.float16)
+        if sub_op == 3:
+            return (f32 > 0.0).to(torch.float16)
+    if funct7 == 0x1E:   # ROUND
+        if sub_op == 0:
+            return torch.ceil(f32).to(torch.float16)
+        if sub_op == 1:
+            return torch.trunc(f32).to(torch.float16)
+        if sub_op == 2:
+            return torch.floor(f32).to(torch.float16)
+        if sub_op == 3:
+            return torch.round(f32).to(torch.float16)
+    return view.clone()
+
+
+# =============================================================================
+# 4. Sub-dispatchers
+# =============================================================================
+def _dispatch_sasmd(npu, nest: int, spu: int, funct3: int,
+                     rs1: int, rs2: int, insn, vec_size: int) -> int:
+    op_map = {0: GTX_VEC_ADD, 1: GTX_VEC_SUB, 2: GTX_VEC_MUL, 3: GTX_VEC_DIV}
+    sub = funct3 & 3
+    if sub not in op_map:
+        return 0
+
+    scalar = _fp16_low16(rs2)
+    if not (funct3 & 4):
+        addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
+        addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+        view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
+        result = sasmd_kernel(view_a, scalar, op=op_map[sub])
+        _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+        return 0
+
+    a_reg = rs1 & 0x1F
+    r_reg = int(npu.gspr.get(GSPR_GTX_OPERAND3, insn.rd)) & 0x1F
+    view_a = _l0_block_view(npu, nest, spu, a_reg)
+    result = sasmd_kernel(view_a, scalar, op=op_map[sub])
+    _l0_block_view(npu, nest, spu, r_reg).copy_(result)
+    return 0
+
+
+def _dispatch_arith_l0_ii(npu, nest: int, spu: int, sub_op: int,
+                            rs1: int, rs2: int, insn) -> int:
+    op_map = {0: GTX_VEC_ADD, 1: GTX_VEC_SUB, 2: GTX_VEC_MUL, 3: GTX_VEC_DIV}
+    if sub_op not in op_map:
+        return 0
+    a_reg = rs1 & 0x1F
+    b_reg = rs2 & 0x1F
+    r_reg = int(npu.gspr.get(GSPR_GTX_OPERAND3, insn.rd)) & 0x1F
+    view_a = _l0_block_view(npu, nest, spu, a_reg)
+    view_b = _l0_block_view(npu, nest, spu, b_reg)
+    result = sasmd_kernel(view_a, view_b, op=op_map[sub_op])
+    _l0_block_view(npu, nest, spu, r_reg).copy_(result)
+    return 0
+
+
+def _dispatch_unary_l0(npu, nest: int, spu: int, funct7: int, sub_op: int,
+                        rs1: int, insn) -> int:
+    input_reg = rs1 & 0x1F
+    op3_raw = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0xFFFFFFFF))
+    result_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else input_reg
+    view = _l0_block_view(npu, nest, spu, input_reg)
+    result = _apply_unary(funct7, sub_op, view)
+    _l0_block_view(npu, nest, spu, result_reg).copy_(result)
+    return 0
+
+
+# =============================================================================
+# 5. exec_vec_op / firmware_vec_op
+# =============================================================================
+def exec_vec_op(npu, proc, insn) -> int:
+    """Direct port of ``gtx_npu_vec.cc:572-754``."""
+    rs1 = int(proc.state.XPR[insn.rs1])
+    vec_size = (rs1 & 0xFFFF) or 0x10000
+
+    funct7 = insn.funct
+    funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
+
+    nest = npu.warp.tmu_id if npu.warp.is_ploop else 0
+    spu = npu.warp.curr_id if npu.warp.is_tloop else 0
+    if nest >= GTX_NEST_NUM:
+        nest = 0
+    if spu >= GTX_SPU_NUM:
+        spu = 0
+
+    rs2 = int(proc.state.XPR[insn.rs2])
+    npu.gspr[GSPR_GTX_OPERAND2] = rs2
+
+    if funct7 == GTX_F7_VEC_SASMD:
+        return _dispatch_sasmd(npu, nest, spu, funct3, rs1, rs2, insn, vec_size)
+
+    if funct7 == GTX_F7_VEC_ARITH and (funct3 & 4):
+        return _dispatch_arith_l0_ii(npu, nest, spu, funct3 & 3, rs1, rs2, insn)
+    if funct7 in (0x1C, 0x1D, 0x1E) and (funct3 & 4):
+        return _dispatch_unary_l0(npu, nest, spu, funct7, funct3 & 3, rs1, insn)
+
+    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
+    addr_b = npu.lspr[nest][spu].get(LSPR_SPM_ADDRB, 0)
+    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+
+    if funct7 == GTX_F7_VEC_ARITH:
+        op_map = {0: GTX_VEC_ADD, 1: GTX_VEC_SUB, 2: GTX_VEC_MUL, 3: GTX_VEC_DIV}
+        if (funct3 & 3) in op_map:
+            view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
+            view_b = _l1_view_addr(npu, nest, spu, addr_b, vec_size)
+            result = sasmd_kernel(view_a, view_b, op=op_map[funct3 & 3])
+            _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+            return 0
+
+    if funct7 == GTX_F7_VEC_DOT_SUM:
+        view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
+        if (funct3 & 3) == 0:
+            view_b = _l1_view_addr(npu, nest, spu, addr_b, vec_size)
+            scalar = dot_kernel(view_a, view_b)
+        else:
+            scalar = vsum_kernel(view_a)
+        _l1_view_addr(npu, nest, spu, addr_r, 1)[0] = scalar
+        u16_val = int(scalar.to(torch.float16).view(torch.uint16))
+        l0 = npu.mem.l0_byte(nest, spu)
+        l0[0] = u16_val & 0xFF
+        l0[1] = (u16_val >> 8) & 0xFF
+        return 0
+
+    if funct7 == GTX_F7_VEC_CLAMP:
+        sub = funct3 & 3
+        view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
+        if sub == 0:
+            scalar = _fp16_low16(rs2)
+            result = clamp_min_kernel(view_a, scalar)
+        elif sub == 1:
+            scalar = _fp16_low16(rs2)
+            result = clamp_max_kernel(view_a, scalar)
+        elif sub == 2:
+            result = accum_kernel(view_a)
+        else:
+            start = _fp16_low16(rs2)
+            step = _fp16_high16(rs2)
+            result = arange_kernel(vec_size, start, step)
+        _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+        return 0
+
+    if funct7 in (0x1C, 0x1D, 0x1E):
+        view = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
+        result = _apply_unary(funct7, funct3 & 3, view)
+        _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+        return 0
+
+    return 0
+
+
+# Backwards-compat alias for sites that still grep ``firmware_vec_op``.
+firmware_vec_op = exec_vec_op
+
+
+# =============================================================================
+# 6. @handler entries
+# =============================================================================
+# ----- SASMD scalar arith (funct7=0x10): VS funct3=0..3, IS funct3=4..7 ------
+
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=0,
          mnemonic='add_vs', mask_funct3=True)
 def _exec_add_vs(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=1,
          mnemonic='sub_vs', mask_funct3=True)
 def _exec_sub_vs(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=2,
          mnemonic='mul_vs', mask_funct3=True)
 def _exec_mul_vs(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=3,
          mnemonic='div_vs', mask_funct3=True)
 def _exec_div_vs(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=4,
          mnemonic='add_is', mask_funct3=True)
 def _exec_add_is(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=5,
          mnemonic='sub_is', mask_funct3=True)
 def _exec_sub_is(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=6,
          mnemonic='mul_is', mask_funct3=True)
 def _exec_mul_is(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_SASMD, funct3=7,
          mnemonic='div_is', mask_funct3=True)
 def _exec_div_is(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
-# =========================================================================
-# VSUM/DOT funct7=0x1A (DOT at funct3=0, SUM at funct3=1)
-# disasm.inc:101-104 -- vendor authoritative; Plan 01 seeded 0x13 incorrectly.
-# =========================================================================
+# ----- VSUM / DOT (funct7=0x1A): DOT funct3=0, SUM funct3=1 ------------------
+
 @handler(kind='custom0', funct7=GTX_F7_VEC_DOT_SUM, funct3=0,
          mnemonic='dot_vvs', mask_funct3=True)
 def _exec_dot_vvs(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_DOT_SUM, funct3=1,
          mnemonic='sum_vs', mask_funct3=True)
 def _exec_sum_vs(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
-# =========================================================================
-# SASMD vector arith funct7=0x18 (8 variants: VV funct3=0..3, II funct3=4..7)
-# disasm.inc:87-94
-# =========================================================================
+# ----- SASMD vector arith (funct7=0x18): VV funct3=0..3, II funct3=4..7 ------
+
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=0,
          mnemonic='add_vv', mask_funct3=True)
 def _exec_add_vv(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=1,
          mnemonic='sub_vv', mask_funct3=True)
 def _exec_sub_vv(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=2,
          mnemonic='mul_vv', mask_funct3=True)
 def _exec_mul_vv(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=3,
          mnemonic='div_vv', mask_funct3=True)
 def _exec_div_vv(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=4,
          mnemonic='add_ii', mask_funct3=True)
 def _exec_add_ii(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=5,
          mnemonic='sub_ii', mask_funct3=True)
 def _exec_sub_ii(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=6,
          mnemonic='mul_ii', mask_funct3=True)
 def _exec_mul_ii(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_ARITH, funct3=7,
          mnemonic='div_ii', mask_funct3=True)
 def _exec_div_ii(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
-# =========================================================================
-# CLAMP family funct7=0x1F (4 variants funct3=0..3; bitwise funct3=4..7
-# deferred for v1 critical path)
-# disasm.inc:135-138
-# =========================================================================
+# ----- CLAMP family (funct7=0x1F): funct3=0..3 -------------------------------
+
 @handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=0,
          mnemonic='clamp_min_v', mask_funct3=True)
 def _exec_clamp_min_v(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=1,
          mnemonic='clamp_max_v', mask_funct3=True)
 def _exec_clamp_max_v(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=2,
          mnemonic='accum_v', mask_funct3=True)
 def _exec_accum_v(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
 @handler(kind='custom0', funct7=GTX_F7_VEC_CLAMP, funct3=3,
          mnemonic='arange_v', mask_funct3=True)
 def _exec_arange_v(npu, proc, insn, xs1, xs2):
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
 
 
-# =========================================================================
-# MATH / SIGN / ROUND families (funct7 0x1C / 0x1D / 0x1E)
-# Sub-op selected by funct3:
-#   0x1C: 0=sqrt 1=exp 2=log
-#   0x1D: 0=abs  1=neg 2=sign 3=step
-#   0x1E: 0=ceil 1=trunc 2=floor 3=rne
-# All variants delegate to vec_engine.firmware_vec_op which routes
-# (funct7, funct3 & 3) through _apply_unary.
-# P8 NEG fix (2026-05-11): previous code registered only funct7=0x1D funct3=0
-# (incorrectly mnemonic'd 'sign_v' — that slot is actually abs.v). neg.v
-# emits funct3=1, sign.v funct3=2, step.v funct3=3 — all silent-NOP'd
-# without a handler. Same gap for the entire 0x1C MATH family and 0x1E ROUND
-# family. Disasm precision (one mnemonic per funct3) preserved.
-# =========================================================================
+# ----- MATH / SIGN / ROUND (funct7 = 0x1C / 0x1D / 0x1E) ---------------------
+# Sub-op selected by funct3 (& 3); P8 NEG fix preserved (one mnemonic per
+# funct3, all routed through exec_vec_op → _apply_unary).
+
 @handler(kind='custom0', funct7=GTX_F7_VEC_MATH, funct3=0,
          mnemonic='sqrt_v', mask_funct3=True)
 @handler(kind='custom0', funct7=GTX_F7_VEC_MATH, funct3=1,
@@ -216,7 +490,8 @@ def _exec_arange_v(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_F7_VEC_ROUND, funct3=3,
          mnemonic='rne_v', mask_funct3=True)
 def _exec_unary_family(npu, proc, insn, xs1, xs2):
-    """Element-wise unary entry (MATH/SIGN/ROUND). Sub-op decoded from
-    (funct7, funct3) inside vec_engine.firmware_vec_op._apply_unary.
+    """Element-wise unary entry (MATH/SIGN/ROUND).
+
+    Sub-op decoded from (funct7, funct3) inside exec_vec_op → _apply_unary.
     """
-    return vec_engine.firmware_vec_op(npu, proc, insn)
+    return exec_vec_op(npu, proc, insn)
