@@ -1,5 +1,0 @@
-# Source: vendor/gtx_cpp_reference/test/LEAKY_RELU/n1s16/data/n1s16_leaky_relu_ref.txt
-# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
-# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
-@f000000
-ab583b9ea947ab9e31e528b5ac3ca9baaf75a1352d84ab1aac99ad762fbfab9d

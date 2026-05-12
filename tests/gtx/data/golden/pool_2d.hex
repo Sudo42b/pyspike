@@ -1,5 +1,0 @@
-# Source: vendor/gtx_cpp_reference/test/POOL_2D/n1s16/data/n1s16_pool_2d_ref.txt
-# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
-# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
-@f000000
-35fe3447b34334edae12b0d2b26c3451300ab6e2b04d2ee0ad11b134b2ce20d1

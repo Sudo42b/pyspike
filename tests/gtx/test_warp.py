@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """Tests for DISP-02 (custom1 funct3 dispatch + warp loop state machine).
 
 All tests run on mocks (no _riscv.so required) -- call handler functions
@@ -20,12 +5,12 @@ directly with a SimpleNamespace fake npu.
 """
 from types import SimpleNamespace
 
-from riscv.gtx.ops.control import (
+from riscv.gtx.unit.context.control import (
     _extract_id, _do_startp, _do_endp, _do_startt, _do_endt,
     _do_starts, _do_ends,
     startp, endp, startt, endt, starts, ends, wsplit,
 )
-from riscv.gtx.warp_state import WarpState
+from riscv.gtx.unit.context.warp_state import WarpState
 
 
 def _fake_npu():

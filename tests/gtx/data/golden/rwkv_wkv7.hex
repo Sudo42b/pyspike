@@ -1,5 +1,0 @@
-# Source: vendor/gtx_cpp_reference/test/RWKV_WKV7/n1s16/data/n1s16_rwkv_wkv7_ref.txt
-# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
-# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
-@f000000
-bd0339f8bba8bc96bb5d3eeeba0e3371b624b48e349540e43c1a3e8c3a70b845

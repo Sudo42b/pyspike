@@ -25,7 +25,7 @@ import pytest
 
 
 def test_gtx_ddr_base_constant():
-    from riscv.gtx.params import GTX_DDR_BASE
+    from riscv.gtx.config_params import GTX_DDR_BASE
     assert GTX_DDR_BASE == 0x370000000
 
 
@@ -60,7 +60,7 @@ def test_iss_dma_funct7_constants():
 
 
 def test_warp_wsplit_seen_persists_through_reset():
-    from riscv.gtx.warp_state import WarpState
+    from riscv.gtx.unit.context.warp_state import WarpState
     w = WarpState()
     assert w.wsplit_seen is False
     w.wsplit_seen = True
@@ -179,7 +179,7 @@ def test_decode_height_zero_means_one():
 
 
 def test_exec_dma_2d_l2_to_l1_load():
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -194,7 +194,7 @@ def test_exec_dma_2d_l2_to_l1_load():
 
 
 def test_exec_dma_2d_l1_to_l2_store():
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -210,7 +210,7 @@ def test_exec_dma_2d_l1_to_l2_store():
 def test_exec_dma_2d_strided():
     """Strided LOAD: l2_stride=128 means rows are 128 bytes apart in L2,
     but contiguous (width=64) in L1."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -230,7 +230,7 @@ def test_exec_dma_2d_strided():
 
 
 def test_exec_dma_2d_zero_height_returns_zero():
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -242,7 +242,7 @@ def test_exec_dma_2d_zero_height_returns_zero():
 
 def test_exec_load_svr_32_bytes():
     """L1[l1_addr:l1_addr+32] -> L0[l0_reg*32:l0_reg*32+32] in 8 x 4-byte words."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -256,7 +256,7 @@ def test_exec_load_svr_32_bytes():
 
 def test_exec_store_svr_round_trip():
     """L0 -> L1 reverse of load_svr."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -274,7 +274,7 @@ def test_exec_store_svr_round_trip():
 
 def test_exec_transpose_4x8_to_8x4():
     """4x8 FP16 matrix at addr_a -> 8x4 transposed at addr_r (byte-pair)."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -307,7 +307,7 @@ def test_exec_transpose_4x8_to_8x4():
 
 def test_exec_fill_writes_le_byte_pair():
     """fill_val=0x3C00 (FP16 1.0) -> L1 contains [0x00, 0x3C, 0x00, 0x3C, ...]"""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -319,7 +319,7 @@ def test_exec_fill_writes_le_byte_pair():
 
 def test_exec_transpose_ddr_identity_perm():
     """Identity perm: dim2,dim1,dim0 with p2=2,p1=1,p0=0 should match input."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx.ddr import ensure_ddr
     from riscv.gtx import dma_engine
 
@@ -350,7 +350,7 @@ def test_firmware_dma_sloop_store_pushes_one_request():
     """firmware_dma_sloop_store appends DeferredDdrStore with correct fields."""
     from riscv.gtx.dma_engine import (
         DeferredDdrStore, firmware_dma_sloop_store)
-    from riscv.gtx.params import GTX_DDR_BASE
+    from riscv.gtx.config_params import GTX_DDR_BASE
 
     class _DummyNpu:
         def __init__(self):
@@ -377,7 +377,7 @@ def test_firmware_dma_sloop_store_pushes_one_request():
 
 def test_firmware_dma_sloop_load_immediate_copy():
     """firmware_dma_sloop_load: DDR -> L2 immediate row-by-row."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx.ddr import ensure_ddr
     from riscv.gtx import dma_engine
 
@@ -395,7 +395,7 @@ def test_firmware_dma_sloop_load_immediate_copy():
 
 def test_firmware_dma_tloop_load_store_l2_l1():
     """firmware_dma_tloop_load_store: L2 <-> L1 strided per-row."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()
@@ -425,7 +425,7 @@ def test_firmware_dma_tloop_load_store_l2_l1():
 
 def test_firmware_dma_tloop_copy_l1_to_l1():
     """firmware_dma_tloop_copy: L1 -> L1 same-SPU; .copy() guards overlapping ranges."""
-    from riscv.gtx.memory import GtxMemory
+    from riscv.gtx.unit.memory import GtxMemory
     from riscv.gtx import dma_engine
 
     mem = GtxMemory()

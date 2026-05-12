@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """Tests for SPR-01 (routing) and SPR-02 (WRSPR/RDSPR handlers).
 
 All tests run on mocks (no _riscv.so required) since spr_router and op
@@ -21,10 +6,10 @@ handlers are pure Python operating on dict storage.
 from types import SimpleNamespace
 
 from riscv.gtx.spr_router import wr_spr, rd_spr
-from riscv.gtx.ops.spr import (wrspr_iss, rdspr_iss,
+from riscv.gtx.unit.ins.ops.spr import (wrspr_iss, rdspr_iss,
                                wrspr_gem5, rdspr_gem5)
-from riscv.gtx.warp_state import WarpState
-from riscv.gtx.params import GTX_NEST_NUM, GTX_SPU_NUM
+from riscv.gtx.unit.context.warp_state import WarpState
+from riscv.gtx.config_params import GTX_NEST_NUM, GTX_SPU_NUM
 
 
 def _fake_npu():

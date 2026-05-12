@@ -1,5 +1,0 @@
-# Source: vendor/gtx_cpp_reference/test/SIGMOID/n1s16/data/n1s16_sigmoid_ref.txt
-# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
-# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
-@f000000
-363239c636b13621385e381335ee3695348537ad382c364135c3355f383e3622

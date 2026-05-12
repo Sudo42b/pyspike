@@ -1,58 +1,85 @@
-"""
-    GTX NPU functional model
-        FP16 helpers (`fp`), 
-        memory layer (`memory`), 
-        HW parameter constants (`params`)
-        funct7 encoding (`encoding`)
-        DDR helpers (`ddr`).
+"""GTX NPU functional model.
 
-The ROCC subclass is added in Phase 2 (D-14).
+Subpackages and modules
+    config_params           hardware constants (NEST/SPU counts, sizes, DDR base)
+    fsm                     one-instruction FSM enum + driver
+    decode / dispatch_state / execute / writeback / idle
+                            per-state transition functions (see :mod:`fsm`)
+    dispatch                table builders that wire @handler entries into the
+                            FSM's ``_custom0`` / ``_custom1`` lookup tables
+    _registry               ``@handler`` decorator + collectors
+    unit/                   HW topology — NSU / NEST / SPU / memory / CSR / FSM
+    unit/csr                typed CSR register definitions
+                            (gspr.py / nspr.py / lspr.py — name-indexed via
+                            :class:`~unit.register_file.RegisterFile`)
+    unit/ins                instruction subpackage (encoding, engines, ops)
+    unit/context            NPU context FSM (C1..C4), warp state, DMA ops
+
+Registering the RoCC extension ``"gtx"`` (via ``@isa.register`` in :mod:`npu`)
+is conditional on the optional ``ddr`` helper being available; when it is
+not, importing this package still succeeds so the FSM / topology / CSR
+modules remain usable for inspection and unit tests.
 """
 import faulthandler
 import os
 import sys
 
-# Enable faulthandler in embedded interpreter so SIGSEGV produces a traceback
-# (Python's -X faulthandler doesn't reach pyspike's embedded interpreter).
+# Enable faulthandler in the embedded interpreter so SIGSEGV produces a
+# traceback (Python's ``-X faulthandler`` does not reach pyspike's
+# embedded interpreter).
 if os.environ.get('PYSPIKE_FAULTHANDLER', '1') != '0':
     faulthandler.enable()
 
-# D-09 / RESEARCH.md "Anti-Patterns": np.float16 view assumes little-endian host.
-# manylinux2014_x86_64 is always LE; this tripwire defends against accidental
-# non-LE host (theoretical -- not in v1 platform target).
+# D-09 / RESEARCH.md "Anti-Patterns": ``np.float16`` view semantics
+# assume little-endian host. ``manylinux2014_x86_64`` is always LE; this
+# tripwire defends against accidental non-LE host (theoretical — not in
+# v1 platform target).
 if sys.byteorder != "little":
     raise RuntimeError(
         f"riscv.gtx requires little-endian host (sys.byteorder='little'); "
-        f"got '{sys.byteorder}'. NumPy float16 view semantics assume LE byte order."
+        f"got '{sys.byteorder}'. NumPy float16 view semantics assume LE byte "
+        f"order."
     )
 
-from . import encoding
-from . import fp
-from . import memory
-from . import params
-from . import ddr
+from . import config_params
+from . import fsm
+from .unit import memory
+from .unit.ins import encoding
 
 # Pitfall 6 (research): pyspike --extlib=riscv.gtx imports this module;
-# importing npu triggers @isa.register("gtx") which makes the extension
-# findable by Spike's PythonBridge.
+# importing ``npu`` triggers ``@isa.register("gtx")`` which makes the
+# extension findable by Spike's PythonBridge. Wrapped in try/except so
+# missing optional helpers (e.g. ``ddr.py`` in WIP refactor states) do
+# not block import of the FSM / CSR / topology surface.
 try:
     from . import npu   # noqa: F401
     from .npu import GtxNpu
+    _NPU_AVAILABLE = True
 except ImportError as _exc:
-
     npu = None  # type: ignore[assignment]
     GtxNpu = None  # type: ignore[assignment]
-    raise ImportError(
-        "riscv.gtx.npu is not available. This may be expected if you are running "
-        "Phase 1 tests without a built wheel. If you need npu functionality, please "
-        "build the wheel or install from source with 'pip install .'."
+    _NPU_AVAILABLE = False
+    import warnings
+    warnings.warn(
+        f"riscv.gtx.npu unavailable ({_exc}); FSM / CSR / topology surface "
+        f"still importable.",
+        ImportWarning,
+        stacklevel=2,
     )
 
-__all__ = ["encoding", "fp", "memory", "params", "ddr", "npu", "GtxNpu"]
+__all__ = [
+    "config_params",
+    "encoding",
+    "fsm",
+    "memory",
+    "npu",
+    "GtxNpu",
+]
 
 try:
     import torch
     DEVICE: str = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 except ImportError:
     raise ImportError(
-        "PyTorch is required for riscv.gtx. Please install PyTorch to use this module.")
+        "PyTorch is required for riscv.gtx. Please install PyTorch to use "
+        "this module.")

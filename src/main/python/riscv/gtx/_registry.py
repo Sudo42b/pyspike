@@ -20,7 +20,7 @@ per-context dispatch — see ORDER.md and npu_context.py.
 """
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
-from .context import NpuContext
+from .unit.context import NpuContext
 
 _HANDLER_REGISTRY: List[dict] = []
 
@@ -176,7 +176,7 @@ def collect_disasms() -> list:
     avoid load-order issues (disasm.py imports encoding.py; _registry.py is
     imported earlier in the dependency chain via dispatch.py).
     """
-    from .disasm import add_r_custom0, add_rf3_custom0, add_warp
+    from .unit.ins.disasm import add_r_custom0, add_rf3_custom0, add_warp
 
     out: list = []
     seen: set = set()  # dedupe by (kind, funct7, funct3, mnemonic) — context

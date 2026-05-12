@@ -24,8 +24,8 @@ D-01: DDR is None at construction (lazy alloc).
 import numpy as np
 import pytest
 
-from riscv.gtx.memory import GtxMemory
-from riscv.gtx.params import (
+from riscv.gtx.unit.memory import GtxMemory
+from riscv.gtx.config_params import (
     GTX_NEST_NUM,
     GTX_SPU_NUM,
     GTX_L0_SIZE_BYTES,

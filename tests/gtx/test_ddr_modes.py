@@ -34,7 +34,7 @@ import pathlib
 import numpy as np
 import pytest
 
-from riscv.gtx.memory import GtxMemory
+from riscv.gtx.unit.memory import GtxMemory
 from riscv.gtx.ddr import (
     DEFAULT_DDR_SIZE,
     INITIAL_FLOOR,

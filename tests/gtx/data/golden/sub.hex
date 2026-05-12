@@ -1,5 +1,0 @@
-# Source: vendor/gtx_cpp_reference/test/SUB/n1s16/data/n1s16_sub_vv_ref.txt
-# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
-# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
-@f000000
-ba4c3d20b5bbb848b7beb47130fcbb5fb8cc358831c8bd16ab40be41b7f0b006

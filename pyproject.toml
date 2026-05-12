@@ -88,8 +88,9 @@ fast = [
   "numba>=0.61.2,<0.66",
 ]
 
-[project.scripts]
-pyspike-verify = "riscv.gtx._verify:main"
+# Note: legacy `pyspike-verify` entry point was retired together with
+# riscv.gtx._verify.py. End-to-end ULP verification now runs via the
+# pytest regression suite (tests/gtx).
 
 [tool.setuptools]
 script-files = [

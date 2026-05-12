@@ -1,5 +1,0 @@
-# Source: vendor/gtx_cpp_reference/test/GEGLU_QUICK/n1s16/data/n1s16_geglu_quick_ref.txt
-# Vendor C++ libgtx_npu.so output, ISS-captured. P6 VRF-03.
-# Single-row truncation (32 bytes / 16 FP16) per P4/P5 precedent.
-@f000000
-aeaa3518adbf2a982be923faa4492d74aac9a7f99b88aa0cad5e2e731d3daa6d

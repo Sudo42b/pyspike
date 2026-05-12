@@ -22,7 +22,7 @@ the suite works under `pytest ... --noconftest -o "addopts="`.
 import numpy as np
 import pytest
 
-from riscv.gtx.params import GTX_NEST_NUM, GTX_SPU_NUM
+from riscv.gtx.config_params import GTX_NEST_NUM, GTX_SPU_NUM
 
 
 # Module-level detection -- self-contained so --noconftest still works.

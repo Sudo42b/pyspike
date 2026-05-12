@@ -63,7 +63,7 @@ def test_handler_registry_has_all_10_mm_variants():
     if not _RISCV_AVAILABLE:
         pytest.skip("_riscv.so not built -- registry uses pybind types")
     # Force ops package import to populate registry
-    import riscv.gtx.ops  # noqa: F401
+    import riscv.gtx.unit.ins.ops  # noqa: F401
     from riscv.gtx import _registry
     table = _registry.collect_for_kind('custom0')
     # 5 funct3 entries each at funct7=0x00 (MM) and funct7=0x01 (MMC)

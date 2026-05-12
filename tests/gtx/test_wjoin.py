@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """Tests for CORE-03 / D-07 / D-08: WJOIN GTX_NO_EXIT semantics.
 
 Two handlers under test:
@@ -25,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from riscv.gtx.ops.control import wjoin_with_exit, wjoin_custom0_no_exit
-from riscv.gtx.warp_state import WarpState
+from riscv.gtx.unit.context.control import wjoin_with_exit, wjoin_custom0_no_exit
+from riscv.gtx.unit.context.warp_state import WarpState
 
 
 def _fake_npu():

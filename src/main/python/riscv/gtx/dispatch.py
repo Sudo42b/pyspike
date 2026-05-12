@@ -71,8 +71,6 @@ def _bind(fn: Callable, npu) -> Callable:
     return wrapped
 
 
-# ----- 4-mode dispatch router (Plan 04) ---------------------------------
-# Defined in a sibling module to avoid Wave 2 file-write conflict with
-# Plan 02's table builders. Re-exported here so callers can import via
-# `from riscv.gtx.dispatch import dispatch_4mode` (stable public surface).
-from .dispatch_4mode import dispatch_4mode, dispatch_iss_opcode  # noqa: F401,E402
+# NOTE: the legacy `dispatch_4mode` router has been retired — its warp-state
+# broadcast logic is subsumed by the FSM's DISPATCH stage plus the per-handler
+# warp routing helpers in unit/context/{control,dma}.py.
