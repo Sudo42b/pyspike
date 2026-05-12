@@ -203,7 +203,8 @@ def firmware_softmax_imm(npu, proc, insn, *, op_id: int) -> int:
         f32 = view_in.to(torch.float32)
         max_f = max_val.to(torch.float32)
         esum_f = accum_val.to(torch.float32)
-        ln_esum = torch.log(esum_f) if float(esum_f) > 0.0 else torch.tensor(0.0)
+        ln_esum = (torch.log(esum_f) if float(esum_f) > 0.0
+                   else torch.tensor(0.0, device=esum_f.device))
         result = torch.exp(f32 - max_f - ln_esum).to(torch.float16)
         view_out = _l0_block_view(npu, nest, spu, out_reg)
         view_out[:] = result

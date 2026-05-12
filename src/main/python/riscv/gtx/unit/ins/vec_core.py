@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """Pure stateless VEC kernels (torch-backed).
 
 Migrated 2026-05-11 from numpy/numba → torch. CPU tensors throughout; CUDA
@@ -83,7 +68,7 @@ def dot_kernel(a, b) -> torch.Tensor:
     if a_f32.shape != b_f32.shape:
         raise ValueError(f"shape mismatch: {a_f32.shape} vs {b_f32.shape}")
     # Explicit scalar-order to match C++ accumulate (RESEARCH Pitfall 2).
-    s = torch.tensor(0.0, dtype=torch.float32)
+    s = torch.tensor(0.0, dtype=torch.float32, device=a_f32.device)
     n = a_f32.shape[0]
     for i in range(n):
         s = s + a_f32[i] * b_f32[i]
@@ -93,7 +78,7 @@ def dot_kernel(a, b) -> torch.Tensor:
 def vsum_kernel(view) -> torch.Tensor:
     """FP16 vector sum (FP32 scalar accumulator, scalar-order)."""
     flat = _as_fp32(view).reshape(-1)
-    s = torch.tensor(0.0, dtype=torch.float32)
+    s = torch.tensor(0.0, dtype=torch.float32, device=flat.device)
     for i in range(flat.shape[0]):
         s = s + flat[i]
     return s.to(torch.float16)
@@ -115,7 +100,7 @@ def accum_kernel(a) -> torch.Tensor:
     """Prefix sum: FP32 accumulator across whole vec, per-element FP16 cast."""
     a_f32 = _as_fp32(a).reshape(-1)
     out = torch.empty_like(a_f32)
-    s = torch.tensor(0.0, dtype=torch.float32)
+    s = torch.tensor(0.0, dtype=torch.float32, device=a_f32.device)
     for i in range(a_f32.shape[0]):
         s = s + a_f32[i]
         out[i] = s
@@ -124,9 +109,10 @@ def accum_kernel(a) -> torch.Tensor:
 
 def arange_kernel(n: int, start, step) -> torch.Tensor:
     """out[i] = start + i*step (FP32 internal)."""
+    from ...config_params import DEVICE
     s_f32 = float(start)
     st_f32 = float(step)
     # torch.arange with float arithmetic; matches start + i*step in FP32.
-    idx = torch.arange(int(n), dtype=torch.float32)
+    idx = torch.arange(int(n), dtype=torch.float32, device=DEVICE)
     out = s_f32 + idx * st_f32
     return out.to(torch.float16)

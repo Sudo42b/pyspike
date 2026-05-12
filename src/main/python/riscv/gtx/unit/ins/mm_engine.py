@@ -107,7 +107,7 @@ def _read_l1_fp16_matrix(npu, nest, spu, addr, rows, cols) -> torch.Tensor:
     if start + nbytes <= GTX_L1_SIZE_BYTES:
         return l1[start:start + nbytes].view(torch.float16).reshape(rows, cols)
     # Wrap-around: materialise into a contiguous uint8 buffer first.
-    buf = torch.empty(nbytes, dtype=torch.uint8)
+    buf = torch.empty(nbytes, dtype=torch.uint8, device=l1.device)
     head = GTX_L1_SIZE_BYTES - start
     buf[:head] = l1[start:start + head]
     buf[head:] = l1[:nbytes - head]
@@ -127,7 +127,7 @@ def _read_l1_fp32_bias(npu, nest, spu, addr, rows, cols) -> torch.Tensor:
     start = addr % GTX_L1_SIZE_BYTES
     if start + nbytes <= GTX_L1_SIZE_BYTES:
         return l1[start:start + nbytes].view(torch.float32).reshape(rows, cols)
-    buf = torch.empty(nbytes, dtype=torch.uint8)
+    buf = torch.empty(nbytes, dtype=torch.uint8, device=l1.device)
     head = GTX_L1_SIZE_BYTES - start
     buf[:head] = l1[start:start + head]
     buf[head:] = l1[:nbytes - head]
@@ -210,7 +210,8 @@ def _exec_mm_o_variant(npu, nest, spu, args, is_accumulate):
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, 1, col_A).flatten()
     prior = float(npu._mxe_accum[nest, spu]) if is_accumulate else 0.0
     sum_f32 = gemm_reduce_sum_a(A, prior_accum=prior)
-    npu._mxe_accum[nest, spu] = torch.tensor(sum_f32, dtype=torch.float32)
+    npu._mxe_accum[nest, spu] = torch.tensor(
+        sum_f32, dtype=torch.float32, device=npu._mxe_accum.device)
 
     # L0 base from gspr[OPERAND3] & 0x1F (low 5 bits).
     l0_addr = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0)) & 0x1F
@@ -241,7 +242,8 @@ def _exec_mm_v_variant(npu, nest, spu, args, is_accumulate):
     B = _read_l1_fp16_matrix(npu, nest, spu, addr_b, 1, vec_len).flatten()
     prior = float(npu._mxe_accum[nest, spu]) if is_accumulate else 0.0
     dot_f32 = gemm_dot(A, B, prior_accum=prior)
-    npu._mxe_accum[nest, spu] = torch.tensor(dot_f32, dtype=torch.float32)
+    npu._mxe_accum[nest, spu] = torch.tensor(
+        dot_f32, dtype=torch.float32, device=npu._mxe_accum.device)
 
     l0_addr = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0)) & 0x1F
     l0_off = (l0_addr * 32) % GTX_L0_SIZE_BYTES

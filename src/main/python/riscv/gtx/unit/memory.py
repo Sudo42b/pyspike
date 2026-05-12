@@ -13,6 +13,7 @@ from ..config_params import (
     GTX_L2_SIZE_BYTES,
     GTX_NEST_NUM,
     GTX_SPU_NUM,
+    DEVICE,
 )
 
 """DDR backing store + hex I/O — Phase 3 fills (D-07/D-08/D-09/D-13).
@@ -37,8 +38,10 @@ class MEMORY(abc.ABC):
 
 class SPU_MEMORY(MEMORY):
     def __init__(self):
-        self._l0_bytes = torch.zeros(GTX_L0_SIZE_BYTES, dtype=torch.uint8)
-        self._l1_bytes = torch.zeros(GTX_L1_SIZE_BYTES, dtype=torch.uint8)
+        self._l0_bytes = torch.zeros(GTX_L0_SIZE_BYTES, dtype=torch.uint8,
+                                      device=DEVICE)
+        self._l1_bytes = torch.zeros(GTX_L1_SIZE_BYTES, dtype=torch.uint8,
+                                      device=DEVICE)
 
     def getsize(self) -> int:
         return GTX_L0_SIZE_BYTES + GTX_L1_SIZE_BYTES
@@ -53,7 +56,8 @@ class SPU_MEMORY(MEMORY):
 
 class L2_MEMORY(MEMORY):
     def __init__(self):
-        self._l2_bytes = torch.zeros(GTX_L2_SIZE_BYTES, dtype=torch.uint8)
+        self._l2_bytes = torch.zeros(GTX_L2_SIZE_BYTES, dtype=torch.uint8,
+                                      device=DEVICE)
 
     def getsize(self) -> int:
         return GTX_L2_SIZE_BYTES
@@ -116,7 +120,8 @@ class DDR_MEMORY(MEMORY):
         if end_offset > current_size:
             new_size = max(end_offset, current_size * 2, INITIAL_FLOOR)
             new_size = min(new_size, cap)
-            new_arr = torch.zeros(new_size, dtype=torch.uint8)
+            new_arr = torch.zeros(new_size, dtype=torch.uint8,
+                                   device=DEVICE)
             if self._ddr_bytes is not None:
                 new_arr[:current_size] = self._ddr_bytes
             self._ddr_bytes = new_arr
@@ -202,9 +207,12 @@ class GtxMemory(MEMORY):
                 self.ensure_ddr(offset + nbytes)
                 # torch.frombuffer requires writable buffer; bytes is read-only,
                 # so go via bytearray (copy is cheap for 32-byte chunks).
-                self._ddr_bytes[offset : offset + nbytes] = torch.frombuffer(
-                    bytearray(chunk), dtype=torch.uint8
-                )
+                # frombuffer is CPU-only -- transfer to the DDR tensor's device
+                # so the slice assignment works on GPU backends.
+                src = torch.frombuffer(bytearray(chunk), dtype=torch.uint8)
+                if src.device != self._ddr_bytes.device:
+                    src = src.to(self._ddr_bytes.device)
+                self._ddr_bytes[offset : offset + nbytes] = src
                 offset += nbytes
 
     def ddr_save_to_hex(self, filename: str, addr: int, size: int) -> None:

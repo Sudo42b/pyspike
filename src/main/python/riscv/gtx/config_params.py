@@ -1,23 +1,17 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-"""Hardware parameter constants -- direct port of vendor/gtx_cpp_reference/gtx/gtx_params.h.
+import torch
 
-Naming follows the C++ macro convention verbatim (per CONTEXT.md Claude's Discretion).
-These values are referenced by tests/gtx/test_memory_layout.py and by Phase 2-5 op handlers.
-"""
+
+# --------------------------------------------------------------------------
+# Torch backend device — single source of truth.
+# --------------------------------------------------------------------------
+# Every GTX tensor (L0/L1/L2/DDR scratchpads, MXE accumulators, kernel
+# temporaries) lives on ``DEVICE``. CUDA is the default whenever it is
+# available; otherwise CPU.
+DEVICE: torch.device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
+
 # NEST x SPU topology
 GTX_NEST_NUM: int = 4
 GTX_SPU_NUM: int = 16          # SPUs per NEST

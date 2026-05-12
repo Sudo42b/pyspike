@@ -1,18 +1,3 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 """GtxNpu -- ``riscv.isa.ROCC`` subclass registered as ``"gtx"``.
 
 FSM-driven dispatch (see :mod:`fsm`) with NPU context awareness
@@ -30,7 +15,7 @@ from riscv.csrs import csr_t
 from riscv.disasm import disasm_insn_t
 from riscv.processor import insn_desc_t, processor_t
 
-from .config_params import GTX_NEST_NUM, GTX_SPU_NUM
+from .config_params import GTX_NEST_NUM, GTX_SPU_NUM, DEVICE
 from .dispatch import build_custom0_table, build_custom1_table
 from .fsm import NpuState, run_pipeline
 from .unit.context import INITIAL_CONTEXT, NpuContext
@@ -131,11 +116,14 @@ class GtxNpu(isa.ROCC):
         ]
 
         self._mxe_accum: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.float32)
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.float32,
+            device=DEVICE)
         self._credit_ld: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32)
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32,
+            device=DEVICE)
         self._credit_st: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32)
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32,
+            device=DEVICE)
 
         self._disasm_entries: List[disasm_insn_t] = []
 

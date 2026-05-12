@@ -77,9 +77,12 @@ __all__ = [
 ]
 
 try:
-    import torch
-    DEVICE: str = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    import torch  # noqa: F401 -- imported for early ImportError surface
 except ImportError:
     raise ImportError(
         "PyTorch is required for riscv.gtx. Please install PyTorch to use "
         "this module.")
+
+# Re-export the single source of truth for the compute device so callers can
+# write `from riscv.gtx import DEVICE` if they prefer the package root path.
+from .config_params import DEVICE  # noqa: E402,F401
