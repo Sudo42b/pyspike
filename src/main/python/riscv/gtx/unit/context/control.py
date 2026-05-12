@@ -74,15 +74,33 @@ def _do_endp(npu, rs1: int, rs2: int) -> None:
 
 
 def _do_startt(npu, rs1: int, rs2: int) -> None:
-    """Port of gtx_npu_t::startt. Sets is_tloop, curr_id."""
+    """Port of gtx_npu_t::startt. Sets is_tloop, curr_id.
+
+    Also opens the T-loop instruction buffer (see :mod:`gtx.tloop_buffer`)
+    so subsequent bufferable mnemonics are captured for replay-at-endt
+    instead of executing immediately.
+    """
     spu_id = _extract_id(rs1, rs2)
     assert spu_id < GTX_SPU_NUM, f"Invalid SPU ID {spu_id} in startt (is_tloop={npu.warp.is_tloop})"
     npu.warp.curr_id = spu_id
     npu.warp.is_tloop = True
+    # Hard kill-switch: ``GTX_TLOOP_DISABLE=1`` keeps the FSM on the eager
+    # path while leaving the buffer wiring in place, so we can A/B against
+    # the in-order replay path without reverting the patch.
+    if not os.environ.get("GTX_TLOOP_DISABLE"):
+        npu._tloop_buf = []
 
 
 def _do_endt(npu, rs1: int, rs2: int) -> None:
-    """Port of gtx_npu_t::endt. Clears is_tloop."""
+    """Port of gtx_npu_t::endt. Clears is_tloop.
+
+    Drains any buffered T-loop instructions BEFORE clearing ``is_tloop``
+    so replayed handlers see the warp state they were captured under.
+    """
+    if npu._tloop_buf:
+        from ...tloop_buffer import flush as _flush_tloop_buf
+        _flush_tloop_buf(npu)
+    npu._tloop_buf = None
     npu.warp.is_tloop = False
 
 

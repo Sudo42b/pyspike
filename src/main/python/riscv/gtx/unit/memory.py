@@ -194,29 +194,24 @@ class GtxMemory(MEMORY):
         # Pre-built per-(NEST, SPU) views — every ``l[012]_byte`` /
         # ``l[012]_f16`` lookup pulled ~1.5M live slices on the abs
         # regression alone (cProfile: ~13s in ``l1_byte``). Caching the
-        # slices once at construction collapses the hot path to a list
+        # slices once at construction collapses the hot path to a tensor
         # index, and the f16 view caches reuse the same storage so the
         # ``.view(torch.float16)`` cost is paid once.
-        self._l0_views: list[list[torch.Tensor]] = [
-            [self.l0[n, s] for s in range(GTX_SPU_NUM)]
-            for n in range(GTX_NEST_NUM)
-        ]
-        self._l1_views: list[list[torch.Tensor]] = [
-            [self.l1[n, s] for s in range(GTX_SPU_NUM)]
-            for n in range(GTX_NEST_NUM)
-        ]
-        self._l2_views: list[torch.Tensor] = [
-            self.l2[n] for n in range(GTX_NEST_NUM)
-        ]
-        self._l0_f16_views: list[list[torch.Tensor]] = [
-            [v.view(torch.float16) for v in row] for row in self._l0_views
-        ]
-        self._l1_f16_views: list[list[torch.Tensor]] = [
-            [v.view(torch.float16) for v in row] for row in self._l1_views
-        ]
-        self._l2_f16_views: list[torch.Tensor] = [
-            v.view(torch.float16) for v in self._l2_views
-        ]
+        #
+        # Storage must stay aliased to ``self.l[012]``: DMA writes through
+        # the byte view, vec ops write through the fp16 view, and
+        # ``clear()`` / ``reset_scratchpads()`` zero through ``self.l[012]``
+        # — all three paths need to land on the same backing bytes.
+        # ``torch.stack`` (copies the inputs) and ``.to(torch.float16)``
+        # (dtype cast, not reinterpret) both BREAK aliasing, so use the
+        # original tensors directly and ``.view(torch.float16)`` for the
+        # FP16 reinterpret (zero-copy, shared storage).
+        self._l0_views: torch.Tensor = self.l0
+        self._l1_views: torch.Tensor = self.l1
+        self._l2_views: torch.Tensor = self.l2
+        self._l0_f16_views: torch.Tensor = self.l0.view(torch.float16)
+        self._l1_f16_views: torch.Tensor = self.l1.view(torch.float16)
+        self._l2_f16_views: torch.Tensor = self.l2.view(torch.float16)
 
     def getsize(self) -> int:
         return (self.l0.numel() + self.l1.numel() + self.l2.numel()
@@ -248,10 +243,10 @@ class GtxMemory(MEMORY):
     # ----- Raw byte views (D-10 low-level, kept for in-place strided ops) ---
 
     def l0_byte(self, nest: int, spu: int) -> torch.Tensor:
-        return self._l0_views[nest][spu]
+        return self._l0_views[nest, spu]
 
     def l1_byte(self, nest: int, spu: int) -> torch.Tensor:
-        return self._l1_views[nest][spu]
+        return self._l1_views[nest, spu]
 
     def l2_byte(self, nest: int) -> torch.Tensor:
         return self._l2_views[nest]
@@ -259,10 +254,10 @@ class GtxMemory(MEMORY):
     # ----- Halfword fp16 views (D-10 named, D-12 view guarantee) -----
 
     def l0_f16(self, nest: int, spu: int) -> torch.Tensor:
-        return self._l0_f16_views[nest][spu]
+        return self._l0_f16_views[nest, spu]
 
     def l1_f16(self, nest: int, spu: int) -> torch.Tensor:
-        return self._l1_f16_views[nest][spu]
+        return self._l1_f16_views[nest, spu]
 
     def l2_f16(self, nest: int) -> torch.Tensor:
         return self._l2_f16_views[nest]

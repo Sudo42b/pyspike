@@ -126,6 +126,10 @@ class GtxNpu(isa.ROCC):
         # the state functions in decode/dispatch_state/execute/writeback.
         self._state: NpuState = NpuState.IDLE
         self._ctx: dict = {}
+        # T-loop instruction buffer. ``None`` outside a thread block;
+        # set to ``[]`` by ``_do_startt`` and drained by ``_do_endt``.
+        # See :mod:`gtx.tloop_buffer` for the snapshot/replay contract.
+        self._tloop_buf: list | None = None
         # NPU execution context (persistent across instructions; warp
         # markers mutate via apply_transition in WRITEBACK).
         self._context: NpuContext = INITIAL_CONTEXT
@@ -212,6 +216,8 @@ class GtxNpu(isa.ROCC):
         # FSM scaffold reset.
         self._state = NpuState.IDLE
         self._ctx = {}
+        # T-loop buffer reset (disabled outside a thread block).
+        self._tloop_buf = None
         # Context reset — back to C1 (plan outside).
         self._context = INITIAL_CONTEXT
 
