@@ -1,25 +1,52 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-"""Dispatch dict builders -- wires _registry handlers into custom0/custom1 tables.
-
-Called from GtxNpu.__init__. Creates closures binding `npu` (the GtxNpu instance)
-so handlers can read npu.warp / npu.gspr / npu.spr_router etc.
-"""
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 from . import _registry
+from .unit.context import NpuContext
+
+
+def resolve_for_context(custom0_3level: Dict[int, Dict],
+                         custom1_2level: Dict[int, Dict],
+                         context: NpuContext):
+    """Pre-flatten the 3-level / 2-level dispatch tables for one context.
+
+    The runtime dispatcher used to do per-instruction
+    ``sub_table.get(current_context)`` + universal fallback +
+    funct3 fallback — four ``dict.get`` calls hashing an
+    :class:`NpuContext` enum every cycle (~1.5 s on ABS over 9.9 M
+    hashes). Flattening once per context change collapses dispatch to
+    a single outer lookup + at most one funct3 fallback, no enum hash
+    on the hot path.
+
+    Semantics match :mod:`dispatch_state` exactly: for each
+    ``funct7`` (custom0) or ``funct3`` (custom1) entry, prefer the
+    context-specific inner table; fall back to the universal
+    (``None`` key) table only when no context-specific override
+    exists. *Within* a chosen inner table the original
+    ``ctx_table.get(None)`` / ``ctx_table.get(f3)`` priority is
+    preserved because both keys live side by side after flattening.
+
+    Returns
+    -------
+    (resolved_custom0, resolved_custom1)
+        Two 2-level dicts:
+          custom0: ``Dict[funct7, Dict[Optional[funct3], handler]]``
+          custom1: ``Dict[funct3, handler]``
+    """
+    resolved_c0: Dict[int, Dict[Optional[int], Callable]] = {}
+    for f7, ctx_table in custom0_3level.items():
+        inner = ctx_table.get(context)
+        if inner is None:
+            inner = ctx_table.get(None)
+        if inner is not None:
+            resolved_c0[f7] = inner
+
+    resolved_c1: Dict[int, Callable] = {}
+    for f3, ctx_table in custom1_2level.items():
+        h = ctx_table.get(context)
+        if h is None:
+            h = ctx_table.get(None)
+        if h is not None:
+            resolved_c1[f3] = h
+    return resolved_c0, resolved_c1
 
 
 def build_custom0_table(npu) -> Dict[int, Dict]:

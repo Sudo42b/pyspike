@@ -21,33 +21,30 @@ from .fsm import NpuState
 def state_dispatch(npu) -> NpuState:
     """Resolve handler in current NPU context.
 
+    Walks the pre-flattened ``npu._custom0_resolved`` / ``_custom1_resolved``
+    tables (see :func:`gtx.dispatch.resolve_for_context`) — one
+    ``dict.get`` per kind on the hot path, no per-instruction
+    :class:`NpuContext` enum hashing. The flattened tables are kept in
+    sync with ``npu._context`` by :mod:`gtx.writeback` on every warp-
+    marker transition.
+
     Writes ``ctx['handler']`` and ``ctx['mnemonic']``; returns
     :attr:`NpuState.EXECUTE`.
     """
     kind = npu._ctx["kind"]
-    f7 = npu._ctx["funct7"]
     f3 = npu._ctx["funct3"]
-    ctx_now = npu._context
 
     handler = None
     if kind == "custom0":
-        sub_table = npu._custom0.get(f7)
-        if sub_table is not None:
-            # Middle-level context lookup: prefer current context, fall
-            # back to universal (None).
-            ctx_table = sub_table.get(ctx_now)
-            if ctx_table is None:
-                ctx_table = sub_table.get(None)
-            if ctx_table is not None:
-                # Inner-level: P2 back-compat — None key (no funct3
-                # decomp) tried before funct3 key (mask_funct3=True).
-                handler = ctx_table.get(None)
-                if handler is None:
-                    handler = ctx_table.get(f3)
-    elif kind == "custom1":
-        inner = npu._custom1.get(f3)
+        inner = npu._custom0_resolved.get(npu._ctx["funct7"])
         if inner is not None:
-            handler = inner.get(ctx_now) or inner.get(None)
+            # P2 back-compat — None key (no funct3 decomp) tried before
+            # funct3 key (mask_funct3=True).
+            handler = inner.get(None)
+            if handler is None:
+                handler = inner.get(f3)
+    elif kind == "custom1":
+        handler = npu._custom1_resolved.get(f3)
     # else: custom2/3 are inherited NOPs; should never reach here.
 
     npu._ctx["handler"] = handler

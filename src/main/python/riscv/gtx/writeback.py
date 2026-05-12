@@ -34,6 +34,16 @@ def state_writeback(npu) -> NpuState:
     # (2) Context transition (warp markers only)
     mnemonic = npu._ctx.get("mnemonic")
     if mnemonic is not None and is_warp_marker(mnemonic):
-        npu._context = apply_transition(npu._context, mnemonic)
+        old_ctx = npu._context
+        new_ctx = apply_transition(old_ctx, mnemonic)
+        if new_ctx is not old_ctx:
+            npu._context = new_ctx
+            # Re-flatten the dispatch tables for the new context so the
+            # next instruction's :mod:`dispatch_state` does a single
+            # ``funct7`` lookup instead of walking the 3-level table.
+            from .dispatch import resolve_for_context
+            npu._custom0_resolved, npu._custom1_resolved = resolve_for_context(
+                npu._custom0, npu._custom1, new_ctx
+            )
 
     return NpuState.IDLE

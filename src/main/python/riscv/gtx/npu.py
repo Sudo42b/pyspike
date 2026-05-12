@@ -17,7 +17,18 @@ from riscv.disasm import disasm_insn_t
 from riscv.processor import insn_desc_t, processor_t
 
 from .config_params import GTX_NEST_NUM, GTX_SPU_NUM, DEVICE
-from .dispatch import build_custom0_table, build_custom1_table
+from .dispatch import build_custom0_table, build_custom1_table, resolve_for_context
+from .tloop_buffer import (
+    BUFFERABLE_MNEMONICS as _TLOOP_BUFFERABLE,
+    TRANSPARENT_MNEMONICS as _TLOOP_TRANSPARENT,
+    TLoopEntry as _TLoopEntry,
+    flush as _tloop_flush,
+)
+from .unit.ins.encoding import (
+    GSPR_GTX_OPERAND3 as _GSPR_OP3,
+    GSPR_GTX_OPERAND5 as _GSPR_OP5,
+    GTX_ISS_F7_OPSET as _F7_OPSET,
+)
 from .fsm import NpuState, run_pipeline
 from .unit.context import INITIAL_CONTEXT, NpuContext
 from .unit.context.warp_state import WarpState
@@ -120,6 +131,15 @@ class GtxNpu(isa.ROCC):
 
         self._custom0 = build_custom0_table(self)
         self._custom1 = build_custom1_table(self)
+        # Context-resolved dispatch tables — flattened per current
+        # NpuContext so :func:`gtx.dispatch_state.state_dispatch` does a
+        # single ``dict.get(funct7)`` instead of the original
+        # context-key + universal-fallback chain. Refreshed by
+        # ``refresh_dispatch_cache`` whenever a warp marker mutates
+        # ``self._context`` (see :mod:`gtx.writeback`).
+        self._custom0_resolved, self._custom1_resolved = resolve_for_context(
+            self._custom0, self._custom1, INITIAL_CONTEXT
+        )
 
         # FSM scaffold — `_state` is the current pipeline state; `_ctx`
         # holds transient per-instruction values produced/consumed by
@@ -220,23 +240,78 @@ class GtxNpu(isa.ROCC):
         self._tloop_buf = None
         # Context reset — back to C1 (plan outside).
         self._context = INITIAL_CONTEXT
+        self._custom0_resolved, self._custom1_resolved = resolve_for_context(
+            self._custom0, self._custom1, self._context
+        )
 
     # ------------------------------------------------------------------
     # RoCC entry points — both kinds drive the same one-instruction FSM
     # ------------------------------------------------------------------
     def custom0(self, proc, insn, xs1, xs2) -> int:
-        """RoCC ``custom0`` entry. Drives the one-instruction FSM.
+        """RoCC ``custom0`` entry.
 
-        Dispatch semantics (preserved verbatim from pre-FSM port; see
-        vendor ``gtx_npu_custom0.cc:1042-1058``):
+        Hot path: when we're inside ``__start_thread`` / ``__end_thread``
+        (``self.warp.is_tloop`` and ``self._tloop_buf is not None``) and
+        the instruction is :data:`~gtx.tloop_buffer.BUFFERABLE_MNEMONICS`,
+        we skip the entire DECODE → DISPATCH → EXECUTE → WRITEBACK FSM
+        cycle and inline a snapshot directly into the buffer. This
+        bypasses ~5 µs of per-instruction Python bookkeeping; on the ABS
+        regression that's roughly 1.18 M of the 1.98 M custom0 calls.
 
-        - 3-level lookup: ``funct7 → context → {funct3-or-None: handler}``
-        - ``sub_table[None]`` tried first (P2 back-compat, no funct3 decomp)
-        - fallback: ``funct3`` synthesised from RoCC R-type flags
-        - unmapped routes return 0 (silent NOP)
-        - OPSET (``funct7 = GTX_ISS_F7_OPSET``) leaves OPERAND3/5 staging
-          populated; every other instruction clears them post-dispatch.
+        Slow path: everything else goes through :func:`run_pipeline` so
+        non-bufferable mnemonics, T-loop boundary transitions, and
+        non-T-loop instructions keep their full FSM semantics
+        (including the OPSET-aware OPERAND3/5 clear in
+        :mod:`gtx.writeback`).
         """
+        buf = self._tloop_buf
+        if buf is not None and self.warp.is_tloop:
+            # Inline DECODE + DISPATCH for the fast path. The full FSM
+            # would do the same lookups via separate state functions.
+            funct7 = insn.funct
+            xd = insn.xd
+            xs1_bit = insn.xs1
+            xs2_bit = insn.xs2
+            funct3 = (xd << 2) | (xs1_bit << 1) | xs2_bit
+
+            inner = self._custom0_resolved.get(funct7)
+            if inner is not None:
+                handler = inner.get(None)
+                if handler is None:
+                    handler = inner.get(funct3)
+            else:
+                handler = None
+
+            if handler is not None:
+                mnemonic = getattr(handler, "gtx_mnemonic", None)
+                if mnemonic in _TLOOP_BUFFERABLE:
+                    # Inline snapshot — replaces the entire FSM cycle
+                    # for ~60 % of custom0 calls on ABS.
+                    state = proc.state
+                    buf.append(_TLoopEntry(
+                        handler, mnemonic,
+                        int(state.XPR[insn.rs1]),
+                        int(state.XPR[insn.rs2]),
+                        int(self.gspr.get(_GSPR_OP3, 0)),
+                        int(self.gspr.get(_GSPR_OP5, 0)),
+                        funct7, xd, xs1_bit, xs2_bit, insn.rd,
+                    ))
+                    # Mirror WRITEBACK's OPSET-aware clear (every
+                    # bufferable mnemonic is non-OPSET): zero the
+                    # staging GSPRs so the next opset cleanly stages a
+                    # fresh value. Cheap dict writes, much smaller than
+                    # the FSM cycle we just skipped.
+                    self.gspr[_GSPR_OP3] = 0
+                    self.gspr[_GSPR_OP5] = 0
+                    return 0
+                # Non-bufferable but in T-loop: drain pending buffer
+                # before the eager handler executes, so state mutations
+                # land in firmware-emitted order. TRANSPARENT mnemonics
+                # (opset / wrspr / credit_*_chk) skip the flush so the
+                # whole inner loop stays in one batch.
+                if buf and mnemonic not in _TLOOP_TRANSPARENT:
+                    _tloop_flush(self)
+
         return run_pipeline(self, "custom0", proc, insn, xs1, xs2)
 
     def custom1(self, proc, insn, xs1, xs2) -> int:
