@@ -22,11 +22,9 @@ import torch
 from ...._registry import handler
 from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM
 from ..encoding import (
-    GSPR_GTX_OPERAND2, GSPR_GTX_OPERAND3,
     GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP, GTX_F7_VEC_DOT_SUM,
     GTX_F7_VEC_MATH, GTX_F7_VEC_ROUND, GTX_F7_VEC_SASMD, GTX_F7_VEC_SIGN,
     GTX_VEC_ADD, GTX_VEC_DIV, GTX_VEC_MUL, GTX_VEC_SUB,
-    LSPR_SPM_ADDRA, LSPR_SPM_ADDRB, LSPR_SPM_ADDRR,
 )
 
 
@@ -185,8 +183,7 @@ def _dispatch_sasmd(npu, nest: int, spu: int, funct3: int,
                      rs1: int, rs2: int, insn, vec_size: int) -> int:
     op_map = {0: GTX_VEC_ADD, 1: GTX_VEC_SUB, 2: GTX_VEC_MUL, 3: GTX_VEC_DIV}
     sub = funct3 & 3
-    if sub not in op_map:
-        return 0
+    assert sub not in op_map or funct3 & 4, "SASMD sub-op must be 0-3 with bit 2 set"
 
     scalar = _fp16_low16(rs2)
     if not (funct3 & 4):
@@ -198,7 +195,7 @@ def _dispatch_sasmd(npu, nest: int, spu: int, funct3: int,
         return 0
 
     a_reg = rs1 & 0x1F
-    r_reg = int(npu.gspr.get(GSPR_GTX_OPERAND3, insn.rd)) & 0x1F
+    r_reg = int(npu.gspr.get("GSPR_GTX_OPERAND3", insn.rd)) & 0x1F
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     result = sasmd_kernel(view_a, scalar, op=op_map[sub])
     _l0_block_view(npu, nest, spu, r_reg).copy_(result)
@@ -212,7 +209,7 @@ def _dispatch_arith_l0_ii(npu, nest: int, spu: int, sub_op: int,
         return 0
     a_reg = rs1 & 0x1F
     b_reg = rs2 & 0x1F
-    r_reg = int(npu.gspr.get(GSPR_GTX_OPERAND3, insn.rd)) & 0x1F
+    r_reg = int(npu.gspr.get("GSPR_GTX_OPERAND3", insn.rd)) & 0x1F
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     view_b = _l0_block_view(npu, nest, spu, b_reg)
     result = sasmd_kernel(view_a, view_b, op=op_map[sub_op])

@@ -73,17 +73,16 @@ INITIAL_CONTEXT: NpuContext = NpuContext.C1
 # Format: marker_mnemonic → (from_context, to_context)
 
 WARP_TRANSITIONS: Dict[str, Tuple[NpuContext, NpuContext]] = {
-    "GTX_WARP_START_P": (NpuContext.C1, NpuContext.C4),
-    "GTX_WARP_END_P":   (NpuContext.C4, NpuContext.C1),
-    "GTX_WARP_START_S": (NpuContext.C4, NpuContext.C2),
-    "GTX_WARP_END_S":   (NpuContext.C2, NpuContext.C4),
-    "GTX_WARP_START_T": (NpuContext.C4, NpuContext.C3),
-    "GTX_WARP_END_T":   (NpuContext.C3, NpuContext.C4),
+    "start.p": (NpuContext.C1, NpuContext.C4),
+    "end.p":   (NpuContext.C4, NpuContext.C1),
+    "start.s": (NpuContext.C4, NpuContext.C2),
+    "end.s":   (NpuContext.C2, NpuContext.C4),
+    "start.t": (NpuContext.C4, NpuContext.C3),
+    "end.t":   (NpuContext.C3, NpuContext.C4),
 }
 
 WARP_MARKERS_NO_TRANSITION: FrozenSet[str] = frozenset({
-    "GTX_WARP_SPLIT",
-    "GTX_WARP_JOIN",
+    "split", "join",
 })
 
 
@@ -118,13 +117,13 @@ _CONTEXT_VALID_GROUPS: Dict[NpuContext, FrozenSet[str]] = {
 
 EXCLUDED_FROM_CONTEXT: FrozenSet[str] = frozenset({
     # Warp markers
-    "GTX_WARP_START_T", "GTX_WARP_END_T",
-    "GTX_WARP_START_S", "GTX_WARP_END_S",
-    "GTX_WARP_START_P", "GTX_WARP_END_P",
-    "GTX_WARP_SPLIT",   "GTX_WARP_JOIN",
+    "start.t", "end.t",
+    "start.s", "end.s",
+    "start.p", "end.p",
+    "split",   "join",
     # Control/Sync
-    "GTX_MSYNC", "GTX_EOM", "GTX_BAR", "GTX_WAIT", "GTX_HALT",
-    "GTX_INTR", "GTX_FLUSH", "GTX_MEXEC", "GTX_MBAR",
+    "msync", "eom", "bar", "wait", "halt",
+    "intr", "flush", "mexec", "mbar",
 })
 
 # ===========================================================================
@@ -141,12 +140,6 @@ _MNEMONIC_TO_GROUP: Dict[str, str] = {
     for group_name, mnemonics in _INS_GROUPS.items()
     for mnemonic in mnemonics
 }
-
-
-def get_group(mnemonic: str) -> Optional[str]:
-    """Return the validity-group name for *mnemonic* (or ``None``)."""
-    return _MNEMONIC_TO_GROUP.get(mnemonic)
-
 
 def is_warp_marker(mnemonic: str) -> bool:
     """True if *mnemonic* is a warp marker (transition or SPLIT/JOIN)."""
@@ -199,7 +192,6 @@ __all__ = [
     "WARP_TRANSITIONS",
     "WARP_MARKERS_NO_TRANSITION",
     "EXCLUDED_FROM_CONTEXT",
-    "get_group",
     "is_warp_marker",
     "is_valid_in_context",
     "apply_transition",

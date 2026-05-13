@@ -17,8 +17,6 @@ from __future__ import annotations
 from .fsm import NpuState
 from .unit.context import apply_transition, is_warp_marker
 from .unit.ins.encoding import (
-    GSPR_GTX_OPERAND3,
-    GSPR_GTX_OPERAND5,
     GTX_ISS_F7_OPSET,
 )
 
@@ -26,24 +24,24 @@ from .unit.ins.encoding import (
 def state_writeback(npu) -> NpuState:
     """OPSET staging clear + warp-marker context transition."""
     # (1) OPSET staging clear (vendor parity)
-    if (npu._ctx["kind"] == "custom0"
-            and npu._ctx["funct7"] != GTX_ISS_F7_OPSET):
-        npu.gspr[GSPR_GTX_OPERAND3] = 0
-        npu.gspr[GSPR_GTX_OPERAND5] = 0
+    # if (npu._ctx["kind"] == "custom0"
+    #         and npu._ctx["funct7"] != GTX_ISS_F7_OPSET):
+    #     npu.gspr[GSPR_GTX_OPERAND3] = 0
+    #     npu.gspr[GSPR_GTX_OPERAND5] = 0
 
     # (2) Context transition (warp markers only)
-    mnemonic = npu._ctx.get("mnemonic")
-    if mnemonic is not None and is_warp_marker(mnemonic):
-        old_ctx = npu._context
-        new_ctx = apply_transition(old_ctx, mnemonic)
-        if new_ctx is not old_ctx:
-            npu._context = new_ctx
-            # Re-flatten the dispatch tables for the new context so the
-            # next instruction's :mod:`dispatch_state` does a single
-            # ``funct7`` lookup instead of walking the 3-level table.
-            from .dispatch import resolve_for_context
-            npu._custom0_resolved, npu._custom1_resolved = resolve_for_context(
-                npu._custom0, npu._custom1, new_ctx
-            )
+    # mnemonic = npu._ctx.get("mnemonic")
+    # if mnemonic is not None and is_warp_marker(mnemonic):
+    #     old_ctx = npu._context
+    #     new_ctx = apply_transition(old_ctx, mnemonic)
+    #     if new_ctx is not old_ctx:
+    #         npu._context = new_ctx
+    #         # Re-flatten the dispatch tables for the new context so the
+    #         # next instruction's :mod:`dispatch_state` does a single
+    #         # ``funct7`` lookup instead of walking the 3-level table.
+    #         from .dispatch import resolve_for_context
+    #         npu._custom0_resolved, npu._custom1_resolved = resolve_for_context(
+    #             npu._custom0, npu._custom1, new_ctx
+    #         )
 
     return NpuState.IDLE

@@ -23,15 +23,28 @@ Public API:
     GSPR / NSPR / LSPR              — raw per-scope dicts (PIPE + APB mixed)
     CSR_GSPR / CSR_NSPR / CSR_LSPR  — PIPE-only views (for RDSPR/WRSPR routing)
     ALL                              — union view across all scopes
-    Register, BusType, bits, csr, make_csr  — re-exported from register.py
+    Register, BusType, Field, bits, csr, make_csr  — re-exported from register.py
 """
 from typing import Dict
 
-from .register import Register, BusType, bits, csr, make_csr
+from .register import Register, BusType, bits, csr, make_csr, Field
 from .gspr import GSPR
 from .nspr import NSPR
 from .lspr import LSPR
 
+# ---------------------------------------------------------------------------
+# Register Address Info
+# ---------------------------------------------------------------------------
+
+# ============================================================================
+# SPR Address Ranges
+# ============================================================================
+GSPR_BASE = 0x000
+GSPR_END  = 0x3FF
+NSPR_BASE = 0x400
+NSPR_END  = 0x7FF
+LSPR_BASE = 0x800
+LSPR_END  = 0xBFF
 
 # ---------------------------------------------------------------------------
 # PIPE-only views (RDSPR/WRSPR use the PIPE bus; APB is debug-side only)
@@ -89,6 +102,7 @@ def find_by_address(address: int, bus_type: BusType = BusType.PIPE
 __all__ = [
     "Register",
     "BusType",
+    "Field",
     "bits",
     "csr",
     "make_csr",

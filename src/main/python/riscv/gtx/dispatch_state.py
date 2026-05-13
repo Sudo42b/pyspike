@@ -15,10 +15,17 @@ current-context entry; on miss fall back to the universal ``None`` key
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .fsm import NpuState
 
+if TYPE_CHECKING:
+    # Same cycle as gtx.dispatch — gtx.npu instantiates from here, so the
+    # runtime symbol can't be imported at module load.
+    from .npu import GtxNpu
 
-def state_dispatch(npu) -> NpuState:
+
+def state_dispatch(npu: GtxNpu) -> NpuState:
     """Resolve handler in current NPU context.
 
     Walks the pre-flattened ``npu._custom0_resolved`` / ``_custom1_resolved``

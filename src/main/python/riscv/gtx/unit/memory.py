@@ -131,7 +131,7 @@ class DDR_MEMORY(MEMORY):
     def capacity(self) -> int:
         return self._bytes.numel() if self._bytes is not None else 0
 
-    def ensure(self, end_offset: int) -> torch.Tensor:
+    def ensure(self, end_offset: int) -> Optional[torch.Tensor]:
         cap = self.maximum_ddr()
         if end_offset > cap:
             raise ValueError(
@@ -197,7 +197,7 @@ class GtxMemory(MEMORY):
         # slices once at construction collapses the hot path to a tensor
         # index, and the f16 view caches reuse the same storage so the
         # ``.view(torch.float16)`` cost is paid once.
-        #
+
         # Storage must stay aliased to ``self.l[012]``: DMA writes through
         # the byte view, vec ops write through the fp16 view, and
         # ``clear()`` / ``reset_scratchpads()`` zero through ``self.l[012]``
@@ -262,7 +262,7 @@ class GtxMemory(MEMORY):
     def l2_f16(self, nest: int) -> torch.Tensor:
         return self._l2_f16_views[nest]
 
-    def ensure_ddr(self, end_offset: int) -> torch.Tensor:
+    def ensure_ddr(self, end_offset: int) -> Optional[torch.Tensor]:
         return self.ddr.ensure(end_offset)
 
     def _ddr_offset(self, addr: int) -> int:
@@ -293,6 +293,8 @@ class GtxMemory(MEMORY):
                 # so the slice assignment works on GPU backends.
                 src = torch.frombuffer(bytearray(chunk), dtype=torch.uint8)
                 ddr_buf = self.ddr.raw()
+                assert ddr_buf is not None  # ensure() should have allocated it
+
                 if src.device != ddr_buf.device:
                     src = src.to(ddr_buf.device)
                 self.ddr.write(offset, src)
@@ -332,7 +334,6 @@ class GtxMemory(MEMORY):
             f.write("\n")
 
     # ----- Environment-driven I/O (replaces deleted ``ddr.py`` shims) -----
-
     @staticmethod
     def _parse_env_int(s: str) -> int:
         s = s.strip()

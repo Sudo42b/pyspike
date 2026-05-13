@@ -1,108 +1,217 @@
-"""RegisterFile — live SPR state with typed name-based access.
+"""RegisterFile — Tensor-backed SPR state with broadcasting.
 
-GtxNpu stores SPR state as flat `dict[addr] -> int` (see `npu.py`:
-`gspr`, `nspr[nest]`, `lspr[nest][spu]`). The `csr/` subpackage holds
-the typed *definitions* — one `Register` instance per name, with bit
-fields and bus type. Definitions are shared (one per name), values
-are per-scope and per-instance (one set per NEST or per SPU).
+GtxNpu stores SPR state in `RegisterFile` instances. Each `RegisterFile`
+owns a `torch.Tensor` storage.
 
-`RegisterFile` glues the two: it owns the live dict and uses the
-definitions to resolve name → address, decompose bit fields on demand,
-and seed reset defaults. The underlying `dict[int, int]` is exposed
-as `regs` so existing handlers that use `npu.{g,n,l}spr[addr]` keep
-working.
+Shapes:
+    GSPR:  (1024,)
+    NSPR:  (NEST, 1024)
+    LSPR:  (NEST, SPU, 1024)
+
+The last dimension is always the 10-bit address offset (0-1023).
+Broadcasting is supported: setting a value on a multi-dimensional
+RegisterFile propagates to all instances.
 """
 from __future__ import annotations
 
-from typing import Dict, Iterator, Mapping, Optional, Union
+from typing import Any, Dict, Iterator, Mapping, Optional, Union, Tuple
 
-from .csr import BusType
-from .csr.register import Register
+import torch
+from .csr import BusType, Register, Field
 
 
 class RegisterFile:
-    """Live SPR state for one scope (GSPR / one NSPR / one LSPR).
+    """Live SPR state storage using torch.Tensor.
 
-    Backed by `regs: dict[int, int]` (address → raw value). Lookup by
-    register name resolves through the supplied typed registry; PIPE
-    registers take precedence when an APB sibling shares a name.
+    Supports indexing to narrow down dimensions (e.g. lspr[nest][spu]).
+    Attributes provide access to registers by name, returning a View
+    that supports bit-field manipulation and broadcasting.
     """
 
-    def __init__(self, defs: Mapping[str, Register]) -> None:
-        self._defs: Mapping[str, Register] = defs
-        # PIPE-only address map for name-based access. APB registers
-        # carry their own address space and aren't routed through PIPE
-        # RDSPR/WRSPR — exclude them from name resolution.
-        self._addr_by_name: Dict[str, int] = {
-            name: reg.address
+    def __init__(self, 
+                 defs: Mapping[str, Register], 
+                 shape: Tuple[int, ...] = (1024,),
+                 device: str = "cpu",
+                 tensor: Optional[torch.Tensor] = None) -> None:
+        self._defs = defs
+        # last dim must be 1024 for address space
+        if shape[-1] != 1024:
+            raise ValueError(f"RegisterFile last dim must be 1024, got {shape[-1]}")
+
+        if tensor is not None:
+            self._tensor = tensor
+        else:
+            self._tensor = torch.zeros(shape, dtype=torch.int64, device=device)
+
+        # Mapping for fast address lookup
+        self._addr_by_name = {
+            name: reg.address & 0x3FF
             for name, reg in defs.items()
             if reg.bus_type is BusType.PIPE
         }
-        self.regs: Dict[int, int] = {}
 
-    # ----- live state access (matches GtxNpu pattern) ----------------------
-
-    def __getitem__(self, key: Union[int, str]) -> int:
-        if isinstance(key, str):
-            return self.regs.get(self._addr_by_name[key], 0)
-        return self.regs.get(int(key), 0)
-
-    def __setitem__(self, key: Union[int, str], value: int) -> None:
-        if isinstance(key, str):
-            self.regs[self._addr_by_name[key]] = int(value)
-        else:
-            self.regs[int(key)] = int(value)
-
-    def __contains__(self, key: object) -> bool:
-        if isinstance(key, str):
-            addr = self._addr_by_name.get(key)
-            return addr is not None and addr in self.regs
-        if isinstance(key, int):
-            return key in self.regs
-        return False
-
-    def get(self, key: Union[int, str], default: int = 0) -> int:
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-    def __iter__(self) -> Iterator[int]:
-        return iter(self.regs)
-
-    def __len__(self) -> int:
-        return len(self.regs)
-
-    # ----- typed access ----------------------------------------------------
+    @property
+    def tensor(self) -> torch.Tensor:
+        """The underlying storage tensor."""
+        return self._tensor
 
     @property
     def defs(self) -> Mapping[str, Register]:
-        """Typed register definitions (shared spec — do not mutate values)."""
         return self._defs
 
-    def field(self, name: str, field: str) -> int:
-        """Read one bit field from the live register value."""
-        reg = self._defs[name]
-        raw = self.regs.get(reg.address, 0)
-        start, end = reg.fields[field]
-        mask = (1 << (end - start + 1)) - 1
-        return (raw >> start) & mask
+    # ----- Slicing / Indexing ----------------------------------------------
 
-    def set_field(self, name: str, field: str, value: int) -> None:
-        """Update one bit field in the live register value."""
-        reg = self._defs[name]
-        addr = reg.address
-        raw = self.regs.get(addr, 0)
-        start, end = reg.fields[field]
-        mask = (1 << (end - start + 1)) - 1
-        raw &= ~(mask << start)
-        raw |= (int(value) & mask) << start
-        self.regs[addr] = raw
+    def __getitem__(self, key: Union[int, str, slice]) -> Union[int, RegisterFile]:
+        """Index into dimensions (if any) or access raw address (if key is int)."""
+        if isinstance(key, int) and self._tensor.ndim == 1:
+            # Raw address access for 1D (GSPR)
+            return int(self._tensor[key & 0x3FF])
+        
+        if isinstance(key, str):
+            # Name-based register access
+            return getattr(self, key)
 
-    # ----- reset -----------------------------------------------------------
+        # Dimension narrowing
+        sub_tensor = self._tensor[key]
+        if sub_tensor.ndim == 0:
+            return int(sub_tensor)
+        
+        return RegisterFile(self._defs, sub_tensor.shape, tensor=sub_tensor)
 
+    def __setitem__(self, key: Union[int, str], value: Any) -> None:
+        if isinstance(key, str):
+            setattr(self, key, value)
+            return
+        
+        # Raw address write (modulo 1024 for scope)
+        addr = int(key) & 0x3FF
+        self._tensor[..., addr] = value
+
+    # ----- Attribute access (Register names) -------------------------------
+    def __getattr__(self, name: str) -> Any:
+        if name in self._addr_by_name:
+            reg = self._defs[name]
+            addr = self._addr_by_name[name]
+            # Return a view of this specific register across all dimensions
+            return RegisterView(reg, self._tensor[..., addr])
+
+        # Support for adjacent ranges like SGPR (e.g. lspr.SGPR)
+        # If user asks for 'SGPR', and we have SGPR0..127, we could return a batch view.
+        # For now, we'll stick to exact name matches.
+        raise AttributeError(f"RegisterFile has no register or attribute {name!r}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+            return
+        if name in self._addr_by_name:
+            reg = self._defs[name]
+            addr = self._addr_by_name[name]
+            # Decompose if value is int, or broadcast if value is tensor
+            self._tensor[..., addr] = value
+            return
+        super().__setattr__(name, value)
+
+    # ----- Utility ---------------------------------------------------------
     def reset(self, defaults: Optional[Mapping[int, int]] = None) -> None:
         """Clear all values and optionally seed vendor defaults."""
-        self.regs.clear()
+        self._tensor.zero_()
         if defaults:
-            self.regs.update(defaults)
+            for addr, val in defaults.items():
+                self._tensor[..., addr & 0x3FF] = val
+
+    def __iter__(self) -> Iterator[Union[RegisterFile, int]]:
+        """Iterate over the first dimension, yielding sub-views or values."""
+        if self._tensor.ndim <= 1:
+            # For 1D (GSPR or narrowed view), iterate over raw values
+            for i in range(self._tensor.shape[0]):
+                yield int(self._tensor[i])
+        else:
+            # For multi-dimensional, yield narrowed RegisterFile views
+            for i in range(self._tensor.shape[0]):
+                yield self[i]
+
+    def get(self, key: Union[int, str], default: int = 0) -> int:
+        """Compatibility method for dict-like access."""
+        try:
+            val = self[key]
+            return int(val) if not isinstance(val, RegisterFile) else default
+        except (KeyError, AttributeError):
+            return default
+
+    def __len__(self) -> int:
+        return self._tensor.shape[0]
+
+    def __repr__(self) -> str:
+        return f"RegisterFile(shape={tuple(self._tensor.shape)})"
+
+
+class RegisterView:
+    """Proxy for one or more instances of a specific Register.
+
+    Attributes provide access to bit fields.
+    Setting a field broadcasts the value across all instances in this view.
+    """
+    __slots__ = ("_reg", "_tensor")
+
+    def __init__(self, reg: Register, tensor: torch.Tensor):
+        self._reg = reg
+        self._tensor = tensor  # Shape matches rf.dimensions (e.g. (), (N,), (N, S))
+
+    def __getattr__(self, name: str) -> Union[int, torch.Tensor]:
+        if name == "value":
+            return self._tensor if self._tensor.ndim > 0 else int(self._tensor)
+        if name in self._reg.fields:
+            field = self._reg.fields[name]
+            val = (self._tensor >> field.shift) & field.mask
+            return val if self._tensor.ndim > 0 else int(val)
+        
+        raise AttributeError(f"Register {self._reg.name} has no field {name!r}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            super().__setattr__(name, value)
+            return
+        
+        if name == "value":
+            self._tensor.copy_(torch.as_tensor(value, dtype=torch.int64))
+            return
+
+        if name in self._reg.fields:
+            field = self._reg.fields[name]
+            # Bit manipulation via tensor ops
+            mask = field.mask
+            shift = field.shift
+            
+            # (tensor & ~(mask << shift)) | ((value & mask) << shift)
+            new_val = torch.as_tensor(value, dtype=torch.int64) & mask
+            self._tensor.copy_((self._tensor & ~(mask << shift)) | (new_val << shift))
+            return
+        
+        super().__setattr__(name, value)
+
+    def __repr__(self) -> str:
+        return f"<RegisterView {self._reg.name} shape={tuple(self._tensor.shape)}>"
+
+    def __int__(self) -> int:
+        if self._tensor.ndim > 0:
+            raise TypeError("Cannot convert multi-dimensional RegisterView to int")
+        return int(self._tensor)
+
+    # @overload
+    # def __getitem__(self, key: int) -> int: ...
+    def __getitem__(self, key: Any) -> Any:
+        # If it's a bit index
+        if isinstance(key, int):
+            return int((self._tensor >> key) & 1)
+        return getattr(self, key)
+    
+    def __setitem__(self, key: Any, value: Any) -> None:
+        if isinstance(key, int):
+            bit = 1 << key
+            if value:
+                self._tensor |= bit
+            else:
+                self._tensor &= ~bit
+            return
+        setattr(self, key, value)

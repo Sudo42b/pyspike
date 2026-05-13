@@ -1,11 +1,51 @@
 from typing import Any, NamedTuple, Tuple
 
-from .encoding import CUSTOM_OPCODE
+from .encoding import CUSTOM0, CUSTOM1
+from typing import List
+# pylint: disable=import-error,no-name-in-module
+from riscv.csrs import csr_t
+from riscv.decode import insn_t
+from riscv.disasm import disasm_insn_t
+from riscv.extension import extension_t
+from riscv.processor import insn_desc_t, processor_t, illegal_instruction
 
-# Backwards-compatible scalar aliases — encoding.py exposes the enum
-# ``CUSTOM_OPCODE`` (CUSTOM0 / CUSTOM1) rather than two top-level constants.
-CUSTOM0_OPCODE: int = CUSTOM_OPCODE.CUSTOM0.value
-CUSTOM1_OPCODE: int = CUSTOM_OPCODE.CUSTOM1.value
+
+class GTX_ISA(extension_t):
+    """
+    GTX_ISA () Instruction
+        ins rd, rs1, rs2, imm2
+    """
+
+    # pylint: disable=unused-argument
+    def get_instructions(self, proc: processor_t) -> List[insn_desc_t]:
+        return [
+            insn_desc_t(0x100b, 0xf800707f, *(self._do_th_addsl, ) * 2, *(illegal_instruction, ) * 6),
+        ]
+
+    # pylint: disable=unused-argument
+    def get_disasms(self, proc: processor_t) -> List[disasm_insn_t]:
+        return [
+            disasm_insn_t("th.addsl", 0x100b, 0xf800707f, arg.rd, arg.rs1, arg.rs2, arg.imm2)
+        ]
+
+    # pylint: disable=unused-argument
+    def get_csrs(self, proc: processor_t) -> List[csr_t]:
+        return []
+
+    # pylint: disable=unused-argument
+    def reset(self, proc: processor_t) -> None:
+        super().reset(proc)
+
+    def _do_th_addsl(self, p: processor_t, i: insn_t, pc: int) -> int:
+        """
+        reg[rd] := reg[rs1] + (reg[rs2] << imm2)
+        """
+        bits = int.from_bytes(i.bits, 'little')
+        imm2 = (bits >> 25) & 0b11
+        wdata = p.state.XPR[i.rs1] + (p.state.XPR[i.rs2] << imm2)
+        p.state.XPR.write(i.rd, wdata)
+        p.state.log_reg_write[i.rd << 4] = (wdata, 0)
+        return pc + len(i)
 
 _RISCV_DISASM_AVAILABLE = False
 
@@ -94,3 +134,50 @@ def add_warp(name: str, funct3: int) -> Any:
     match = (funct3 << 12) | CUSTOM1_OPCODE
     mask = (0x7 << 12) | 0x7f
     return _build_insn(name, match, mask)
+
+from typing import Any, NamedTuple, Tuple, Union
+
+from .encoding import *
+
+
+class Instruction:
+    def __init__(self, name, instruction: int) -> None:
+        self._nemonic = name
+        self.instruction = instruction
+
+    @property
+    def nemonic(self):
+        return self._nemonic
+    
+    @property
+    def fn7(self) -> Tuple[int, int, int]:
+        # 25:31, 28:31, 25:27
+        fn7 = self.instruction & 0xFE000000 >> 25
+        fn7_4 = (fn7) & 0xF
+        fn7_3 = (fn7) & 0x1
+        return fn7, fn7_4, fn7_3
+    
+    @property
+    def rs2(self) -> int:
+        # 20:24
+        return (self.instruction & 0x1F00000) >> 20
+    
+    @property
+    def rs1(self) -> int:
+        # 15:19
+        return (self.instruction & 0xF8000) >> 15
+    
+    @property
+    def fn3(self) -> int:
+        # 12:14
+        return (self.instruction & 0x7000) >> 12
+    
+    @property
+    def rd(self) -> int:
+        # 7:11
+        return (self.instruction & 0xF80) >> 7
+
+    @property
+    def opcode(self) -> int:
+        # 0:6
+        return self.instruction & 0x7F

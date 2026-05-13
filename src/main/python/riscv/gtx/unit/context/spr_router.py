@@ -26,8 +26,8 @@ circular import; plan 03 provides the _do_* helpers).
 """
 from ...config_params import (GSPR_BASE, GSPR_END, NSPR_BASE, NSPR_END,
                      LSPR_BASE, LSPR_END, GTX_NEST_NUM, GTX_SPU_NUM)
-from ..ins.encoding import (GSPR_STARTP, GSPR_ENDP, GSPR_STARTS,
-                       GSPR_ENDS, GSPR_STARTT, GSPR_ENDT)
+# from ..ins.encoding import (GSPR_STARTP, GSPR_ENDP, GSPR_STARTS,
+#                        GSPR_ENDS, GSPR_STARTT, GSPR_ENDT)
 
 
 def _in_range(addr: int, base: int, end: int) -> bool:
@@ -39,30 +39,30 @@ def wr_spr(npu, addr: int, value: int) -> None:
     addr &= 0xFFFF
     # Loop control side-effects -- lazy import to avoid
     # plan 02 / plan 03 circular dependency; plan 03 fills ops.control._do_*.
-    if addr == GSPR_STARTP:
-        from . import control as _ctrl
-        _ctrl._do_startp(npu, value, 0)
-        return
-    if addr == GSPR_ENDP:
-        from . import control as _ctrl
-        _ctrl._do_endp(npu, value, 0)
-        return
-    if addr == GSPR_STARTS:
-        from . import control as _ctrl
-        _ctrl._do_starts(npu, value, 0)
-        return
-    if addr == GSPR_ENDS:
-        from . import control as _ctrl
-        _ctrl._do_ends(npu, value, 0)
-        return
-    if addr == GSPR_STARTT:
-        from . import control as _ctrl
-        _ctrl._do_startt(npu, value, 0)
-        return
-    if addr == GSPR_ENDT:
-        from . import control as _ctrl
-        _ctrl._do_endt(npu, value, 0)
-        return
+    # if addr == GSPR_STARTP:
+    #     from . import control as _ctrl
+    #     _ctrl._do_startp(npu, value, 0)
+    #     return
+    # if addr == GSPR_ENDP:
+    #     from . import control as _ctrl
+    #     _ctrl._do_endp(npu, value, 0)
+    #     return
+    # if addr == GSPR_STARTS:
+    #     from . import control as _ctrl
+    #     _ctrl._do_starts(npu, value, 0)
+    #     return
+    # if addr == GSPR_ENDS:
+    #     from . import control as _ctrl
+    #     _ctrl._do_ends(npu, value, 0)
+    #     return
+    # if addr == GSPR_STARTT:
+    #     from . import control as _ctrl
+    #     _ctrl._do_startt(npu, value, 0)
+    #     return
+    # if addr == GSPR_ENDT:
+    #     from . import control as _ctrl
+    #     _ctrl._do_endt(npu, value, 0)
+    #     return
 
     if _in_range(addr, LSPR_BASE, LSPR_END):
         if (npu.warp.is_tloop and npu.warp.tmu_id < GTX_NEST_NUM

@@ -21,7 +21,9 @@ import sys
 from ..._registry import handler
 from .warp_state import WarpState   # noqa: F401  -- type hint reference
 from ...config_params import GTX_NEST_NUM, GTX_SPU_NUM
-
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ...npu import GtxNpu
 
 # Per-tile progress marker for the pytest regression harness. Off by default;
 # the harness sets GTX_PROGRESS=1 and reads each emitted line to drive a tqdm
@@ -37,13 +39,13 @@ def _emit_progress() -> None:
 # ============================================================================
 # extract_id -- gtx_npu_loop.cc:21-23 dual-mode addressing
 # ============================================================================
-def _extract_id(rs1: int, rs2: int) -> int:
+def _extract_id(rs1: int) -> int:
     """Dual-mode addressing: rs2 marker bit selects rs2 low6 vs rs1 low32.
 
     Verbatim port of gtx_npu_loop.cc:21-23 (the marker-bit ternary).
     """
-    if rs2 & 0x400:
-        return rs2 & 0x3F
+    if rs1 & 0x400:
+        return rs1 & 0x3F
     return rs1 & 0xFFFFFFFF
 
 
@@ -51,15 +53,15 @@ def _extract_id(rs1: int, rs2: int) -> int:
 # _do_* helpers -- value-level loop transitions, callable from custom1 handler
 # AND from spr_router.wr_spr (loop-control GSPR addresses 0x100..0x105).
 # ============================================================================
-def _do_startp(npu, rs1: int, rs2: int) -> None:
+def _do_startp(npu: "GtxNpu", rs1: int) -> None:
     """Port of gtx_npu_t::startp. Sets is_ploop, tmu_id."""
-    nest_id = _extract_id(rs1, rs2)
+    nest_id = _extract_id(rs1)
     assert 0 <= nest_id < GTX_NEST_NUM, f"Invalid NEST ID {nest_id} in startp (is_ploop={npu.warp.is_ploop})"
     npu.warp.tmu_id = nest_id
     npu.warp.is_ploop = True
 
 
-def _do_endp(npu, rs1: int, rs2: int) -> None:
+def _do_endp(npu: "GtxNpu", rs1: int) -> None:
     """Port of gtx_npu_t::endp. Clears is_ploop. P3 (Plan 05): flushes the
     deferred-store queue when !wsplit_seen.
 
@@ -73,7 +75,7 @@ def _do_endp(npu, rs1: int, rs2: int) -> None:
         npu.flush_deferred_ddr_stores()
 
 
-def _do_startt(npu, rs1: int, rs2: int) -> None:
+def _do_startt(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::startt. Sets is_tloop, curr_id.
 
     Also opens the T-loop instruction buffer (see :mod:`gtx.tloop_buffer`)
@@ -91,7 +93,7 @@ def _do_startt(npu, rs1: int, rs2: int) -> None:
         npu._tloop_buf = []
 
 
-def _do_endt(npu, rs1: int, rs2: int) -> None:
+def _do_endt(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::endt. Clears is_tloop.
 
     Drains any buffered T-loop instructions BEFORE clearing ``is_tloop``
@@ -104,7 +106,7 @@ def _do_endt(npu, rs1: int, rs2: int) -> None:
     npu.warp.is_tloop = False
 
 
-def _do_starts(npu, rs1: int, rs2: int) -> None:
+def _do_starts(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::starts. P3 DMA: sets is_sloop, curr_id (GDMAC).
 
     GTX_GDMAC_NUM == GTX_NUM_NESTS == 4 in the C++ reference, so we clamp
@@ -116,7 +118,7 @@ def _do_starts(npu, rs1: int, rs2: int) -> None:
     npu.warp.is_sloop = True
 
 
-def _do_ends(npu, rs1: int, rs2: int) -> None:
+def _do_ends(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::ends. Clears is_sloop."""
     npu.warp.is_sloop = False
 
@@ -126,8 +128,8 @@ def _do_ends(npu, rs1: int, rs2: int) -> None:
 # (each reads rs1/rs2 directly via proc.state.XPR per CORE-04, then
 #  delegates to the matching _do_* helper.)
 # ============================================================================
-@handler(kind='custom1', funct3=0b000, mnemonic='warp_start_t')
-def startt(npu, proc, insn, xs1, xs2):
+@handler(kind='custom1', funct3=0b000, mnemonic='start.t')
+def startt(npu: "GtxNpu", proc, insn, xs1, xs2):
     state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
@@ -135,8 +137,8 @@ def startt(npu, proc, insn, xs1, xs2):
     return 0
 
 
-@handler(kind='custom1', funct3=0b001, mnemonic='warp_end_t')
-def endt(npu, proc, insn, xs1, xs2):
+@handler(kind='custom1', funct3=0b001, mnemonic='end.t')
+def endt(npu: "GtxNpu", proc, insn, xs1, xs2):
     state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
@@ -144,8 +146,8 @@ def endt(npu, proc, insn, xs1, xs2):
     return 0
 
 
-@handler(kind='custom1', funct3=0b010, mnemonic='warp_start_s')
-def starts(npu, proc, insn, xs1, xs2):
+@handler(kind='custom1', funct3=0b010, mnemonic='start.s')
+def starts(npu: "GtxNpu", proc, insn, xs1, xs2):
     """P3 DMA: full implementation in phase 03. P2 still wires _do_starts so
     spr_router.wr_spr(GSPR_STARTS, ..) flag-only side-effect works."""
     state = proc.state
@@ -155,17 +157,34 @@ def starts(npu, proc, insn, xs1, xs2):
     return 0
 
 
-@handler(kind='custom1', funct3=0b011, mnemonic='warp_end_s')
-def ends(npu, proc, insn, xs1, xs2):
+@handler(kind='custom1', funct3=0b011, mnemonic='end.s')
+def ends(npu: "GtxNpu", proc, insn, xs1, xs2):
     state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
     _do_ends(npu, rs1_val, rs2_val)
     return 0
 
+@handler(kind='custom1', funct3=0b110, mnemonic='start.p')
+def startp(npu: "GtxNpu", proc, insn, xs1, xs2):
+    state = proc.state
+    rs1_val = state.XPR[insn.rs1]
+    rs2_val = state.XPR[insn.rs2]
+    _do_startp(npu, rs1_val, rs2_val)
+    return 0
 
-@handler(kind='custom1', funct3=0b100, mnemonic='warp_split')
-def wsplit(npu, proc, insn, xs1, xs2):
+
+@handler(kind='custom1', funct3=0b111, mnemonic='end.p')
+def endp(npu: "GtxNpu", proc, insn, xs1, xs2):
+    state = proc.state
+    # rs1 data만 있음.
+    rs1_val = state.XPR[insn.rs1]
+    # rs2_val = state.XPR[insn.rs2]
+    _do_endp(npu, rs1_val, rs2_val)
+    return 0
+
+@handler(kind='custom1', funct3=0b100, mnemonic='split')
+def wsplit(npu: "GtxNpu", proc, insn, xs1, xs2):
     """WSPLIT -- start timing section. P3 (Plan 05): sets wsplit_seen sentinel.
 
     The wsplit_seen flag determines which deferred-store flush trigger fires:
@@ -177,8 +196,8 @@ def wsplit(npu, proc, insn, xs1, xs2):
     return 0
 
 
-@handler(kind='custom1', funct3=0b101, mnemonic='warp_join')
-def wjoin_with_exit(npu, proc, insn, xs1, xs2):
+@handler(kind='custom1', funct3=0b101, mnemonic='join')
+def wjoin_with_exit(npu: "GtxNpu", proc, insn, xs1, xs2):
     """WJOIN — flush deferred stores and emit progress, no exit.
 
     Multi split-join firmware (e.g. abs.elf with 97 tiles) calls WJOIN
@@ -193,29 +212,12 @@ def wjoin_with_exit(npu, proc, insn, xs1, xs2):
     return 0
 
 
-@handler(kind='custom1', funct3=0b110, mnemonic='warp_start_p')
-def startp(npu, proc, insn, xs1, xs2):
-    state = proc.state
-    rs1_val = state.XPR[insn.rs1]
-    rs2_val = state.XPR[insn.rs2]
-    _do_startp(npu, rs1_val, rs2_val)
-    return 0
-
-
-@handler(kind='custom1', funct3=0b111, mnemonic='warp_end_p')
-def endp(npu, proc, insn, xs1, xs2):
-    state = proc.state
-    rs1_val = state.XPR[insn.rs1]
-    rs2_val = state.XPR[insn.rs2]
-    _do_endp(npu, rs1_val, rs2_val)
-    return 0
-
 
 # ============================================================================
 # custom0 funct7 stubs -- skeleton phase only (P3+ replaces with real handlers)
 # ============================================================================
 @handler(kind='custom0', funct7=0x02, mnemonic='wsplit_c0')
-def wsplit_custom0(npu, proc, insn, xs1, xs2):
+def wsplit_custom0(npu: "GtxNpu", proc, insn, xs1, xs2):
     """custom0 funct7=0x02 WSPLIT (firmware variant). P3 (Plan 05): sets
     wsplit_seen sentinel -- mirror of custom1 funct3=0b100 wsplit handler.
     See 03-RESEARCH "Deferred-Store Flush Trigger".
@@ -225,7 +227,7 @@ def wsplit_custom0(npu, proc, insn, xs1, xs2):
 
 
 @handler(kind='custom0', funct7=0x03, mnemonic='wjoin_c0')
-def wjoin_custom0_no_exit(npu, proc, insn, xs1, xs2):
+def wjoin_custom0_no_exit(npu: "GtxNpu", proc, insn, xs1, xs2):
     """custom0 funct7=0x03 WJOIN firmware variant -- NEVER raises SystemExit
     (research §439: only custom1 funct3=0b101 has exit semantics).
 
@@ -242,13 +244,13 @@ def wjoin_custom0_no_exit(npu, proc, insn, xs1, xs2):
 
 
 @handler(kind='custom0', funct7=0x04, mnemonic='dispatch_mm')
-def dispatch_mm_stub(npu, proc, insn, xs1, xs2):
+def dispatch_mm_stub(npu: "GtxNpu", proc, insn, xs1, xs2):
     """P3+: dispatch_mm. P2: NOP."""
     return 0
 
 
 @handler(kind='custom0', funct7=0x05, mnemonic='dispatch_vec')
-def dispatch_vec_stub(npu, proc, insn, xs1, xs2):
+def dispatch_vec_stub(npu: "GtxNpu", proc, insn, xs1, xs2):
     """P3+: dispatch_vec. P2: NOP."""
     return 0
 

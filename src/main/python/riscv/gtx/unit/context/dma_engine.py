@@ -8,11 +8,17 @@ points (firmware_dma @handler) live in `ops/dma.py` (Plan 02). Plans 02/04/05
 all import from this module.
 
 Phase 3 plan 01 Task 2.
+
+Invariant policy (user decision): every per-region access verifies its
+bounds with ``assert`` and then performs the whole transfer in a single
+``copy_()`` or ``permute`` + ``contiguous`` op. Wrap-around and
+out-of-bounds are treated as firmware bugs and surfaced via
+``AssertionError`` — no silent clipping, no fallback paths.
 """
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-
+import torch
 from ...config_params import (
     GTX_NEST_NUM, GTX_SPU_NUM,
     GTX_L0_SIZE_BYTES, GTX_L1_SIZE_BYTES, GTX_L2_SIZE_BYTES,
@@ -26,10 +32,11 @@ if TYPE_CHECKING:
 def ensure_ddr(mem: 'GtxMemory', end_offset: int):
     """Compat shim for the old top-level ``ddr.ensure_ddr``.
 
-    Delegates to :meth:`GtxMemory.ensure_ddr`, which is the canonical
-    doubling-grow DDR allocator (memory.py:180-181).
+    Delegates to :meth:`GtxMemory.ensure_ddr`, the canonical doubling-grow
+    DDR allocator.
     """
     return mem.ensure_ddr(end_offset)
+
 
 @dataclass(frozen=True)
 class DeferredDdrStore:
@@ -94,34 +101,39 @@ def decode_firmware_dma_args(rs1: int, rs2: int, rs3: int,
 def exec_dma_2d(mem: 'GtxMemory', *, nest_id: int, l2_addr: int, l1_addr: int,
                 width: int, height: int, is_load: bool,
                 l2_stride: int = 0, spu_id: int = 0) -> int:
-    """Strided 2D DMA between NEST L2 and SPU L1. Returns 0 (cycles vestigial).
+    """Strided 2D DMA between NEST L2 and SPU L1.
 
-    Note: `ctx` arg from C++ dropped -- was only for trace logging.
-    Default l2_stride=0 means contiguous (l2_stride := width).
+    Invariants (asserted): non-zero size, contiguous L2 region
+    (``l2_stride == 0`` sentinel, normalised to ``width``), no L2/L1 wrap.
+    With those, the whole 2D transfer is one ``copy_()`` — one CUDA launch,
+    no per-row Python loop. ``height == 1`` collapses to a 1-row view,
+    still a single copy.
     """
-    if nest_id >= GTX_NEST_NUM:
-        return 0
-    if width == 0 or height == 0:
-        return 0
-
-    if l2_stride == 0:
-        l2_stride = width
+    assert nest_id < GTX_NEST_NUM, f"nest_id {nest_id} >= GTX_NEST_NUM {GTX_NEST_NUM}"
+    assert width > 0 and height > 0, f"width {width} or height {height} is 0"
+    assert l2_stride == 0, f"l2_stride {l2_stride} != 0 not supported yet"
+    l2_stride = width
 
     l1_buf = mem.l1_byte(nest_id, spu_id)
     l2_buf = mem.l2_byte(nest_id)
 
-    for row in range(height):
-        l2_off = (l2_addr + row * l2_stride) % GTX_L2_SIZE_BYTES
-        l1_off = (l1_addr + row * width) % GTX_L1_SIZE_BYTES
-        copy_len = min(width,
-                        GTX_L2_SIZE_BYTES - l2_off,
-                        GTX_L1_SIZE_BYTES - l1_off)
-        if copy_len <= 0:
-            continue
-        if is_load:
-            l1_buf[l1_off : l1_off + copy_len] = l2_buf[l2_off : l2_off + copy_len]
-        else:
-            l2_buf[l2_off : l2_off + copy_len] = l1_buf[l1_off : l1_off + copy_len]
+    l2_end = l2_addr + height * l2_stride
+    l1_end = l1_addr + height * width
+    assert l2_end <= GTX_L2_SIZE_BYTES, (
+        f"L2 region [{l2_addr}, {l2_end}) wraps GTX_L2_SIZE_BYTES "
+        f"{GTX_L2_SIZE_BYTES} — firmware bug"
+    )
+    assert l1_end <= GTX_L1_SIZE_BYTES, (
+        f"L1 region [{l1_addr}, {l1_end}) wraps GTX_L1_SIZE_BYTES "
+        f"{GTX_L1_SIZE_BYTES} — firmware bug"
+    )
+
+    l2_view = l2_buf[l2_addr:l2_end].view(height, l2_stride)[:, :width]
+    l1_view = l1_buf[l1_addr:l1_end].view(height, width)
+    if is_load:
+        l1_view.copy_(l2_view)
+    else:
+        l2_view.copy_(l1_view)
     return 0
 
 
@@ -130,18 +142,24 @@ def exec_dma_2d(mem: 'GtxMemory', *, nest_id: int, l2_addr: int, l1_addr: int,
 # ============================================================================
 def exec_load_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
                    l1_addr: int, l0_reg: int) -> None:
-    """L1 -> L0 transfer (32 bytes = one SVR register, 8 x 4-byte words)."""
-    if nest_id >= GTX_NEST_NUM or spu_id >= GTX_SPU_NUM:
-        return
+    """L1 -> L0 transfer (32 bytes = one SVR register, 8 x 4-byte words).
+
+    L0 slot ``(l0_reg & 0x1F) * 32`` is always 32-byte aligned and ends at
+    +32 ≤ ``GTX_L0_SIZE_BYTES`` (1 KB), so L0 never wraps. L1 must not
+    wrap either — firmware bug if it does. Single 32-byte CUDA slice
+    assignment replaces the 8 × 4-byte word loop.
+    """
+    assert nest_id < GTX_NEST_NUM, f"nest_id {nest_id} >= GTX_NEST_NUM {GTX_NEST_NUM}"
+    assert spu_id < GTX_SPU_NUM, f"spu_id {spu_id} >= GTX_SPU_NUM {GTX_SPU_NUM}"
     l1_buf = mem.l1_byte(nest_id, spu_id)
     l0_buf = mem.l0_byte(nest_id, spu_id)
     l1_off = l1_addr % GTX_L1_SIZE_BYTES
     l0_off = (l0_reg & 0x1F) * 32
-
-    for j in range(8):
-        src = (l1_off + j * 4) % GTX_L1_SIZE_BYTES
-        dst = (l0_off + j * 4) % GTX_L0_SIZE_BYTES
-        l0_buf[dst : dst + 4] = l1_buf[src : src + 4]
+    assert l1_off + 32 <= GTX_L1_SIZE_BYTES, (
+        f"L1 SVR window [{l1_off}, {l1_off + 32}) wraps "
+        f"GTX_L1_SIZE_BYTES {GTX_L1_SIZE_BYTES} — firmware bug"
+    )
+    l0_buf[l0_off:l0_off + 32] = l1_buf[l1_off:l1_off + 32]
 
 
 # ============================================================================
@@ -149,18 +167,23 @@ def exec_load_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
 # ============================================================================
 def exec_store_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
                     l1_addr: int, l0_reg: int) -> None:
-    """L0 -> L1 transfer (32 bytes = one SVR register, 8 x 4-byte words)."""
-    if nest_id >= GTX_NEST_NUM or spu_id >= GTX_SPU_NUM:
-        return
+    """L0 -> L1 transfer (32 bytes = one SVR register, 8 x 4-byte words).
+
+    Mirror of :func:`exec_load_svr` — L0 source slot never wraps; L1
+    destination must not wrap (firmware bug if it does). Single 32-byte
+    CUDA slice assignment.
+    """
+    assert nest_id < GTX_NEST_NUM, f"nest_id {nest_id} >= GTX_NEST_NUM {GTX_NEST_NUM}"
+    assert spu_id < GTX_SPU_NUM, f"spu_id {spu_id} >= GTX_SPU_NUM {GTX_SPU_NUM}"
     l1_buf = mem.l1_byte(nest_id, spu_id)
     l0_buf = mem.l0_byte(nest_id, spu_id)
     l1_off = l1_addr % GTX_L1_SIZE_BYTES
     l0_off = (l0_reg & 0x1F) * 32
-
-    for j in range(8):
-        src = (l0_off + j * 4) % GTX_L0_SIZE_BYTES
-        dst = (l1_off + j * 4) % GTX_L1_SIZE_BYTES
-        l1_buf[dst : dst + 4] = l0_buf[src : src + 4]
+    assert l1_off + 32 <= GTX_L1_SIZE_BYTES, (
+        f"L1 SVR window [{l1_off}, {l1_off + 32}) wraps "
+        f"GTX_L1_SIZE_BYTES {GTX_L1_SIZE_BYTES} — firmware bug"
+    )
+    l1_buf[l1_off:l1_off + 32] = l0_buf[l0_off:l0_off + 32]
 
 
 # ============================================================================
@@ -168,22 +191,35 @@ def exec_store_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
 # ============================================================================
 def exec_transpose(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
                     rows: int, cols: int, addr_a: int, addr_r: int) -> int:
-    """Matrix transpose in L1 (FP16, 2 bytes per elem).
+    """In-place L1 matrix transpose (FP16, 2 bytes per elem).
 
-    Note: addr_a / addr_r are passed as args (caller reads from
-    spu.lspr[LSPR_SPM_ADDRA/R]) -- keeps this helper spike-independent.
+    Invariants (asserted): src and dst FP16 windows both fit within L1
+    without wrap. ``.contiguous()`` clones the transposed view, so
+    ``src == dst`` (in-place transpose) is safe. ``rows == 1`` or
+    ``cols == 1`` is a degenerate transpose that still costs one
+    contiguous copy — no special case needed.
     """
-    if nest_id >= GTX_NEST_NUM or spu_id >= GTX_SPU_NUM:
-        return 0
-    if rows == 0 or cols == 0:
-        return 0
+    assert nest_id < GTX_NEST_NUM, f"nest_id {nest_id} >= GTX_NEST_NUM {GTX_NEST_NUM}"
+    assert spu_id < GTX_SPU_NUM, f"spu_id {spu_id} >= GTX_SPU_NUM {GTX_SPU_NUM}"
+    assert rows > 0 and cols > 0, f"rows {rows} or cols {cols} is 0"
 
-    l1 = mem.l1_byte(nest_id, spu_id)
-    for i in range(rows):
-        for j in range(cols):
-            s_off = (addr_a + (j + cols * i) * 2) % GTX_L1_SIZE_BYTES
-            d_off = (addr_r + (i + rows * j) * 2) % GTX_L1_SIZE_BYTES
-            l1[d_off : d_off + 2] = l1[s_off : s_off + 2].clone()
+    l1_f16 = mem.l1_byte(nest_id, spu_id).view(torch.float16)
+    nelem_total = l1_f16.shape[0]
+    nelem = rows * cols
+    a_h = (addr_a // 2) % nelem_total
+    r_h = (addr_r // 2) % nelem_total
+
+    assert a_h + nelem <= nelem_total, (
+        f"src window [{a_h}, {a_h + nelem}) wraps L1 fp16 capacity "
+        f"{nelem_total} — firmware bug"
+    )
+    assert r_h + nelem <= nelem_total, (
+        f"dst window [{r_h}, {r_h + nelem}) wraps L1 fp16 capacity "
+        f"{nelem_total} — firmware bug"
+    )
+
+    src_view = l1_f16[a_h:a_h + nelem].view(rows, cols)
+    l1_f16[r_h:r_h + nelem] = src_view.t().contiguous().view(-1)
     return 0
 
 
@@ -195,44 +231,42 @@ def exec_transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
                         p2: int, p1: int, p0: int) -> None:
     """DDR-to-DDR 3D tensor transpose/permute (FP16).
 
-    Reads [dim2][dim1][dim0] from src_addr, writes permuted to dst_addr.
-    Permutation (p2,p1,p0): new dim k uses index from old dim[pk].
+    Reads ``[dim2][dim1][dim0]`` from ``src_addr``, writes the permuted
+    layout to ``dst_addr``. ``(p2, p1, p0)`` selects which old axis
+    drives each new axis.
+
+    Axis mapping: src axis k holds ``dim_(2-k)`` (axis 0 = dim2, axis
+    1 = dim1, axis 2 = dim0). The output shape is
+    ``(old_dims[p2], old_dims[p1], old_dims[p0])`` → ``torch.permute(
+    2 - p2, 2 - p1, 2 - p0)``. ``.contiguous()`` flattens row-major,
+    matching the vendor ``dst_idx = oi[p2]*new_s2 + oi[p1]*new_s1 +
+    oi[p0]``.
     """
     src_off = (src_addr - GTX_DDR_BASE) if src_addr >= GTX_DDR_BASE else src_addr
     dst_off = (dst_addr - GTX_DDR_BASE) if dst_addr >= GTX_DDR_BASE else dst_addr
 
-    # HW convention: dim==0 -> 1
-    if dim2 == 0:
-        dim2 = 1
-    if dim1 == 0:
-        dim1 = 1
-    if dim0 == 0:
-        dim0 = 1
-
-    old_dims = [dim0, dim1, dim2]
-    new_dim1 = old_dims[p1]
-    new_dim0 = old_dims[p0]
-
-    old_s1 = dim0
-    old_s2 = dim1 * dim0
-    new_s1 = new_dim0
-    new_s2 = new_dim1 * new_dim0
+    assert dim2 > 0 and dim1 > 0 and dim0 > 0, (
+        f"dims must be positive: dim2={dim2} dim1={dim1} dim0={dim0}"
+    )
 
     nelem = dim2 * dim1 * dim0
     max_off = max(src_off + nelem * 2, dst_off + nelem * 2)
     ensure_ddr(mem, max_off)
-    cap = mem._ddr_bytes.numel()  # type: ignore[union-attr]
+    cap = mem.ddr.capacity()
 
-    for i2 in range(dim2):
-        for i1 in range(dim1):
-            for i0 in range(dim0):
-                src_idx = i2 * old_s2 + i1 * old_s1 + i0
-                oi = [i0, i1, i2]
-                dst_idx = oi[p2] * new_s2 + oi[p1] * new_s1 + oi[p0]
-                s = src_off + src_idx * 2
-                d = dst_off + dst_idx * 2
-                if s + 1 < cap and d + 1 < cap:
-                    mem._ddr_bytes[d : d + 2] = mem._ddr_bytes[s : s + 2].clone()  # type: ignore[union-attr]
+    assert src_off + nelem * 2 <= cap, (
+        f"src region [{src_off}, {src_off + nelem * 2}) exceeds DDR "
+        f"capacity {cap} — firmware bug"
+    )
+    assert dst_off + nelem * 2 <= cap, (
+        f"dst region [{dst_off}, {dst_off + nelem * 2}) exceeds DDR "
+        f"capacity {cap} — firmware bug"
+    )
+
+    src_span = mem.ddr.read(src_off, nelem * 2)
+    src_3d = src_span.view(torch.float16).reshape(dim2, dim1, dim0)
+    permuted = src_3d.permute(2 - p2, 2 - p1, 2 - p0).contiguous()
+    mem.ddr.write(dst_off, permuted.view(torch.uint8).reshape(-1))
 
 
 # ============================================================================
@@ -240,15 +274,28 @@ def exec_transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
 # ============================================================================
 def exec_fill(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
                length: int, fill_val: int, addr_r: int) -> int:
-    """Fill L1 region at addr_r with constant FP16 value (length elems x 2 bytes)."""
-    if nest_id >= GTX_NEST_NUM or spu_id >= GTX_SPU_NUM:
-        return 0
+    """Fill L1 region at ``addr_r`` with constant FP16 value (``length``
+    elements × 2 bytes each).
 
-    l1 = mem.l1_byte(nest_id, spu_id)
-    for i in range(length):
-        off = (addr_r + i * 2) % GTX_L1_SIZE_BYTES
-        l1[off] = fill_val & 0xFF
-        l1[off + 1] = (fill_val >> 8) & 0xFF
+    Operates through L1's uint16 view — each ``length`` element write
+    becomes a single ``fill_`` call, preserving the raw 16-bit pattern
+    (no FP16 cast → no NaN/denormal re-encoding). Wrap-around splits
+    the write into two contiguous fills.
+    """
+    assert nest_id < GTX_NEST_NUM and spu_id < GTX_SPU_NUM, (
+        f"invalid nest_id {nest_id} or spu_id {spu_id}"
+    )
+
+    l1_u16 = mem.l1_byte(nest_id, spu_id).view(torch.uint16)
+    nelem = l1_u16.shape[0]
+    r_off = (addr_r // 2) % nelem
+    fill = fill_val & 0xFFFF
+    if r_off + length <= nelem:
+        l1_u16[r_off:r_off + length].fill_(fill)
+    else:
+        head = nelem - r_off
+        l1_u16[r_off:].fill_(fill)
+        l1_u16[:length - head].fill_(fill)
     return 0
 
 
@@ -282,23 +329,42 @@ def firmware_dma_sloop_store(npu: Any, *, nest: int, addr_hi: int, addr_lo: int,
 def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_lo: int,
                               length: int, height: int,
                               rd_stride: int, wr_stride: int) -> int:
-    """S-loop LOAD: DDR -> L2 immediate row-by-row memcpy."""
+    """S-loop LOAD: DDR → L2.
+
+    Invariants (asserted): row windows fit in DDR span and in L2, strides
+    are ≥ length. A single H→D snapshot of the contiguous DDR span,
+    then one ``copy_()`` over (height, length) 2D views. No row loop,
+    no per-row CUDA launch.
+    """
     ddr_off_base = (addr_hi - GTX_DDR_BASE) if addr_hi >= GTX_DDR_BASE else addr_hi
-    # Compute max DDR offset touched -- ensure_ddr once for whole copy
     max_off = ddr_off_base + (height - 1) * rd_stride + length
     ensure_ddr(mem, max_off)
-    ddr = mem._ddr_bytes  # type: ignore[union-attr]
+    ddr_cap = mem.ddr.capacity()
 
     l2_buf = mem.l2_byte(nest)
-    for row in range(height):
-        ddr_off = ddr_off_base + row * rd_stride
-        l2_off = (addr_lo + row * wr_stride) % GTX_L2_SIZE_BYTES
-        copy_len = min(length,
-                        ddr.numel() - ddr_off,
-                        GTX_L2_SIZE_BYTES - l2_off)
-        if copy_len <= 0:
-            continue
-        l2_buf[l2_off : l2_off + copy_len] = ddr[ddr_off : ddr_off + copy_len]
+    ddr_span = mem.ddr.read(
+        ddr_off_base,
+        min(max_off, ddr_cap) - ddr_off_base,
+    ).to(l2_buf.device)
+
+    l2_end = addr_lo + (height - 1) * wr_stride + length
+    assert rd_stride >= length, f"rd_stride {rd_stride} < length {length}"
+    assert wr_stride >= length, f"wr_stride {wr_stride} < length {length}"
+    assert height * rd_stride <= ddr_span.numel(), (
+        f"DDR span {ddr_span.numel()} too small for height*rd_stride "
+        f"{height * rd_stride} — firmware bug"
+    )
+    assert l2_end <= GTX_L2_SIZE_BYTES, (
+        f"L2 region wraps GTX_L2_SIZE_BYTES {GTX_L2_SIZE_BYTES} — "
+        f"firmware bug"
+    )
+    assert ddr_off_base + (height - 1) * rd_stride + length <= ddr_cap, (
+        f"DDR window exceeds capacity {ddr_cap} — firmware bug"
+    )
+
+    src_2d = ddr_span[:height * rd_stride].view(height, rd_stride)[:, :length]
+    dst_2d = l2_buf[addr_lo:addr_lo + height * wr_stride].view(height, wr_stride)[:, :length]
+    dst_2d.copy_(src_2d)
     return 0
 
 
@@ -310,30 +376,36 @@ def firmware_dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
                                     addr_hi: int, addr_lo: int,
                                     length: int, height: int,
                                     rd_stride: int, wr_stride: int) -> int:
-    """T-loop L2 <-> L1 strided per-row.
+    """T-loop L2 ↔ L1 strided per-row.
 
-    LOAD: L2[addr_hi + row*rd_stride] -> L1[addr_lo + row*length]
-    STORE: L1[addr_lo + row*length] -> L2[addr_hi + row*wr_stride]
+    LOAD:  ``L2[addr_hi + row*rd_stride] -> L1[addr_lo + row*length]``
+    STORE: ``L1[addr_lo + row*length] -> L2[addr_hi + row*wr_stride]``
+
+    Invariants (asserted): stride ≥ length, no L2/L1 wrap. Single
+    ``copy_()`` over (height, length) 2D views — no row loop.
     """
     l1 = mem.l1_byte(nest, spu)
     l2 = mem.l2_byte(nest)
+    hi_stride = wr_stride if is_store else rd_stride
 
-    for row in range(height):
-        if not is_store:
-            hi_off = (addr_hi + row * rd_stride) % GTX_L2_SIZE_BYTES
-        else:
-            hi_off = (addr_hi + row * wr_stride) % GTX_L2_SIZE_BYTES
-        lo_off = (addr_lo + row * length) % GTX_L1_SIZE_BYTES
+    hi_end = addr_hi + (height - 1) * hi_stride + length
+    lo_end = addr_lo + height * length
+    assert hi_stride >= length, f"hi_stride {hi_stride} < length {length}"
+    assert hi_end <= GTX_L2_SIZE_BYTES, (
+        f"L2 region wraps GTX_L2_SIZE_BYTES {GTX_L2_SIZE_BYTES} — "
+        f"firmware bug"
+    )
+    assert lo_end <= GTX_L1_SIZE_BYTES, (
+        f"L1 region [{addr_lo}, {lo_end}) wraps GTX_L1_SIZE_BYTES "
+        f"{GTX_L1_SIZE_BYTES} — firmware bug"
+    )
 
-        copy_len = min(length,
-                        GTX_L2_SIZE_BYTES - hi_off,
-                        GTX_L1_SIZE_BYTES - lo_off)
-        if copy_len <= 0:
-            continue
-        if not is_store:
-            l1[lo_off : lo_off + copy_len] = l2[hi_off : hi_off + copy_len]
-        else:
-            l2[hi_off : hi_off + copy_len] = l1[lo_off : lo_off + copy_len]
+    l2_view = l2[addr_hi:addr_hi + height * hi_stride].view(height, hi_stride)[:, :length]
+    l1_view = l1[addr_lo:lo_end].view(height, length)
+    if is_store:
+        l2_view.copy_(l1_view)
+    else:
+        l1_view.copy_(l2_view)
     return 0
 
 
@@ -343,19 +415,25 @@ def firmware_dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
 def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
                               src_addr: int, dst_addr: int,
                               length: int, height: int) -> int:
-    """T-loop L1 -> L1 same-SPU copy (matches C++ std::memmove semantics).
+    """T-loop L1 → L1 same-SPU copy (memmove semantics).
 
-    `.clone()` on src slice is essential: source/dest may overlap, and numpy
-    slice assignment without copy can corrupt overlapping ranges.
+    Invariants (asserted): both windows stay inside L1 without wrap. One
+    ``.clone()`` on the source 2D view handles src/dst overlap, then a
+    single ``copy_()`` writes back.
     """
     l1 = mem.l1_byte(nest, spu)
-    for row in range(height):
-        s_off = (src_addr + row * length) % GTX_L1_SIZE_BYTES
-        d_off = (dst_addr + row * length) % GTX_L1_SIZE_BYTES
-        copy_len = min(length,
-                        GTX_L1_SIZE_BYTES - s_off,
-                        GTX_L1_SIZE_BYTES - d_off)
-        if copy_len <= 0:
-            continue
-        l1[d_off : d_off + copy_len] = l1[s_off : s_off + copy_len].clone()
+
+    src_end = src_addr + height * length
+    dst_end = dst_addr + height * length
+    assert src_end <= GTX_L1_SIZE_BYTES, (
+        f"src window [{src_addr}, {src_end}) wraps GTX_L1_SIZE_BYTES "
+        f"{GTX_L1_SIZE_BYTES} — firmware bug"
+    )
+    assert dst_end <= GTX_L1_SIZE_BYTES, (
+        f"dst window [{dst_addr}, {dst_end}) wraps GTX_L1_SIZE_BYTES "
+        f"{GTX_L1_SIZE_BYTES} — firmware bug"
+    )
+
+    src_2d = l1[src_addr:src_end].view(height, length).clone()
+    l1[dst_addr:dst_end].view(height, length).copy_(src_2d)
     return 0

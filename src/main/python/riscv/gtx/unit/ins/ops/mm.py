@@ -11,8 +11,15 @@ variant dispatcher + ``ops/mm`` @handler decorators). Layout:
   4. ``decode_firmware_mm_args`` + ``firmware_mm`` dispatcher.
   5. @handler entries for the 5 MM (funct7=0x00) and 5 MMC (funct7=0x01)
      opcodes. Each handler applies Pitfall F (rs1==0 -> NOP) for
-     gem5-simplified WRSPR collision safety, then forwards to
+     full implemented WRSPR collision safety, then forwards to
      ``firmware_mm`` with the right ``is_accumulate``/``variant`` pair.
+
+RoCC handler return-value convention: ``return 0`` is the value blitted
+into the destination register ``rd``. Every ``_exec_mm_*`` variant ends
+in ``return 0`` because the vendor reference (``gtx_npu_mm.cc``) returns
+0 from each ``exec_mm_*`` — matrix results land in L1/L0 scratchpads,
+not in ``rd``. The rs1==0 NOP guards in @handler entries return 0 for
+the same reason: dispatch table miss / guard hit ⇒ no value to rd.
 """
 from __future__ import annotations
 
@@ -25,15 +32,14 @@ from ....config_params import (
     GTX_L0_SIZE_BYTES, GTX_L1_SIZE_BYTES,
     GTX_NEST_NUM, GTX_SPU_NUM,
 )
+from ....unit.csr import CSR_GSPR, CSR_NSPR, CSR_LSPR
 from ..encoding import (
-    GSPR_GTX_OPERAND3,
     GTX_F3_MM, GTX_F3_MM_O, GTX_F3_MM_S, GTX_F3_MM_T, GTX_F3_MM_V,
     GTX_F7_RDSPR, GTX_F7_WRSPR,
-    LSPR_SPM_ADDRA, LSPR_SPM_ADDRB, LSPR_SPM_ADDRC, LSPR_SPM_ADDRR,
 )
 
 if TYPE_CHECKING:
-    from ...npu import GtxNpu   # noqa: F401
+    from ....npu import GtxNpu   # noqa: F401
 
 
 # =============================================================================
@@ -70,7 +76,8 @@ def gemm_core(
     K2, N = B.shape
     if K != K2:
         raise ValueError(f"shape mismatch: A is (M={M}, K={K}), B is (K={K2}, N={N})")
-
+    # Stays on DEVICE — A/B come from `_read_l1_fp16_matrix` which is a CUDA
+    # byte view; `_as_f32` preserves device, matmul runs on the same device.
     A_f32 = _as_f32(A)
     B_f32 = _as_f32(B)
     C_f32 = torch.matmul(A_f32, B_f32)
@@ -90,51 +97,46 @@ def gemm_core(
 
     return C_f32.to(torch.float16)
 
-
 def gemm_reduce_sum_a(A: torch.Tensor, *, prior_accum: float = 0.0) -> float:
     """``MM_O`` / ``MMC_O`` scalar: ``sum(A) + prior_accum`` with FP32 reduce.
 
-    Direct port of ``gtx_npu_mm.cc:200-211``. Returns a Python float.
+    Direct port of ``gtx_npu_mm.cc:200-211``. ``torch.sum`` runs on whatever
+    device ``A`` lives on (CUDA in production); a single ``.item()`` is the
+    only sync, and the prior accumulator is folded in CPU-side as a Python
+    float (avoids a per-call 0-d CUDA alloc + transfer).
     """
-    A_f32 = _as_f32(A)
-    s = torch.sum(A_f32) + torch.tensor(prior_accum, dtype=torch.float32,
-                                        device=A_f32.device)
-    return float(s.item())
+    return float(torch.sum(_as_f32(A)).item()) + float(prior_accum)
 
 
 def gemm_dot(A: torch.Tensor, B: torch.Tensor, *, prior_accum: float = 0.0) -> float:
-    """``MM_V`` / ``MMC_V`` scalar: ``dot(A, B) + prior_accum`` with FP32 reduce."""
+    """``MM_V`` / ``MMC_V`` scalar: ``dot(A, B) + prior_accum`` with FP32 reduce.
+
+    Same device/sync story as :func:`gemm_reduce_sum_a`.
+    """
     if A.shape != B.shape:
         raise ValueError(f"shape mismatch: A {tuple(A.shape)} vs B {tuple(B.shape)}")
     A_f32 = _as_f32(A).flatten()
     B_f32 = _as_f32(B).flatten()
-    s = torch.dot(A_f32, B_f32) + torch.tensor(prior_accum, dtype=torch.float32,
-                                                device=A_f32.device)
-    return float(s.item())
+    return float(torch.dot(A_f32, B_f32).item()) + float(prior_accum)
 
 
 # =============================================================================
 # 2. L1 byte-level read/write helpers
 # =============================================================================
 def _read_l1_fp16_matrix(npu, nest, spu, addr, rows, cols) -> torch.Tensor:
-    """Read FP16 ``(rows, cols)`` from ``L1[addr:]`` little-endian (mod L1)."""
+    """Read FP16 ``(rows, cols)`` from ``L1[addr:]`` little-endian (mod L1).
+
+    Fast path is a zero-copy view; wrap-around uses ``torch.cat`` for a
+    single allocation.
+    """
     l1 = npu.mem.l1_byte(nest, spu)
     nbytes = rows * cols * 2
     start = addr % GTX_L1_SIZE_BYTES
     if start + nbytes <= GTX_L1_SIZE_BYTES:
         return l1[start:start + nbytes].view(torch.float16).reshape(rows, cols)
-    # Wrap-around: materialise into a contiguous uint8 buffer first.
-    buf = torch.empty(nbytes, dtype=torch.uint8, device=l1.device)
     head = GTX_L1_SIZE_BYTES - start
-    buf[:head] = l1[start:start + head]
-    buf[head:] = l1[:nbytes - head]
+    buf = torch.cat((l1[start:], l1[:nbytes - head]))
     return buf.view(torch.float16).reshape(rows, cols)
-
-
-def _write_l1_fp16_value(l1: torch.Tensor, off: int, fp16_raw: int) -> None:
-    """Write a single FP16 little-endian to L1 at byte offset ``off``."""
-    l1[off % GTX_L1_SIZE_BYTES] = fp16_raw & 0xFF
-    l1[(off + 1) % GTX_L1_SIZE_BYTES] = (fp16_raw >> 8) & 0xFF
 
 
 def _read_l1_fp32_bias(npu, nest, spu, addr, rows, cols) -> torch.Tensor:
@@ -144,22 +146,38 @@ def _read_l1_fp32_bias(npu, nest, spu, addr, rows, cols) -> torch.Tensor:
     start = addr % GTX_L1_SIZE_BYTES
     if start + nbytes <= GTX_L1_SIZE_BYTES:
         return l1[start:start + nbytes].view(torch.float32).reshape(rows, cols)
-    buf = torch.empty(nbytes, dtype=torch.uint8, device=l1.device)
     head = GTX_L1_SIZE_BYTES - start
-    buf[:head] = l1[start:start + head]
-    buf[head:] = l1[:nbytes - head]
+    buf = torch.cat((l1[start:], l1[:nbytes - head]))
     return buf.view(torch.float32).reshape(rows, cols)
 
 
-def _write_l1_fp32_value(l1: torch.Tensor, off: int, val_f32: float) -> None:
-    """Write a single FP32 little-endian to L1 at byte offset ``off``."""
-    raw32 = int(
-        torch.tensor([val_f32], dtype=torch.float32).view(torch.int32).item()
-    ) & 0xFFFFFFFF
-    l1[off % GTX_L1_SIZE_BYTES] = raw32 & 0xFF
-    l1[(off + 1) % GTX_L1_SIZE_BYTES] = (raw32 >> 8) & 0xFF
-    l1[(off + 2) % GTX_L1_SIZE_BYTES] = (raw32 >> 16) & 0xFF
-    l1[(off + 3) % GTX_L1_SIZE_BYTES] = (raw32 >> 24) & 0xFF
+def _write_l1_bytes(l1: torch.Tensor, base_addr: int,
+                     src_u8: torch.Tensor) -> None:
+    """Bulk uint8 write into L1 at ``base_addr`` (mod L1). Handles wrap-around
+    with two contiguous slice assignments — no per-element Python loop.
+    """
+    nbytes = src_u8.numel()
+    start = base_addr % GTX_L1_SIZE_BYTES
+    if start + nbytes <= GTX_L1_SIZE_BYTES:
+        l1[start:start + nbytes] = src_u8
+        return
+    head = GTX_L1_SIZE_BYTES - start
+    l1[start:] = src_u8[:head]
+    l1[:nbytes - head] = src_u8[head:]
+
+
+def _write_l1_fp16_block(l1: torch.Tensor, base_addr: int,
+                          data: torch.Tensor) -> None:
+    """Bulk-write an FP16 tensor as raw little-endian bytes to L1."""
+    raw_u8 = data.to(torch.float16).contiguous().view(torch.uint8).reshape(-1)
+    _write_l1_bytes(l1, base_addr, raw_u8)
+
+
+def _write_l1_fp32_block(l1: torch.Tensor, base_addr: int,
+                          data: torch.Tensor) -> None:
+    """Bulk-write an FP32 tensor as raw little-endian bytes to L1."""
+    raw_u8 = data.to(torch.float32).contiguous().view(torch.uint8).reshape(-1)
+    _write_l1_bytes(l1, base_addr, raw_u8)
 
 
 def _fp16_raw_bits(t: torch.Tensor) -> torch.Tensor:
@@ -167,15 +185,21 @@ def _fp16_raw_bits(t: torch.Tensor) -> torch.Tensor:
     return t.to(torch.float16).contiguous().view(torch.int16)
 
 
+def _fp16_scalar_to_u16(val_f32: float, device) -> int:
+    """Convert a Python float to its FP16 little-endian uint16 bit pattern."""
+    t = torch.tensor([val_f32], dtype=torch.float32, device=device).to(torch.float16)
+    return int(t.view(torch.int16)[0]) & 0xFFFF # 그냥 uint16으로 해도 되지 않나?
+
+
 # =============================================================================
 # 3. Per-variant executors (direct ports of the C++ exec_mm_* functions)
 # =============================================================================
 def _exec_mm_basic_variant(npu, nest, spu, args, is_accumulate):
     """``mm`` / ``mmc`` — A@B [+ bias] into ADDRR, FP16. No mxe_accum touch."""
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_b = npu.lspr[nest][spu].get(LSPR_SPM_ADDRB, 0)
-    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
-    addr_c = npu.lspr[nest][spu].get(LSPR_SPM_ADDRC, 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
+    addr_r = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_R'], 0)
+    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_C'], 0)
 
     M, K, N = args['row_A'], args['col_A'], args['col_B']
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, M, K)
@@ -184,19 +208,16 @@ def _exec_mm_basic_variant(npu, nest, spu, args, is_accumulate):
                  if is_accumulate else None)
     C = gemm_core(A, B, has_bias=is_accumulate, bias_fp32=bias_fp32)
 
-    # Writeback FP16 row-major LE to ADDRR.
-    l1 = npu.mem.l1_byte(nest, spu)
-    raw16 = _fp16_raw_bits(C).flatten()
-    for i in range(raw16.numel()):
-        _write_l1_fp16_value(l1, addr_r + i * 2, int(raw16[i]) & 0xFFFF)
-    return 0
+    # Bulk-write FP16 row-major LE to ADDRR (single contiguous copy + wrap).
+    _write_l1_fp16_block(npu.mem.l1_byte(nest, spu), addr_r, C)
+    return 0  # RoCC convention: handler success → 0 to rd (see module docstring)
 
 
 def _exec_mm_s_variant(npu, nest, spu, args, is_accumulate):
     """``mm_s`` / ``mmc_s`` — FP32 result into ADDRC. No mxe_accum touch."""
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_b = npu.lspr[nest][spu].get(LSPR_SPM_ADDRB, 0)
-    addr_c = npu.lspr[nest][spu].get(LSPR_SPM_ADDRC, 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
+    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_C'], 0)
 
     M, K, N = args['row_A'], args['col_A'], args['col_B']
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, M, K)
@@ -207,11 +228,9 @@ def _exec_mm_s_variant(npu, nest, spu, args, is_accumulate):
     if is_accumulate:
         C_f32 = C_f32 + _read_l1_fp32_bias(npu, nest, spu, addr_c, M, N)
 
-    l1 = npu.mem.l1_byte(nest, spu)
-    flat = C_f32.flatten().tolist()
-    for i, v in enumerate(flat):
-        _write_l1_fp32_value(l1, addr_c + i * 4, float(v))
-    return 0
+    # Bulk-write FP32 row-major LE to ADDRC.
+    _write_l1_fp32_block(npu.mem.l1_byte(nest, spu), addr_c, C_f32)
+    return 0  # RoCC convention: handler success → 0 to rd (see module docstring)
 
 
 def _exec_mm_o_variant(npu, nest, spu, args, is_accumulate):
@@ -220,7 +239,7 @@ def _exec_mm_o_variant(npu, nest, spu, args, is_accumulate):
     Writes FP16 to L0 *big-endian*, updates ``mxe_accum`` unconditionally
     (Pitfall B).
     """
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
     col_A = args['col_A']
 
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, 1, col_A).flatten()
@@ -229,18 +248,16 @@ def _exec_mm_o_variant(npu, nest, spu, args, is_accumulate):
     npu._mxe_accum[nest, spu] = torch.tensor(
         sum_f32, dtype=torch.float32, device=npu._mxe_accum.device)
 
-    l0_addr = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0)) & 0x1F
+    l0_addr = int(npu.gspr.get(CSR_GSPR['GSPR_GTX_OPERAND3'], 0)) & 0x1F
     l0_off = (l0_addr * 32) % GTX_L0_SIZE_BYTES
     l0 = npu.mem.l0_byte(nest, spu)
-    fp16_raw = int(_fp16_raw_bits(torch.tensor([sum_f32],
-                                                dtype=torch.float32))[0]) & 0xFFFF
+    fp16_raw = _fp16_scalar_to_u16(sum_f32, l0.device)
+    # 32-byte block is L0-slot-aligned (slot size * count), wrap impossible.
     # BIG-ENDIAN at L0 (HIGH byte first; asymmetric vs MM_V).
+    l0[l0_off:l0_off + 32].zero_()
     l0[l0_off] = (fp16_raw >> 8) & 0xFF
-    l0[(l0_off + 1) % GTX_L0_SIZE_BYTES] = fp16_raw & 0xFF
-    for i in range(1, 16):
-        l0[(l0_off + i * 2) % GTX_L0_SIZE_BYTES] = 0
-        l0[(l0_off + i * 2 + 1) % GTX_L0_SIZE_BYTES] = 0
-    return 0
+    l0[l0_off + 1] = fp16_raw & 0xFF
+    return 0  # RoCC convention: handler success → 0 to rd (see module docstring)
 
 
 def _exec_mm_v_variant(npu, nest, spu, args, is_accumulate):
@@ -249,8 +266,8 @@ def _exec_mm_v_variant(npu, nest, spu, args, is_accumulate):
     Writes FP16 to L0 *little-endian* (asymmetric vs MM_O), updates
     ``mxe_accum``.
     """
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_b = npu.lspr[nest][spu].get(LSPR_SPM_ADDRB, 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
     vec_len = args['col_A']
 
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, 1, vec_len).flatten()
@@ -260,26 +277,22 @@ def _exec_mm_v_variant(npu, nest, spu, args, is_accumulate):
     npu._mxe_accum[nest, spu] = torch.tensor(
         dot_f32, dtype=torch.float32, device=npu._mxe_accum.device)
 
-    l0_addr = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0)) & 0x1F
+    l0_addr = int(npu.gspr.get(CSR_GSPR['GSPR_GTX_OPERAND3'], 0)) & 0x1F
     l0_off = (l0_addr * 32) % GTX_L0_SIZE_BYTES
     l0 = npu.mem.l0_byte(nest, spu)
-    fp16_raw = int(_fp16_raw_bits(torch.tensor([dot_f32],
-                                                dtype=torch.float32))[0]) & 0xFFFF
-    # LITTLE-ENDIAN at L0 (gtx_npu_mm.cc:274-275).
+    fp16_raw = _fp16_scalar_to_u16(dot_f32, l0.device)
+    l0[l0_off:l0_off + 32].zero_()
     l0[l0_off] = fp16_raw & 0xFF
-    l0[(l0_off + 1) % GTX_L0_SIZE_BYTES] = (fp16_raw >> 8) & 0xFF
-    for i in range(1, 16):
-        l0[(l0_off + i * 2) % GTX_L0_SIZE_BYTES] = 0
-        l0[(l0_off + i * 2 + 1) % GTX_L0_SIZE_BYTES] = 0
+    l0[l0_off + 1] = (fp16_raw >> 8) & 0xFF
     return 0
 
 
 def _exec_mm_t_variant(npu, nest, spu, args, is_accumulate):
     """``mm_t`` / ``mmc_t`` — transposed C^T (N×M layout) into ADDRR."""
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_b = npu.lspr[nest][spu].get(LSPR_SPM_ADDRB, 0)
-    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
-    addr_c = npu.lspr[nest][spu].get(LSPR_SPM_ADDRC, 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
+    addr_r = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_R'], 0)
+    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_C'], 0)
 
     M, K, N = args['row_A'], args['col_A'], args['col_B']
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, M, K)
@@ -289,13 +302,10 @@ def _exec_mm_t_variant(npu, nest, spu, args, is_accumulate):
     C = gemm_core(A, B, has_bias=is_accumulate, bias_fp32=bias_fp32)
 
     # Transposed writeback: out[j, i] = C[i, j] at byte offset (i + M*j)*2.
-    l1 = npu.mem.l1_byte(nest, spu)
-    raw16 = _fp16_raw_bits(C)
-    for i in range(M):
-        for j in range(N):
-            _write_l1_fp16_value(l1, addr_r + (i + M * j) * 2,
-                                  int(raw16[i, j]) & 0xFFFF)
-    return 0
+    # ``C.T`` is the (N, M) view whose row-major layout matches that byte
+    # mapping exactly — one ``.contiguous()`` + one bulk-byte copy.
+    _write_l1_fp16_block(npu.mem.l1_byte(nest, spu), addr_r, C.T.contiguous())
+    return 0  # RoCC convention: handler success → 0 to rd (see module docstring)
 
 
 # =============================================================================
@@ -345,7 +355,7 @@ def firmware_mm(npu: 'GtxNpu', proc, insn,
 # 5. @handler entries
 #
 # Pitfall F (gtx_npu_mm.cc rs1==0 guard): funct7=0x00 collides with
-# gem5-simplified WRSPR. Each per-funct3 handler NOPs if ``insn.rs1 == 0``
+# fully implemented WRSPR. Each per-funct3 handler NOPs if ``insn.rs1 == 0``
 # so the dispatch table can keep funct3-keyed entries without losing the
 # WRSPR semantics.
 # =============================================================================

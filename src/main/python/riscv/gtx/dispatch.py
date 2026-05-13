@@ -1,7 +1,17 @@
-from typing import Callable, Dict, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable, Dict, Optional
 from . import _registry
 from .unit.context import NpuContext
 
+# ``dispatch`` and ``npu`` form a circular import (``npu.py`` calls
+# ``build_custom0_table`` at construction), so the ``GtxNpu`` reference
+# must live behind ``TYPE_CHECKING`` — the runtime symbol comes through
+# closure capture in ``_bind``, not the type annotation. ``from __future__
+# import annotations`` keeps the per-function ``npu: GtxNpu`` hints as
+# unresolved strings so they don't blow up at module load.
+if TYPE_CHECKING:
+    from .npu import GtxNpu
 
 def resolve_for_context(custom0_3level: Dict[int, Dict],
                          custom1_2level: Dict[int, Dict],
@@ -49,7 +59,7 @@ def resolve_for_context(custom0_3level: Dict[int, Dict],
     return resolved_c0, resolved_c1
 
 
-def build_custom0_table(npu) -> Dict[int, Dict]:
+def build_custom0_table(npu: GtxNpu) -> Dict[int, Dict]:
     """Build funct7 → context → {funct3-or-None: bound-handler} 3-level dict.
 
     Closure-binds npu so handlers can read npu.warp / npu.gspr / npu.mem.
@@ -73,7 +83,7 @@ def build_custom0_table(npu) -> Dict[int, Dict]:
     }
 
 
-def build_custom1_table(npu) -> Dict[int, Dict]:
+def build_custom1_table(npu: GtxNpu) -> Dict[int, Dict]:
     """Build funct3 → context → bound-handler 2-level dict.
 
     Levels:
@@ -87,7 +97,7 @@ def build_custom1_table(npu) -> Dict[int, Dict]:
     }
 
 
-def _bind(fn: Callable, npu) -> Callable:
+def _bind(fn: Callable, npu: GtxNpu) -> Callable:
     def wrapped(proc, insn, xs1, xs2):
         return fn(npu, proc, insn, xs1, xs2)
     wrapped.__name__ = fn.__name__
