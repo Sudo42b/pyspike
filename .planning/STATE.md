@@ -37,7 +37,7 @@ Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
 Status: Phase complete — ready for verification
-Last activity: 2026-05-15 — Completed quick task 260515-0c4: Step 1/4 base 재정의 제거 + dma.py GSPR_GTX_OPERAND3 import uncomment. 26/26 PASS 유지. 광범위 정리 4-step 분할 중 첫 단계. Step 2 (mm/act KeyError fix), Step 3 (RegisterView attribute 패턴 통일), Step 4 (silent-clamp → assert) 잔여.
+Last activity: 2026-05-15 — Completed quick task 260515-0ro: Step 2/4 single-source SPR addresses + KeyError fix. 사용자 명시 "alias 만들지마" + "두 번 선언이 헷갈려" 완전 honor — csr/{gspr,lspr,nspr}.py @csr 가 유일한 SPR address 정의 위치. encoding.py re-export + 5 모듈의 module-level alias 모두 제거. 26/26 PASS. Step 3 (RegisterView attribute access 패턴 통일) + Step 4 (silent-clamp → assert) 잔여.
 
 ### Phase 8 Plan Outcomes (2026-05-10)
 
@@ -394,6 +394,7 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 | 260514-vjk | GSPR_GTX_OPERAND0..5 register 복원 (csr/gspr.py source-of-truth + encoding.py re-export + 5 callsite imports + T-loop fast-path 회귀 test) | 2026-05-14 | 8bbfb1a | [260514-vjk-gspr-gtx-operand0-5-register-csr-gspr-py](./quick/260514-vjk-gspr-gtx-operand0-5-register-csr-gspr-py/) |
 | 260514-vwp | RegisterView 64-bit field setter OverflowError fix (signed-int64 wrap of shifted mask + value) | 2026-05-14 | b5df4a0 | [260514-vwp-register-file-py-188-registerview-field-](./quick/260514-vwp-register-file-py-188-registerview-field-/) |
 | 260515-0c4 | Step 1/4 — base 상수 재정의 제거 (config_params.py → csr/__init__.py) + dma.py GSPR_GTX_OPERAND3 import uncomment | 2026-05-15 | e8a5f25 | [260515-0c4-step-1-4-base-config-params-py-csr-init-](./quick/260515-0c4-step-1-4-base-config-params-py-csr-init-/) |
+| 260515-0ro | Step 2/4 — single-source SPR addresses via csr (no aliases, inline `.address`) + KeyError fix in mm/act (14+sites) + OPERAND4 → OPCODE @ 0x004 vendor 매핑 | 2026-05-15 | b464bb4 | [260515-0ro-step-2-4-keyerror-fix-mm-py-lspr-spm-add](./quick/260515-0ro-step-2-4-keyerror-fix-mm-py-lspr-spm-add/) |
 
 ## Session Continuity
 
