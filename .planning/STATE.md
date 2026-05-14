@@ -37,7 +37,7 @@ Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
 Status: Phase complete — ready for verification
-Last activity: 2026-05-14 — Dirty tree cleanup: ORDER.md 단순화 (f245b0d), disasm.py precedence bug + naming (aa742f5), 35개 stale test 삭제 (6bc2c3f) + sqv followup endp NameError fix (021cbd3). Smoke 5/5 PASS.
+Last activity: 2026-05-14 — Completed quick task 260514-ti0: CSR + dispatch chain 검증 test 추가. tests/gtx/ 누적 23/23 PASS (5 smoke + 8 csr_registry_chain + 10 custom_dispatch_chain). 분석 중 발견된 후속 bug 2건: register_file.py:188 OverflowError (64-bit field broadcast write), npu.py T-loop fast-path missing _GSPR_OP3/_GSPR_OP5 imports.
 
 ### Phase 8 Plan Outcomes (2026-05-10)
 
@@ -390,6 +390,7 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 |---|-------------|------|--------|-----------|
 | 260514-s68 | ORDER.md FSM 기반 최소 테스트 conftest + smoke test 새로 설계 | 2026-05-14 | 0f85544 | [260514-s68-order-md-fsm-conftest-smoke-test](./quick/260514-s68-order-md-fsm-conftest-smoke-test/) |
 | 260514-sqv | _extract_id 2-arg 시그니처 복원 + _do_startp/_do_endp 시그니처 정합 (d6f73f9 인트로 버그, vendor 시맨틱 맞춤) | 2026-05-14 | 10a8b14 | [260514-sqv-extract-id-2-arg-do-startp-do-endp-d6f73](./quick/260514-sqv-extract-id-2-arg-do-startp-do-endp-d6f73/) |
+| 260514-ti0 | CSR 등록 체인 + custom0/1 dispatch 체인 검증 test 추가 (tests/gtx/, 8+10=18 tests, 23/23 PASS 누적) | 2026-05-14 | 8197364 | [260514-ti0-csr-custom0-1-dispatch-test-tests-gtx](./quick/260514-ti0-csr-custom0-1-dispatch-test-tests-gtx/) |
 
 ## Session Continuity
 
