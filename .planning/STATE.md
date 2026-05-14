@@ -388,6 +388,23 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 ### Last Action
 
+**2026-05-14 — R1 reconcile (post-v1.1 simplification cleanup):**
+- Removed dead code from `src/main/python/riscv/gtx/writeback.py`: two commented-out
+  blocks (OPSET clear + context transition) and three dead imports
+  (`apply_transition`, `is_warp_marker`, `GTX_ISS_F7_OPSET`). Function reduced to
+  `return NpuState.IDLE`. Verified safe via two facts: (1) custom0 fast-path
+  already mirrors the OPSET-aware clear on bufferable T-loop snapshots
+  (`npu.py:268-269`), and (2) all 122 `@handler` registrations use
+  `context=None`, so `resolve_for_context` always hits the universal fallback
+  — context transition was a no-op even before being commented out.
+- Removed `.planning/HANDOFF.json` (one-shot resume artifact, consumed) and
+  `.continue-here.md` (`83caf34` introduced both). Stale `remaining_tasks`
+  entries (CPSVR/MVSVR, credit_chk) were already resolved inside `d6f73f9`.
+- Open R-items deferred: R3 (n1s16 67-case sweep) blocked on tests/gtx/* 38-file
+  user redesign; R4 (Phase 2 needs_followup) low priority.
+
+### Prior Action (pre-pause-work)
+
 Phase 05 Plan 05 (Wave 2 VRF-02 oracle parity) complete -- VRF-02 closed.
 **Plan 05** ran as PARALLEL Wave 5 (alongside 05-06 .elf regression);
 executed in ~5 min with 2 atomic GREEN-only commits (Plan 01 had already
