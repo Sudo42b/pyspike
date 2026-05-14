@@ -97,3 +97,29 @@ def test_find_by_address_pipe_missing_raises_keyerror():
     """Unused GSPR slot yields KeyError, not silent None."""
     with pytest.raises(KeyError):
         find_by_address(0x099, BusType.PIPE)
+
+
+def test_register_view_64bit_field_broadcast_write_no_overflow(gtx_npu):
+    """64-bit field writes (e.g. SGPR0.gpr) must not OverflowError.
+
+    Pins the register_file.py:188 fix: ~(mask << shift) was leaking a
+    Python negative bigint into torch's int64 cast path.
+    """
+    val_u64 = 0xCAFEBABEDEADBEEF
+    gtx_npu.lspr.SGPR0.gpr = val_u64  # must not raise
+    addr = 0x800 & 0x3FF
+    stored = gtx_npu.lspr.tensor[..., addr]
+    signed = val_u64 - (1 << 64)  # int64 reinterpretation (top bit set)
+    assert stored.shape == (4, 16)
+    assert (stored == signed).all().item()
+    # Round-trip read through the field getter path must restore the
+    # unsigned value.
+    readback = int(gtx_npu.lspr[0][0].SGPR0.gpr) & 0xFFFFFFFFFFFFFFFF
+    assert readback == val_u64
+
+
+def test_register_view_partial_field_high_bits_preserves_low_bits(gtx_npu):
+    """Partial-field write must not regress after the 64-bit fix."""
+    gtx_npu.nspr.THREAD_MASK.mask = 0xABCD
+    masked = (gtx_npu.nspr.THREAD_MASK._tensor & 0xFFFF).tolist()
+    assert masked == [0xABCD] * 4

@@ -179,13 +179,25 @@ class RegisterView:
 
         if name in self._reg.fields:
             field = self._reg.fields[name]
-            # Bit manipulation via tensor ops
             mask = field.mask
             shift = field.shift
-            
-            # (tensor & ~(mask << shift)) | ((value & mask) << shift)
+
+            # Reinterpret the shifted mask as a signed int64 to avoid
+            # Python's arbitrary-precision negative result from
+            # `~(mask << shift)` — torch cannot cast that back into
+            # int64 (OverflowError). See CONTEXT.md root_cause.
+            u64 = (mask << shift) & ((1 << 64) - 1)
+            shifted_mask = u64 - (1 << 64) if u64 >> 63 else u64
+
+            # Same signed-int64 wrap for `value` when it is a Python int
+            # with the top bit set (e.g. 0xCAFEBABEDEADBEEF) — torch
+            # rejects unsigned ≥ 2^63 in int64 dtype.
+            if isinstance(value, int):
+                v64 = value & ((1 << 64) - 1)
+                value = v64 - (1 << 64) if v64 >> 63 else v64
+
             new_val = torch.as_tensor(value, dtype=torch.int64) & mask
-            self._tensor.copy_((self._tensor & ~(mask << shift)) | (new_val << shift))
+            self._tensor.copy_((self._tensor & ~shifted_mask) | (new_val << shift))
             return
         
         super().__setattr__(name, value)
