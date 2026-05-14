@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections import namedtuple
 from typing import TYPE_CHECKING
 
-# from .unit.ins.encoding import GSPR_GTX_OPERAND3, GSPR_GTX_OPERAND5
+from .unit.ins.encoding import GSPR_GTX_OPERAND3, GSPR_GTX_OPERAND5
 
 if TYPE_CHECKING:
     from .npu import GtxNpu

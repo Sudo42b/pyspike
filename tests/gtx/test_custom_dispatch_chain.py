@@ -153,3 +153,24 @@ def test_end_to_end_custom0_and_custom1_return_int(gtx_npu, mock_proc):
     insn1 = DummyInsn(funct=0, xd=1, xs1=1, xs2=1)
     rc1 = gtx_npu.custom1(mock_proc, insn1, 0, 0)
     assert isinstance(rc1, int)
+
+
+def test_tloop_fast_path_opset_no_nameerror(gtx_npu, mock_proc, dummy_insn):
+    """custom0 T-loop fast-path inline OPSET no longer raises NameError on
+    _GSPR_OP3 / _GSPR_OP5 (260514-vjk: GSPR_GTX_OPERAND restored).
+
+    Drives the npu.py:236-241 fast-path: warp.is_tloop=True + _tloop_buf=[]
+    + funct=GTX_ISS_F7_OPSET + xs1[insn.rs1] LSB=0 routes to gspr_tensor[_GSPR_OP3]
+    write. Pre-d6f73f9 this raised NameError because _GSPR_OP3 was unbound.
+    """
+    gtx_npu.warp.is_tloop = True
+    gtx_npu._tloop_buf = []
+    mock_proc.state.XPR.write(1, 0)        # rs1 LSB=0 -> slot=0 -> OPERAND3 (0x003)
+    mock_proc.state.XPR.write(2, 0xCAFE)   # rs2 -> value to stage
+    dummy_insn.funct = GTX_ISS_F7_OPSET
+    dummy_insn.rs1, dummy_insn.rs2 = 1, 2
+
+    rc = gtx_npu.custom0(mock_proc, dummy_insn, 0, 0)
+
+    assert rc == 0
+    assert int(gtx_npu.gspr.tensor[0x003]) == 0xCAFE

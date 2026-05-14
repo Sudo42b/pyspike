@@ -26,6 +26,8 @@ from .tloop_buffer import (
 )
 from .unit.ins.encoding import (
     GTX_ISS_F7_OPSET,
+    GSPR_GTX_OPERAND3 as _GSPR_OP3,
+    GSPR_GTX_OPERAND5 as _GSPR_OP5,
 )
 from .fsm import NpuState, run_pipeline
 from .unit.context import INITIAL_CONTEXT, NpuContext
