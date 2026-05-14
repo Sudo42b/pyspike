@@ -38,14 +38,6 @@ GTX_DDR_BUS_WORD_BYTES: int = 32   # 32-byte bus word for GTX_DDR_REVERSED rever
 # DDR base physical address (firmware GTX_MAIN_BASE -- gtx_params.h:24)
 GTX_DDR_BASE: int = 0x370000000
 
-# SPR address ranges (PIPE bus, address bits [11:10] encode scope).
-#   00  GSPR  0x000-0x3FF  (single instance, shared)
-#   01  NSPR  0x400-0x7FF  (one per NEST)
-#   10  LSPR  0x800-0xBFF  (one per SPU per NEST)
-#   11  --   0xC00-0xFFF  (system / reserved)
-GSPR_BASE: int = 0x000
-GSPR_END:  int = 0x3FF
-NSPR_BASE: int = 0x400
-NSPR_END:  int = 0x7FF
-LSPR_BASE: int = 0x800
-LSPR_END:  int = 0xBFF
+# SPR address ranges — source of truth is `unit/csr/__init__.py:42-47`.
+# Don't redefine the GSPR_BASE / NSPR_BASE / LSPR_BASE constants here;
+# import them from `riscv.gtx.unit.csr` instead.

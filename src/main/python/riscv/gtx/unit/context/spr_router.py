@@ -24,8 +24,9 @@ Loop-control GSPR addresses 0x100..0x105 trigger startp/endp/starts/ends/startt/
 side-effect handlers from ops.control (lazy imported to avoid plan 02 -> plan 03
 circular import; plan 03 provides the _do_* helpers).
 """
-from ...config_params import (GSPR_BASE, GSPR_END, NSPR_BASE, NSPR_END,
-                     LSPR_BASE, LSPR_END, GTX_NEST_NUM, GTX_SPU_NUM)
+from ...config_params import GTX_NEST_NUM, GTX_SPU_NUM
+from ..csr import (GSPR_BASE, GSPR_END, NSPR_BASE, NSPR_END,
+                   LSPR_BASE, LSPR_END)
 # from ..ins.encoding import (GSPR_STARTP, GSPR_ENDP, GSPR_STARTS,
 #                        GSPR_ENDS, GSPR_STARTT, GSPR_ENDT)
 
