@@ -37,7 +37,7 @@ Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
 Status: Phase complete — ready for verification
-Last activity: 2026-05-14 — Completed quick task 260514-vwp: RegisterView 64-bit field setter OverflowError fix. tests/gtx/ 누적 26/26 PASS. d6f73f9 인트로된 4개 잠재 bug 모두 종결 (_extract_id signature, endp NameError, _GSPR_OP3/_OP5 imports, RegisterView 64-bit overflow).
+Last activity: 2026-05-15 — Completed quick task 260515-0c4: Step 1/4 base 재정의 제거 + dma.py GSPR_GTX_OPERAND3 import uncomment. 26/26 PASS 유지. 광범위 정리 4-step 분할 중 첫 단계. Step 2 (mm/act KeyError fix), Step 3 (RegisterView attribute 패턴 통일), Step 4 (silent-clamp → assert) 잔여.
 
 ### Phase 8 Plan Outcomes (2026-05-10)
 
@@ -393,6 +393,7 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 | 260514-ti0 | CSR 등록 체인 + custom0/1 dispatch 체인 검증 test 추가 (tests/gtx/, 8+10=18 tests, 23/23 PASS 누적) | 2026-05-14 | 8197364 | [260514-ti0-csr-custom0-1-dispatch-test-tests-gtx](./quick/260514-ti0-csr-custom0-1-dispatch-test-tests-gtx/) |
 | 260514-vjk | GSPR_GTX_OPERAND0..5 register 복원 (csr/gspr.py source-of-truth + encoding.py re-export + 5 callsite imports + T-loop fast-path 회귀 test) | 2026-05-14 | 8bbfb1a | [260514-vjk-gspr-gtx-operand0-5-register-csr-gspr-py](./quick/260514-vjk-gspr-gtx-operand0-5-register-csr-gspr-py/) |
 | 260514-vwp | RegisterView 64-bit field setter OverflowError fix (signed-int64 wrap of shifted mask + value) | 2026-05-14 | b5df4a0 | [260514-vwp-register-file-py-188-registerview-field-](./quick/260514-vwp-register-file-py-188-registerview-field-/) |
+| 260515-0c4 | Step 1/4 — base 상수 재정의 제거 (config_params.py → csr/__init__.py) + dma.py GSPR_GTX_OPERAND3 import uncomment | 2026-05-15 | e8a5f25 | [260515-0c4-step-1-4-base-config-params-py-csr-init-](./quick/260515-0c4-step-1-4-base-config-params-py-csr-init-/) |
 
 ## Session Continuity
 
