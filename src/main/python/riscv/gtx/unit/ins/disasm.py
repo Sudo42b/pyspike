@@ -109,7 +109,7 @@ def add_r_custom0(name: str, funct7: int) -> Any:
     match = (funct7 << 25) | 0x0b
     mask  = (0x7f << 25)   | 0x7f
     """
-    match = (funct7 << 25) | CUSTOM0_OPCODE
+    match = (funct7 << 25) | CUSTOM0
     mask = (0x7f << 25) | 0x7f
     return _build_insn(name, match, mask)
 
@@ -120,7 +120,7 @@ def add_rf3_custom0(name: str, funct7: int, funct3: int) -> Any:
     match = (funct7 << 25) | (funct3 << 12) | 0x0b
     mask  = (0x7f << 25)   | (0x7 << 12)    | 0x7f
     """
-    match = (funct7 << 25) | (funct3 << 12) | CUSTOM0_OPCODE
+    match = (funct7 << 25) | (funct3 << 12) | CUSTOM0
     mask = (0x7f << 25) | (0x7 << 12) | 0x7f
     return _build_insn(name, match, mask)
 
@@ -131,7 +131,7 @@ def add_warp(name: str, funct3: int) -> Any:
     match = (funct3 << 12) | 0x2b
     mask  = (0x7 << 12)    | 0x7f
     """
-    match = (funct3 << 12) | CUSTOM1_OPCODE
+    match = (funct3 << 12) | CUSTOM1
     mask = (0x7 << 12) | 0x7f
     return _build_insn(name, match, mask)
 
@@ -152,7 +152,7 @@ class Instruction:
     @property
     def fn7(self) -> Tuple[int, int, int]:
         # 25:31, 28:31, 25:27
-        fn7 = self.instruction & 0xFE000000 >> 25
+        fn7 = (self.instruction & 0xFE000000) >> 25
         fn7_4 = (fn7) & 0xF
         fn7_3 = (fn7) & 0x1
         return fn7, fn7_4, fn7_3
