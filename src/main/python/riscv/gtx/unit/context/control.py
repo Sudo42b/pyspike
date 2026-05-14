@@ -177,9 +177,8 @@ def startp(npu: "GtxNpu", proc, insn, xs1, xs2):
 @handler(kind='custom1', funct3=0b111, mnemonic='end.p')
 def endp(npu: "GtxNpu", proc, insn, xs1, xs2):
     state = proc.state
-    # rs1 data만 있음.
     rs1_val = state.XPR[insn.rs1]
-    # rs2_val = state.XPR[insn.rs2]
+    rs2_val = state.XPR[insn.rs2]
     _do_endp(npu, rs1_val, rs2_val)
     return 0
 
