@@ -37,7 +37,7 @@ Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
 Status: Phase complete — ready for verification
-Last activity: 2026-05-14 — Completed quick task 260514-s68: ORDER.md FSM 기반 최소 테스트 conftest + smoke test 새로 설계
+Last activity: 2026-05-14 — Completed quick task 260514-sqv: _extract_id 2-arg 시그니처 복원 (vendor 시맨틱 맞춤, smoke 5/5 PASS)
 
 ### Phase 8 Plan Outcomes (2026-05-10)
 
@@ -389,6 +389,7 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260514-s68 | ORDER.md FSM 기반 최소 테스트 conftest + smoke test 새로 설계 | 2026-05-14 | 0f85544 | [260514-s68-order-md-fsm-conftest-smoke-test](./quick/260514-s68-order-md-fsm-conftest-smoke-test/) |
+| 260514-sqv | _extract_id 2-arg 시그니처 복원 + _do_startp/_do_endp 시그니처 정합 (d6f73f9 인트로 버그, vendor 시맨틱 맞춤) | 2026-05-14 | 10a8b14 | [260514-sqv-extract-id-2-arg-do-startp-do-endp-d6f73](./quick/260514-sqv-extract-id-2-arg-do-startp-do-endp-d6f73/) |
 
 ## Session Continuity
 
