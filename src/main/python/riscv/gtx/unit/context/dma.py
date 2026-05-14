@@ -33,19 +33,19 @@ from ...config_params import GTX_NEST_NUM, GTX_SPU_NUM
 def _select_nest(npu) -> int:
     """Select NEST id per gtx_npu_dma.cc:289-291.
 
-    is_ploop -> use warp.tmu_id; else default to 0. Out-of-range clamps to 0.
+    is_ploop -> use warp.tmu_id; else default to 0. `warp.tmu_id` is bounded
+    to ``[0, GTX_NEST_NUM)`` by the assert inside ``control._do_startp``,
+    so we mirror that invariant here instead of silent-clamping.
     """
     nest = npu.warp.tmu_id if npu.warp.is_ploop else 0
-    if nest >= GTX_NEST_NUM:
-        nest = 0
+    assert nest < GTX_NEST_NUM, f"NEST id {nest} >= GTX_NEST_NUM={GTX_NEST_NUM}"
     return nest
 
 
 def _select_spu(npu) -> int:
-    """Select SPU id from warp.curr_id, clamped to GTX_SPU_NUM."""
+    """Select SPU id from warp.curr_id. Bounded by ``control._do_startt``."""
     spu = npu.warp.curr_id
-    if spu >= GTX_SPU_NUM:
-        spu = 0
+    assert spu < GTX_SPU_NUM, f"SPU id {spu} >= GTX_SPU_NUM={GTX_SPU_NUM}"
     return spu
 
 

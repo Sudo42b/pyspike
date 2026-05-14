@@ -242,10 +242,8 @@ def exec_vec_op(npu, proc, insn) -> int:
 
     nest = npu.warp.tmu_id if npu.warp.is_ploop else 0
     spu = npu.warp.curr_id if npu.warp.is_tloop else 0
-    if nest >= GTX_NEST_NUM:
-        nest = 0
-    if spu >= GTX_SPU_NUM:
-        spu = 0
+    assert nest < GTX_NEST_NUM, f"NEST id {nest} >= GTX_NEST_NUM={GTX_NEST_NUM}"
+    assert spu < GTX_SPU_NUM, f"SPU id {spu} >= GTX_SPU_NUM={GTX_SPU_NUM}"
 
     rs2 = int(proc.state.XPR[insn.rs2])
     npu.gspr[GSPR['GSPR_GTX_OPERAND2'].address] = rs2
