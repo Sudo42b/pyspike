@@ -1,74 +1,65 @@
-#
-# Copyright 2026 WuXi EsionTech Co., Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-"""Mocks for unit tests that must run without _riscv.so being built (D-19/D-20).
+"""Minimal processor_t stand-in for tests/gtx/*.
 
-INTERNAL: never imported by riscv.gtx production code.
-Plans 02-05 reuse these via `from ._mocks import MockProcessor, MockInsn`.
+Provides exactly the attribute surface GtxNpu.reset() and GtxNpu.custom0()
+exercise -- nothing more. Per ORDER.md, real _riscv.so processor binding
+is not loaded at test collection time; this mock lets us drive Python
+dispatch paths in isolation.
 """
-from dataclasses import dataclass, field
-from typing import List
+from __future__ import annotations
+from types import SimpleNamespace
+from typing import Dict
 
 
-@dataclass
-class MockXPR:
-    _regs: List[int] = field(default_factory=lambda: [0] * 32)
+class _MockXPR:
+    """Mock of proc.state.XPR -- list-of-ints surface."""
 
-    def __getitem__(self, i: int) -> int:
-        return self._regs[i]
+    def __init__(self, n: int = 32) -> None:
+        self._regs: list = [0] * n
 
-    def write(self, i: int, val: int) -> None:
-        if i != 0:  # x0 is hardwired zero
-            self._regs[i] = val & 0xFFFFFFFFFFFFFFFF
+    def __getitem__(self, idx: int) -> int:
+        return self._regs[idx]
 
-
-@dataclass
-class MockState:
-    XPR: MockXPR = field(default_factory=MockXPR)
+    def write(self, idx: int, val: int) -> None:
+        self._regs[idx] = int(val) & 0xFFFFFFFFFFFFFFFF
 
 
-@dataclass
 class MockProcessor:
-    _state: MockState = field(default_factory=MockState)
+    """Minimal processor_t -- state.XPR + get_csr/put_csr only."""
 
-    # Plan 04-05 fix: real pybind11 processor_t exposes `state` as a
-    # def_property_readonly (py_module.cc:711), NOT a `get_state()` method.
-    # MockProcessor exposes BOTH so unit tests that already use get_state()
-    # keep passing while production source code uses the real binding (proc.state).
-    @property
-    def state(self) -> MockState:
-        return self._state
+    def __init__(self) -> None:
+        self.state = SimpleNamespace(XPR=_MockXPR())
+        self._csrs: Dict[int, int] = {}
 
-    def get_state(self) -> MockState:
-        return self._state
+    def get_csr(self, addr: int) -> int:
+        return self._csrs.get(addr, 0)
 
-    def get_csr(self, which: int) -> int:
-        return 0
-
-    def put_csr(self, which: int, val: int) -> None:
-        pass
+    def put_csr(self, addr: int, val: int) -> None:
+        self._csrs[addr] = int(val) & 0xFFFFFFFFFFFFFFFF
 
 
-@dataclass
-class MockInsn:
-    """Mirrors rocc_insn_t fields exposed by py_module.cc:391-409."""
-    opcode: int = 0x0b
-    rd: int = 0
-    xs2: int = 0
-    xs1: int = 0
-    xd: int = 0
-    rs1: int = 0
-    rs2: int = 0
-    funct: int = 0  # this is funct7
+class DummyInsn:
+    """Minimal rocc_insn_t -- funct/rs1/rs2/rd/xd/xs1/xs2 only.
+
+    Matches the attribute surface read by GtxNpu.custom0 fast-path and
+    by run_pipeline -> state_decode. Defaults give a known-illegal funct7
+    so run_pipeline falls through to illegal-instruction handling
+    (still returns an int, which is what smoke checks).
+    """
+
+    def __init__(
+        self,
+        funct: int = 0,
+        rs1: int = 0,
+        rs2: int = 0,
+        rd: int = 0,
+        xd: int = 0,
+        xs1: int = 0,
+        xs2: int = 0,
+    ) -> None:
+        self.funct = funct
+        self.rs1 = rs1
+        self.rs2 = rs2
+        self.rd = rd
+        self.xd = xd
+        self.xs1 = xs1
+        self.xs2 = xs2
