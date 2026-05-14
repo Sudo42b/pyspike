@@ -16,9 +16,9 @@ Phase 3 plan 02 Task 2b: 5 disasm-only stubs + credit_st_chk stub.
 from ..._registry import handler
 from . import dma_engine
 from ..ins.encoding import (
-    # GSPR_GTX_OPERAND3,                      # 0x003 -- gtx_params.h:40
-    # LSPR_SPM_ADDRA, LSPR_SPM_ADDRR,         # 0x900 / 0x903 -- gtx_params.h:64,67
-    # GTX_ISS_F7_DMA_TPOSE, GTX_ISS_F7_DMA_FILL,
+    GSPR_GTX_OPERAND3,                        # 0x003 -- gtx_params.h:40
+    # LSPR_SPM_ADDRA, LSPR_SPM_ADDRR,         # Step 3: encoding.py 정의 필요
+    # GTX_ISS_F7_DMA_TPOSE, GTX_ISS_F7_DMA_FILL,  # handler 자체가 주석 (line 205,227)
     GTX_ISS_F7_DMA_LD_ST, GTX_ISS_F7_DMA_3D,
     GTX_ISS_F7_DMA_MCAST_S2L, GTX_ISS_F7_DMA_LD_SVR_L1,
     GTX_ISS_F7_DMA_MCAST_GS, GTX_ISS_F7_DMA_ST_SVR_L1,
