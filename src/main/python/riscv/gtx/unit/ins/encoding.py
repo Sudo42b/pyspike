@@ -295,15 +295,6 @@ WARP_F3_SPLIT: int = 0b100
 WARP_F3_JOIN: int = 0b101
 
 
-# ============================================================================
-# GSPR address constants — re-exported from csr/gspr.py for raw int access
-# (bare-int access patterns: npu.py T-loop fast-path, tloop_buffer.py,
-# act.py, vec.py). MM uses CSR_GSPR['GSPR_GTX_OPERAND3'] dict lookup directly.
-# ============================================================================
-from ..csr.gspr import GSPR as _GSPR_REGS
-GSPR_GTX_OPERAND0: int = _GSPR_REGS['GSPR_GTX_OPERAND0'].address
-GSPR_GTX_OPERAND1: int = _GSPR_REGS['GSPR_GTX_OPERAND1'].address
-GSPR_GTX_OPERAND2: int = _GSPR_REGS['GSPR_GTX_OPERAND2'].address
-GSPR_GTX_OPERAND3: int = _GSPR_REGS['GSPR_GTX_OPERAND3'].address
-GSPR_GTX_OPERAND4: int = _GSPR_REGS['GSPR_GTX_OPERAND4'].address
-GSPR_GTX_OPERAND5: int = _GSPR_REGS['GSPR_GTX_OPERAND5'].address
+# SPR address constants live in `unit/csr/{gspr,lspr,nspr}.py`. Access them
+# via `GSPR['name'].address` / `LSPR['name'].address` — single source of truth,
+# no re-export here.

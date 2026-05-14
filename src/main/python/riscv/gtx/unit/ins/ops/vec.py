@@ -22,11 +22,11 @@ import torch
 from ...._registry import handler
 from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM
 from ..encoding import (
-    GSPR_GTX_OPERAND2, GSPR_GTX_OPERAND3,
     GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP, GTX_F7_VEC_DOT_SUM,
     GTX_F7_VEC_MATH, GTX_F7_VEC_ROUND, GTX_F7_VEC_SASMD, GTX_F7_VEC_SIGN,
     GTX_VEC_ADD, GTX_VEC_DIV, GTX_VEC_MUL, GTX_VEC_SUB,
 )
+from ...csr import GSPR, LSPR
 
 
 # =============================================================================
@@ -188,15 +188,15 @@ def _dispatch_sasmd(npu, nest: int, spu: int, funct3: int,
 
     scalar = _fp16_low16(rs2)
     if not (funct3 & 4):
-        addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-        addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+        addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
+        addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
         view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
         result = sasmd_kernel(view_a, scalar, op=op_map[sub])
         _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
         return 0
 
     a_reg = rs1 & 0x1F
-    r_reg = int(npu.gspr.get("GSPR_GTX_OPERAND3", insn.rd)) & 0x1F
+    r_reg = int(npu.gspr.get("GSPR['GSPR_GTX_OPERAND3'].address", insn.rd)) & 0x1F
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     result = sasmd_kernel(view_a, scalar, op=op_map[sub])
     _l0_block_view(npu, nest, spu, r_reg).copy_(result)
@@ -210,7 +210,7 @@ def _dispatch_arith_l0_ii(npu, nest: int, spu: int, sub_op: int,
         return 0
     a_reg = rs1 & 0x1F
     b_reg = rs2 & 0x1F
-    r_reg = int(npu.gspr.get("GSPR_GTX_OPERAND3", insn.rd)) & 0x1F
+    r_reg = int(npu.gspr.get("GSPR['GSPR_GTX_OPERAND3'].address", insn.rd)) & 0x1F
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     view_b = _l0_block_view(npu, nest, spu, b_reg)
     result = sasmd_kernel(view_a, view_b, op=op_map[sub_op])
@@ -221,7 +221,7 @@ def _dispatch_arith_l0_ii(npu, nest: int, spu: int, sub_op: int,
 def _dispatch_unary_l0(npu, nest: int, spu: int, funct7: int, sub_op: int,
                         rs1: int, insn) -> int:
     input_reg = rs1 & 0x1F
-    op3_raw = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0xFFFFFFFF))
+    op3_raw = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0xFFFFFFFF))
     result_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else input_reg
     view = _l0_block_view(npu, nest, spu, input_reg)
     result = _apply_unary(funct7, sub_op, view)
@@ -248,7 +248,7 @@ def exec_vec_op(npu, proc, insn) -> int:
         spu = 0
 
     rs2 = int(proc.state.XPR[insn.rs2])
-    npu.gspr[GSPR_GTX_OPERAND2] = rs2
+    npu.gspr[GSPR['GSPR_GTX_OPERAND2'].address] = rs2
 
     if funct7 == GTX_F7_VEC_SASMD:
         return _dispatch_sasmd(npu, nest, spu, funct3, rs1, rs2, insn, vec_size)
@@ -258,9 +258,9 @@ def exec_vec_op(npu, proc, insn) -> int:
     if funct7 in (0x1C, 0x1D, 0x1E) and (funct3 & 4):
         return _dispatch_unary_l0(npu, nest, spu, funct7, funct3 & 3, rs1, insn)
 
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_b = npu.lspr[nest][spu].get(LSPR_SPM_ADDRB, 0)
-    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+    addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
+    addr_b = npu.lspr[nest][spu].get(LSPR['SPM_ADDRB'].address, 0)
+    addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
     if funct7 == GTX_F7_VEC_ARITH:
         op_map = {0: GTX_VEC_ADD, 1: GTX_VEC_SUB, 2: GTX_VEC_MUL, 3: GTX_VEC_DIV}

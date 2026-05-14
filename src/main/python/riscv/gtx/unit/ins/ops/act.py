@@ -28,8 +28,6 @@ from ...._registry import handler
 from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM
 from ..encoding import (
     # ACT_OPS_REVERSED,
-    # GSPR_GTX_OPCODE,
-    GSPR_GTX_OPERAND1, GSPR_GTX_OPERAND2, GSPR_GTX_OPERAND3,
     GTX_ACT_ESUM, GTX_ACT_GELU, GTX_ACT_PRELU,
     GTX_ACT_RELU, GTX_ACT_SIGMOID, GTX_ACT_SOFTMAX, GTX_ACT_TANH,
     GTX_F7_ACT_GELU, GTX_F7_ACT_PRELU, GTX_F7_ACT_SIGM,
@@ -37,8 +35,8 @@ from ..encoding import (
     GTX_F7_FCVT_DH, GTX_F7_FCVT_SH,
     GTX_F7_POOL_AVG, GTX_F7_POOL_MAX,
     GTX_F7_SCVT_HN, GTX_F7_SCVT_IH, GTX_F7_SCVT_QH,
-    # LSPR_SPM_ADDRA, LSPR_SPM_ADDRR,
 )
+from ...csr import GSPR, LSPR
 
 
 # =============================================================================
@@ -303,8 +301,8 @@ def firmware_act(npu, proc, insn, *, op_id: int, is_reversed: bool) -> int:
     )
     nest, spu = _resolve_nest_spu(npu)
 
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+    addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
+    addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
     rd_addr, wr_addr = (addr_r, addr_a) if is_reversed else (addr_a, addr_r)
 
     length = int(proc.state.XPR[insn.rs1]) & 0xFFFF
@@ -326,17 +324,17 @@ def firmware_act(npu, proc, insn, *, op_id: int, is_reversed: bool) -> int:
     elif op_id == GTX_ACT_SIGMOID:
         result = sigmoid(view_in)
     elif op_id == GTX_ACT_PRELU:
-        slope = _fp16_low16(int(npu.gspr.get(GSPR_GTX_OPERAND2, 0)))
+        slope = _fp16_low16(int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0)))
         result = prelu(view_in, slope)
     elif op_id == GTX_ACT_ESUM:
         # Pitfall 8: ESUM is forward (rd=ADDRA) but writes a scalar to L0
         # at offset (GSPR_OPERAND3 & 0x1F)*32 — not to L1[ADDRR].
-        op2 = int(npu.gspr.get(GSPR_GTX_OPERAND2, 0))
+        op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
         max_val = _fp16_low16(op2)
         init_accum = _fp16_high16(op2)
         scalar = esum(view_in, max_val=max_val, init_accum=init_accum)
         l0_offset = (
-            (int(npu.gspr.get(GSPR_GTX_OPERAND3, 0)) & 0x1F) * 32
+            (int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)) & 0x1F) * 32
         ) % GTX_L0_SIZE_BYTES
         _write_l0_fp16_scalar(npu, nest, spu, l0_offset, scalar)
         return 0
@@ -353,14 +351,14 @@ def firmware_act_imm(npu, proc, insn, *, op_id: int) -> int:
     nest, spu = _resolve_nest_spu(npu)
 
     in_reg = int(proc.state.XPR[insn.rs1]) & 0x1F
-    op3_raw = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0xFFFFFFFF))
+    op3_raw = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0xFFFFFFFF))
     out_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else (insn.rd & 0x1F)
 
     view_in = _l0_block_view(npu, nest, spu, in_reg)
     view_out = _l0_block_view(npu, nest, spu, out_reg)
 
     if op_id == GTX_ACT_PRELU:
-        slope = _fp16_low16(int(npu.gspr.get(GSPR_GTX_OPERAND2, 0)))
+        slope = _fp16_low16(int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0)))
         result = prelu(view_in, slope)
     elif op_id == GTX_ACT_GELU:
         result = gelu(view_in)
@@ -380,12 +378,12 @@ def firmware_softmax_imm(npu, proc, insn, *, op_id: int) -> int:
     nest, spu = _resolve_nest_spu(npu)
 
     in_reg = int(proc.state.XPR[insn.rs1]) & 0x1F
-    op3_raw = int(npu.gspr.get(GSPR_GTX_OPERAND3, 0xFFFFFFFF))
+    op3_raw = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0xFFFFFFFF))
     out_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else (insn.rd & 0x1F)
 
     view_in = _l0_block_view(npu, nest, spu, in_reg)
 
-    op2 = int(npu.gspr.get(GSPR_GTX_OPERAND2, 0))
+    op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
     max_val = _fp16_low16(op2)
     accum_val = _fp16_high16(op2)
 
@@ -422,15 +420,15 @@ def firmware_pool(npu, proc, insn, *, is_max: bool) -> int:
     """
     nest, spu = _resolve_nest_spu(npu)
 
-    length = int(npu.gspr.get(GSPR_GTX_OPERAND1, 0)) & 0xFFFF
+    length = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND1'].address, 0)) & 0xFFFF
     if length == 0:
         length = 0x10000
-    kernel_size = int(npu.gspr.get(GSPR_GTX_OPERAND2, 0)) & 0xFFFF
+    kernel_size = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0)) & 0xFFFF
     if kernel_size == 0:
         return 0   # vendor guards `kernel_size > 0` -> silent NOP.
 
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+    addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
+    addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
     l1_f16 = npu.mem.l1_f16(nest, spu)
     in_off = (addr_a // 2) % l1_f16.shape[0]
@@ -458,12 +456,12 @@ def firmware_format(npu, proc, insn, *, src_kind: str, dst_kind: str) -> int:
     if length == 0:
         length = 0x10000
 
-    op2 = int(npu.gspr.get(GSPR_GTX_OPERAND2, 0))
+    op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
     scale = _fp16_low16(op2)
     offset = _fp16_high16(op2)
 
-    addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0)
-    addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0)
+    addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
+    addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
     l1 = npu.mem.l1_byte(nest, spu)
     in_size = length * _BYTES_PER_ELEM[src_kind]
@@ -595,7 +593,7 @@ def _exec_softmax_i(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_F7_SCVT_QH, mnemonic='scvt_qh')
 def _exec_scvt_qh_dispatch(npu, proc, insn, xs1, xs2):
     """0=qh (FP16->FP8), 1=hq (FP8->FP16). Both apply scale+offset."""
-    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
         return firmware_format(npu, proc, insn,
                                 src_kind='fp8', dst_kind='fp16')
@@ -606,7 +604,7 @@ def _exec_scvt_qh_dispatch(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_F7_SCVT_IH, mnemonic='scvt_ih')
 def _exec_scvt_ih_dispatch(npu, proc, insn, xs1, xs2):
     """0=ih (FP16->INT8), 1=hi (INT8->FP16). Both apply scale+offset."""
-    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
         return firmware_format(npu, proc, insn,
                                 src_kind='int8', dst_kind='fp16')
@@ -624,7 +622,7 @@ def _exec_scvt_hn(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_F7_FCVT_SH, mnemonic='fcvt_sh')
 def _exec_fcvt_sh_dispatch(npu, proc, insn, xs1, xs2):
     """0=sh (FP32->FP16), 1=hs (FP16->FP32). Bit-pattern preserving."""
-    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
         return firmware_format(npu, proc, insn,
                                 src_kind='fp16', dst_kind='fp32')
@@ -635,7 +633,7 @@ def _exec_fcvt_sh_dispatch(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_F7_FCVT_DH, mnemonic='fcvt_dh')
 def _exec_fcvt_dh_dispatch(npu, proc, insn, xs1, xs2):
     """0=dh (FP64->FP16), 1=hd (FP16->FP64). Bit-pattern preserving."""
-    sub_op = int(npu.gspr.get(GSPR_GTX_OPCODE, 0)) & 0xFF
+    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
         return firmware_format(npu, proc, insn,
                                 src_kind='fp16', dst_kind='fp64')

@@ -48,8 +48,11 @@ class GSPR_GTX_OPERAND3:
     value = bits(0, 63)
 
 
-@csr(name="GSPR_GTX_OPERAND4", address=0x004, width=64, rw_type="RW")
-class GSPR_GTX_OPERAND4:
+@csr(name="GSPR_GTX_OPCODE", address=0x004, width=64, rw_type="RW")
+class GSPR_GTX_OPCODE:
+    """Firmware sub-opcode staging — vendor gtx_params.h:42 maps OPCODE to
+    address 0x004. Python's earlier extension reserved this slot for
+    OPERAND4 (now removed)."""
     value = bits(0, 63)
 
 

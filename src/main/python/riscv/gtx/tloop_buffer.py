@@ -23,7 +23,7 @@ Why snapshots, not deferred ``proc``/``insn`` references:
   - ``proc.state.XPR[i]`` mutates between RoCC instructions (RISC-V
     scalar code advances the row counter, etc.), so values must be
     captured at buffer time.
-  - ``gspr[GSPR_GTX_OPERAND3]`` (OPSET staging) is cleared by
+  - ``gspr[GSPR['GSPR_GTX_OPERAND3'].address]`` (OPSET staging) is cleared by
     :mod:`writeback` immediately after each non-OPSET custom0, so the
     snapshot must also happen before ``state_writeback`` runs.
 """
@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections import namedtuple
 from typing import TYPE_CHECKING
 
-from .unit.ins.encoding import GSPR_GTX_OPERAND3, GSPR_GTX_OPERAND5
+from .unit.csr import GSPR
 
 if TYPE_CHECKING:
     from .npu import GtxNpu
@@ -210,8 +210,8 @@ def try_buffer(npu: 'GtxNpu') -> bool:
         mnemonic,
         int(state.XPR[insn.rs1]),
         int(state.XPR[insn.rs2]),
-        int(npu.gspr.get(GSPR_GTX_OPERAND3, 0)),
-        int(npu.gspr.get(GSPR_GTX_OPERAND5, 0)),
+        int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)),
+        int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND5'].address, 0)),
         insn.funct,
         insn.xd,
         insn.xs1,
@@ -510,8 +510,8 @@ def _replay(npu: 'GtxNpu', entry: TLoopEntry) -> None:
     in :mod:`writeback` for non-OPSET custom0 — every bufferable
     mnemonic is non-OPSET so the clear is unconditional here.
     """
-    npu.gspr[GSPR_GTX_OPERAND3] = entry.op3
-    npu.gspr[GSPR_GTX_OPERAND5] = entry.op5
+    npu.gspr[GSPR['GSPR_GTX_OPERAND3'].address] = entry.op3
+    npu.gspr[GSPR['GSPR_GTX_OPERAND5'].address] = entry.op5
 
     insn = _InsnShim(
         funct=entry.funct, xd=entry.xd,
@@ -520,5 +520,5 @@ def _replay(npu: 'GtxNpu', entry: TLoopEntry) -> None:
     proc = _ProcShim(_StateShim(_XPRShim(entry.rs1, entry.rs2)))
     entry.handler(proc, insn, entry.rs1, entry.rs2)
 
-    npu.gspr[GSPR_GTX_OPERAND3] = 0
-    npu.gspr[GSPR_GTX_OPERAND5] = 0
+    npu.gspr[GSPR['GSPR_GTX_OPERAND3'].address] = 0
+    npu.gspr[GSPR['GSPR_GTX_OPERAND5'].address] = 0

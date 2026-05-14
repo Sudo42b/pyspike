@@ -196,10 +196,10 @@ def _fp16_scalar_to_u16(val_f32: float, device) -> int:
 # =============================================================================
 def _exec_mm_basic_variant(npu, nest, spu, args, is_accumulate):
     """``mm`` / ``mmc`` — A@B [+ bias] into ADDRR, FP16. No mxe_accum touch."""
-    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
-    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
-    addr_r = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_R'], 0)
-    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_C'], 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRA'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRB'], 0)
+    addr_r = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRR'], 0)
+    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRC'], 0)
 
     M, K, N = args['row_A'], args['col_A'], args['col_B']
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, M, K)
@@ -215,9 +215,9 @@ def _exec_mm_basic_variant(npu, nest, spu, args, is_accumulate):
 
 def _exec_mm_s_variant(npu, nest, spu, args, is_accumulate):
     """``mm_s`` / ``mmc_s`` — FP32 result into ADDRC. No mxe_accum touch."""
-    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
-    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
-    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_C'], 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRA'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRB'], 0)
+    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRC'], 0)
 
     M, K, N = args['row_A'], args['col_A'], args['col_B']
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, M, K)
@@ -239,7 +239,7 @@ def _exec_mm_o_variant(npu, nest, spu, args, is_accumulate):
     Writes FP16 to L0 *big-endian*, updates ``mxe_accum`` unconditionally
     (Pitfall B).
     """
-    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRA'], 0)
     col_A = args['col_A']
 
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, 1, col_A).flatten()
@@ -266,8 +266,8 @@ def _exec_mm_v_variant(npu, nest, spu, args, is_accumulate):
     Writes FP16 to L0 *little-endian* (asymmetric vs MM_O), updates
     ``mxe_accum``.
     """
-    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
-    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRA'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRB'], 0)
     vec_len = args['col_A']
 
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, 1, vec_len).flatten()
@@ -289,10 +289,10 @@ def _exec_mm_v_variant(npu, nest, spu, args, is_accumulate):
 
 def _exec_mm_t_variant(npu, nest, spu, args, is_accumulate):
     """``mm_t`` / ``mmc_t`` — transposed C^T (N×M layout) into ADDRR."""
-    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_A'], 0)
-    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_B'], 0)
-    addr_r = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_R'], 0)
-    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['LSPR_SPM_ADDR_C'], 0)
+    addr_a = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRA'], 0)
+    addr_b = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRB'], 0)
+    addr_r = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRR'], 0)
+    addr_c = npu.lspr[nest][spu].get(CSR_LSPR['SPM_ADDRC'], 0)
 
     M, K, N = args['row_A'], args['col_A'], args['col_B']
     A = _read_l1_fp16_matrix(npu, nest, spu, addr_a, M, K)

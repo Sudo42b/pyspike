@@ -24,11 +24,7 @@ from .tloop_buffer import (
     TLoopEntry as _TLoopEntry,
     flush as _tloop_flush,
 )
-from .unit.ins.encoding import (
-    GTX_ISS_F7_OPSET,
-    GSPR_GTX_OPERAND3 as _GSPR_OP3,
-    GSPR_GTX_OPERAND5 as _GSPR_OP5,
-)
+from .unit.ins.encoding import GTX_ISS_F7_OPSET
 from .fsm import NpuState, run_pipeline
 from .unit.context import INITIAL_CONTEXT, NpuContext
 from .unit.context.warp_state import WarpState
@@ -237,9 +233,9 @@ class GtxNpu(isa.ROCC):
             # OPSET fast-path
             if funct7 == GTX_ISS_F7_OPSET:
                 if (int(xpr[insn.rs1]) & 1) == 0:
-                    gspr_tensor[_GSPR_OP3] = int(xpr[insn.rs2])
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND3'].address] = int(xpr[insn.rs2])
                 else:
-                    gspr_tensor[_GSPR_OP5] = int(xpr[insn.rs2])
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND5'].address] = int(xpr[insn.rs2])
                 return 0
 
             xd = insn.xd
@@ -263,13 +259,13 @@ class GtxNpu(isa.ROCC):
                         handler, mnemonic,
                         int(xpr[insn.rs1]),
                         int(xpr[insn.rs2]),
-                        int(gspr_tensor[_GSPR_OP3]),
-                        int(gspr_tensor[_GSPR_OP5]),
+                        int(gspr_tensor[GSPR['GSPR_GTX_OPERAND3'].address]),
+                        int(gspr_tensor[GSPR['GSPR_GTX_OPERAND5'].address]),
                         funct7, xd, xs1_bit, xs2_bit, insn.rd,
                     ))
                     # Mirror WRITEBACK's OPSET-aware clear
-                    gspr_tensor[_GSPR_OP3] = 0
-                    gspr_tensor[_GSPR_OP5] = 0
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND3'].address] = 0
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND5'].address] = 0
                     return 0
                 
                 if buf and mnemonic not in _TLOOP_TRANSPARENT:

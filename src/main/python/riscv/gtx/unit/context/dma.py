@@ -16,8 +16,6 @@ Phase 3 plan 02 Task 2b: 5 disasm-only stubs + credit_st_chk stub.
 from ..._registry import handler
 from . import dma_engine
 from ..ins.encoding import (
-    GSPR_GTX_OPERAND3,                        # 0x003 -- gtx_params.h:40
-    # LSPR_SPM_ADDRA, LSPR_SPM_ADDRR,         # Step 3: encoding.py 정의 필요
     # GTX_ISS_F7_DMA_TPOSE, GTX_ISS_F7_DMA_FILL,  # handler 자체가 주석 (line 205,227)
     GTX_ISS_F7_DMA_LD_ST, GTX_ISS_F7_DMA_3D,
     GTX_ISS_F7_DMA_MCAST_S2L, GTX_ISS_F7_DMA_LD_SVR_L1,
@@ -25,6 +23,7 @@ from ..ins.encoding import (
     GTX_ISS_F7_CREDIT_LD, GTX_ISS_F7_CREDIT_ST,
     GTX_ISS_F7_CREDIT_LD_CHK, GTX_ISS_F7_CREDIT_ST_CHK,
 )
+from ..csr import GSPR, LSPR
 from ...config_params import GTX_NEST_NUM, GTX_SPU_NUM
 
 
@@ -64,7 +63,7 @@ def _select_spu(npu) -> int:
 #     state = proc.state
 #     rs1 = state.XPR[insn.rs1]
 #     rs2 = state.XPR[insn.rs2]
-#     rs3 = npu.gspr.get(GSPR_GTX_OPERAND3, 0)   # 0x003 per gtx_params.h:40
+#     rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)   # 0x003 per gtx_params.h:40
 #     args = dma_engine.decode_firmware_dma_args(
 #         rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
 #     nest = _select_nest(npu)
@@ -95,7 +94,7 @@ def _select_spu(npu) -> int:
 #     state = proc.state
 #     rs1 = state.XPR[insn.rs1]
 #     rs2 = state.XPR[insn.rs2]
-#     rs3 = npu.gspr.get(GSPR_GTX_OPERAND3, 0)
+#     rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
 #     args = dma_engine.decode_firmware_dma_args(
 #         rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
 #     nest = _select_nest(npu)
@@ -126,7 +125,7 @@ def _select_spu(npu) -> int:
 #     state = proc.state
 #     rs1 = state.XPR[insn.rs1]
 #     rs2 = state.XPR[insn.rs2]
-#     rs3 = npu.gspr.get(GSPR_GTX_OPERAND3, 0)
+#     rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
 #     args = dma_engine.decode_firmware_dma_args(
 #         rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
 #     nest = _select_nest(npu)
@@ -206,8 +205,8 @@ def _store_svr_l1(npu, proc, insn, xs1, xs2):
 # def _tpose(npu, proc, insn, xs1, xs2):
 #     """tpose (funct7=0x38): matrix transpose in L1 (FP16, 2 bytes per elem).
 
-#     Source matrix base: LSPR_SPM_ADDRA (0x900) -- gtx_params.h:64
-#     Result matrix base: LSPR_SPM_ADDRR (0x903) -- gtx_params.h:67
+#     Source matrix base: LSPR['SPM_ADDRA'].address (0x900) -- gtx_params.h:64
+#     Result matrix base: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67
 #     AUTHORITATIVE values; no magic numbers in handler body.
 #     """
 #     state = proc.state
@@ -217,8 +216,8 @@ def _store_svr_l1(npu, proc, insn, xs1, xs2):
 #     cols = rs2 & 0xFFFF
 #     nest = _select_nest(npu)
 #     spu = _select_spu(npu)
-#     addr_a = npu.lspr[nest][spu].get(LSPR_SPM_ADDRA, 0) & 0xFFFFFFFF
-#     addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0) & 0xFFFFFFFF
+#     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0) & 0xFFFFFFFF
+#     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
 #     return dma_engine.exec_transpose(
 #         npu.mem, nest_id=nest, spu_id=spu, rows=rows, cols=cols,
 #         addr_a=addr_a, addr_r=addr_r)
@@ -228,7 +227,7 @@ def _store_svr_l1(npu, proc, insn, xs1, xs2):
 # def _fill(npu, proc, insn, xs1, xs2):
 #     """fill (funct7=0x39): fill L1 region at addr_r with constant FP16 value.
 
-#     Result address: LSPR_SPM_ADDRR (0x903) -- gtx_params.h:67. AUTHORITATIVE
+#     Result address: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67. AUTHORITATIVE
 #     constant; no magic number in handler body (LSPR_SPM_ADDRB is NOT used here).
 #     """
 #     state = proc.state
@@ -237,7 +236,7 @@ def _store_svr_l1(npu, proc, insn, xs1, xs2):
 #     fill_val = (rs1 >> 16) & 0xFFFF
 #     nest = _select_nest(npu)
 #     spu = _select_spu(npu)
-#     addr_r = npu.lspr[nest][spu].get(LSPR_SPM_ADDRR, 0) & 0xFFFFFFFF
+#     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
 #     return dma_engine.exec_fill(
 #         npu.mem, nest_id=nest, spu_id=spu,
 #         length=length, fill_val=fill_val, addr_r=addr_r)
