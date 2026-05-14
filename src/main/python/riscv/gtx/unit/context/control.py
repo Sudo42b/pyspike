@@ -39,13 +39,13 @@ def _emit_progress() -> None:
 # ============================================================================
 # extract_id -- gtx_npu_loop.cc:21-23 dual-mode addressing
 # ============================================================================
-def _extract_id(rs1: int) -> int:
+def _extract_id(rs1: int, rs2: int) -> int:
     """Dual-mode addressing: rs2 marker bit selects rs2 low6 vs rs1 low32.
 
     Verbatim port of gtx_npu_loop.cc:21-23 (the marker-bit ternary).
     """
-    if rs1 & 0x400:
-        return rs1 & 0x3F
+    if rs2 & 0x400:
+        return rs2 & 0x3F
     return rs1 & 0xFFFFFFFF
 
 
@@ -53,15 +53,15 @@ def _extract_id(rs1: int) -> int:
 # _do_* helpers -- value-level loop transitions, callable from custom1 handler
 # AND from spr_router.wr_spr (loop-control GSPR addresses 0x100..0x105).
 # ============================================================================
-def _do_startp(npu: "GtxNpu", rs1: int) -> None:
+def _do_startp(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::startp. Sets is_ploop, tmu_id."""
-    nest_id = _extract_id(rs1)
+    nest_id = _extract_id(rs1, rs2)
     assert 0 <= nest_id < GTX_NEST_NUM, f"Invalid NEST ID {nest_id} in startp (is_ploop={npu.warp.is_ploop})"
     npu.warp.tmu_id = nest_id
     npu.warp.is_ploop = True
 
 
-def _do_endp(npu: "GtxNpu", rs1: int) -> None:
+def _do_endp(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::endp. Clears is_ploop. P3 (Plan 05): flushes the
     deferred-store queue when !wsplit_seen.
 
