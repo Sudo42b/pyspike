@@ -25,6 +25,39 @@ csr = make_csr(GSPR)
 # 64-bit PIPE Registers
 # -----------------------------------------------------------------------
 
+# Operand staging slots (OPSET writes 0x003 on slot=0, 0x005 on slot=1;
+# see ops/spr.py:opset). Single bits(0, 63) field satisfies @csr's
+# no-empty-fields invariant — callsites use raw int access.
+@csr(name="GSPR_GTX_OPERAND0", address=0x000, width=64, rw_type="RW")
+class GSPR_GTX_OPERAND0:
+    value = bits(0, 63)
+
+
+@csr(name="GSPR_GTX_OPERAND1", address=0x001, width=64, rw_type="RW")
+class GSPR_GTX_OPERAND1:
+    value = bits(0, 63)
+
+
+@csr(name="GSPR_GTX_OPERAND2", address=0x002, width=64, rw_type="RW")
+class GSPR_GTX_OPERAND2:
+    value = bits(0, 63)
+
+
+@csr(name="GSPR_GTX_OPERAND3", address=0x003, width=64, rw_type="RW")
+class GSPR_GTX_OPERAND3:
+    value = bits(0, 63)
+
+
+@csr(name="GSPR_GTX_OPERAND4", address=0x004, width=64, rw_type="RW")
+class GSPR_GTX_OPERAND4:
+    value = bits(0, 63)
+
+
+@csr(name="GSPR_GTX_OPERAND5", address=0x005, width=64, rw_type="RW")
+class GSPR_GTX_OPERAND5:
+    value = bits(0, 63)
+
+
 @csr(name="STACK_INFO", address=0x010, width=64, rw_type="RW")
 class STACK_INFO:
     pointer = bits(0, 37)
