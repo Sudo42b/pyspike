@@ -37,7 +37,7 @@ Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
 Status: Phase complete — ready for verification
-Last activity: 2026-05-14 — Completed quick task 260514-sqv: _extract_id 2-arg 시그니처 복원 (vendor 시맨틱 맞춤, smoke 5/5 PASS)
+Last activity: 2026-05-14 — Dirty tree cleanup: ORDER.md 단순화 (f245b0d), disasm.py precedence bug + naming (aa742f5), 35개 stale test 삭제 (6bc2c3f) + sqv followup endp NameError fix (021cbd3). Smoke 5/5 PASS.
 
 ### Phase 8 Plan Outcomes (2026-05-10)
 
