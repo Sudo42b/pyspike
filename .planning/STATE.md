@@ -37,7 +37,7 @@ Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
 Status: Phase complete — ready for verification
-Last activity: 2026-05-10
+Last activity: 2026-05-14 — Completed quick task 260514-s68: ORDER.md FSM 기반 최소 테스트 conftest + smoke test 새로 설계
 
 ### Phase 8 Plan Outcomes (2026-05-10)
 
@@ -383,6 +383,12 @@ NOT roadmap blockers — to be confirmed during phase execution:
 All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 - Phase 2 needs_followup: Categories A-D before /gsd:phase-evolve 2 can run; see 02-06-SUMMARY.md
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260514-s68 | ORDER.md FSM 기반 최소 테스트 conftest + smoke test 새로 설계 | 2026-05-14 | 0f85544 | [260514-s68-order-md-fsm-conftest-smoke-test](./quick/260514-s68-order-md-fsm-conftest-smoke-test/) |
 
 ## Session Continuity
 
