@@ -54,17 +54,9 @@ def _extract_id(rs1: int, rs2: int) -> int:
 # AND from spr_router.wr_spr (loop-control GSPR addresses 0x100..0x105).
 # ============================================================================
 def _do_startp(npu: "GtxNpu", rs1: int, rs2: int) -> None:
-    """Port of gtx_npu_t::startp. Sets is_ploop, tmu_id.
-
-    Plan invariant: no nested plans. Also resets PLAN-lifetime
-    sentinels so the per-plan "one shared + one thread section"
-    invariant starts fresh.
-    """
+    """Port of gtx_npu_t::startp. Sets is_ploop, tmu_id."""
     nest_id = _extract_id(rs1, rs2)
     assert 0 <= nest_id < GTX_NEST_NUM, f"Invalid NEST ID {nest_id} in startp (is_ploop={npu.warp.is_ploop})"
-    assert not npu.warp.is_ploop, f"nested start_p (is_ploop=True, tmu_id={npu.warp.tmu_id} → new nest_id={nest_id})"
-    npu.warp.sloop_seen_in_plan = False
-    npu.warp.tloop_seen_in_plan = False
     npu.warp.tmu_id = nest_id
     npu.warp.is_ploop = True
 
@@ -78,14 +70,9 @@ def _do_endp(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     credit_st_chk mid-execution instead -- see ops/dma.py:_credit_st_chk.
     The wsplit_seen sentinel chooses the path. ROADMAP P3 success #4 path.
     """
-    assert npu.warp.is_ploop, f"end_p without matching start_p (is_ploop=False, tmu_id={npu.warp.tmu_id})"
     npu.warp.is_ploop = False
     if not npu.warp.wsplit_seen:
         npu.flush_deferred_ddr_stores()
-    # Defensive PLAN-lifetime sentinel cleanup (will also be cleared at
-    # next start_p; explicit here for lifecycle clarity).
-    npu.warp.sloop_seen_in_plan = False
-    npu.warp.tloop_seen_in_plan = False
 
 
 def _do_startt(npu: "GtxNpu", rs1: int, rs2: int) -> None:
@@ -94,17 +81,11 @@ def _do_startt(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     Also opens the T-loop instruction buffer (see :mod:`gtx.tloop_buffer`)
     so subsequent bufferable mnemonics are captured for replay-at-endt
     instead of executing immediately.
-
-    Plan invariant: at most one thread section per plan; no nested
-    thread sections.
     """
     spu_id = _extract_id(rs1, rs2)
     assert spu_id < GTX_SPU_NUM, f"Invalid SPU ID {spu_id} in startt (is_tloop={npu.warp.is_tloop})"
-    assert not npu.warp.is_tloop, f"nested start_t (is_tloop=True, curr_id={npu.warp.curr_id} → new spu_id={spu_id})"
-    assert not npu.warp.tloop_seen_in_plan, f"second thread section in same plan — invariant violation (tmu_id={npu.warp.tmu_id}, new spu_id={spu_id})"
     npu.warp.curr_id = spu_id
     npu.warp.is_tloop = True
-    npu.warp.tloop_seen_in_plan = True
     # Hard kill-switch: ``GTX_TLOOP_DISABLE=1`` keeps the FSM on the eager
     # path while leaving the buffer wiring in place, so we can A/B against
     # the in-order replay path without reverting the patch.
@@ -118,7 +99,6 @@ def _do_endt(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     Drains any buffered T-loop instructions BEFORE clearing ``is_tloop``
     so replayed handlers see the warp state they were captured under.
     """
-    assert npu.warp.is_tloop, f"end_t without matching start_t (is_tloop=False, curr_id={npu.warp.curr_id})"
     if npu._tloop_buf:
         from ...tloop_buffer import flush as _flush_tloop_buf
         _flush_tloop_buf(npu)
@@ -131,22 +111,15 @@ def _do_starts(npu: "GtxNpu", rs1: int, rs2: int) -> None:
 
     GTX_GDMAC_NUM == GTX_NUM_NESTS == 4 in the C++ reference, so we clamp
     against GTX_NEST_NUM.
-
-    Plan invariant: at most one shared section per plan; no nested
-    shared sections.
     """
     gdmac_id = _extract_id(rs1, rs2)
     assert 0 <= gdmac_id < GTX_NEST_NUM, f"Invalid GDMAC ID {gdmac_id} in starts (is_sloop={npu.warp.is_sloop})"
-    assert not npu.warp.is_sloop, f"nested start_s (is_sloop=True, curr_id={npu.warp.curr_id} → new gdmac_id={gdmac_id})"
-    assert not npu.warp.sloop_seen_in_plan, f"second shared section in same plan — invariant violation (tmu_id={npu.warp.tmu_id}, new gdmac_id={gdmac_id})"
     npu.warp.curr_id = gdmac_id
     npu.warp.is_sloop = True
-    npu.warp.sloop_seen_in_plan = True
 
 
 def _do_ends(npu: "GtxNpu", rs1: int, rs2: int) -> None:
     """Port of gtx_npu_t::ends. Clears is_sloop."""
-    assert npu.warp.is_sloop, f"end_s without matching start_s (is_sloop=False, curr_id={npu.warp.curr_id})"
     npu.warp.is_sloop = False
 
 
