@@ -2,7 +2,7 @@
 phase: quick-260515-mie
 plan: 01
 subsystem: gtx/unit/context (warp_state + control)
-status: stopped-at-gate-1
+status: reverted-abs-pre-existing-broken
 tags:
   - gtx
   - warp-state
@@ -171,3 +171,89 @@ Files verified to exist:
 Commits verified:
 - `45d72f1` — FOUND
 - `ed92898` — FOUND
+
+---
+
+## Continuation (post-Gate 1 resume, 2026-05-15)
+
+### Gate 1 stale test fix
+
+`tests/gtx/test_custom_dispatch_chain.py:152` `test_end_to_end_custom0_and_custom1_return_int` — option 2 (Followups #1) 적용:
+end_p insn dispatch 전에 `gtx_npu.warp.is_ploop = True` 한 줄 추가 (line-166 직접 flag 패턴 차용). dispatch chain의 int 반환만 검증하는 test이므로 plan invariant 부분은 우회.
+
+**Gate 1 재실행: 26/26 PASS** (was 25 passed / 1 failed).
+
+### Gate 2 첫 시도 — invariant strict 가 ABS .elf 트립
+
+`PYTEST_ELF_REGRESSION=1 uv run pytest tests/gtx/test_regression_elf_n1s16.py -k "abs" --timeout=600`:
+
+```
+AssertionError: second thread section in same plan — invariant violation
+  (tmu_id=0, new spu_id=1)
+At: _do_startt → startt handler → dispatch.wrapped → state_execute → run_pipeline → custom1
+```
+
+ABS firmware가 한 plan(`start_p..end_p`) 안에 thread section을 **여러 번**(SPU 수만큼) emit. 사용자 초기 invariant "thread 1번 per plan"이 vendor 실제 firmware보다 over-strict로 판명.
+
+**해석 — 실제 vendor 구조**: 한 plan = 한 NEST의 full cycle. shared section은 plan당 1번(NEST 단위 load), thread section은 SPU별로 NEST 안 16개까지 반복(GTX_SPU_NUM).
+
+메모리에 기록: `project_plan_invariant_discovery.md`.
+
+### Invariant 완화 (option B 적용)
+
+사용자 결정: "sloop 1번 강제 유지, tloop은 GTX_SPU_NUM까지 허용".
+
+**변경 (uncommitted 상태로 Gate 2 검증 중):**
+
+- `warp_state.py`: `tloop_seen_in_plan: bool` → `tloop_count_in_plan: int = 0`. `reset()`도 counter 0으로.
+- `control.py`:
+  - `_do_startp`: `tloop_seen_in_plan = False` → `tloop_count_in_plan = 0`
+  - `_do_startt`: `assert not tloop_seen_in_plan` → `assert tloop_count_in_plan < GTX_SPU_NUM` + `tloop_count_in_plan += 1`
+  - `_do_endp`: defensive cleanup도 `tloop_count_in_plan = 0`
+- `sloop_seen_in_plan`은 그대로 유지 (shared section은 plan당 1번 강제).
+
+### Gate 2 재실행 (1200s timeout)
+
+`PYTEST_ELF_REGRESSION=1 PYTEST_ELF_TIMEOUT=1200 uv run pytest tests/gtx/test_regression_elf_n1s16.py -k "abs" --timeout=1200`:
+
+- 첫 시도(600s timeout): AssertionError 사라짐 (완화 성공), 다만 70 tiles까지 진행 후 timeout (8s/tile × 96 tiles ≈ 13min 필요).
+- 재실행 진행 중.
+
+### Gate 2 재실행 결과 — byte-mismatch
+
+`PYTEST_ELF_REGRESSION=1 PYTEST_ELF_TIMEOUT=1200 ...` 13분 39초 완주, 97 tiles 진행 후 **byte-mismatch**:
+```
+Failed: abs: fp16 mismatch beyond ULP=1 / atol=0.001 vs n1s16_abs_ref.txt
+  line 1 fp16[0]: ref=0x5837 (134.875) dump=0x0000 (0.0) ulp=22583
+```
+
+stderr에 AssertionError **0건** — 새 assert는 발화 안 함. logic 변경도 없음(추가는 모두 assert + sentinel 추가, 기존 path 변경 없음). 그런데 ABS first byte부터 mismatch (`dump=0.0`).
+
+### Bisect로 원인 격리
+
+옵션 A 따라 plan invariant 변경 모두 revert해서 baseline 확인:
+
+```
+725b2aa Revert "refactor(gtx): silent-overwrite → assert on _do_startp/s/t + _do_endp/s/t"
+15a9d19 Revert "refactor(gtx): WarpState plan-lifetime sentinels (sloop/tloop_seen_in_plan)"
+```
+
+**Revert 후 ABS 재실행 결과 — 정확히 같은 byte-mismatch**:
+```
+line 1 fp16[0]: ref=0x5837 (134.875) dump=0x0000 (0.0) ulp=22583
+```
+
+→ **결론: plan invariant 변경은 ABS와 완전히 무관**. ABS는 이 quick task 시작 전부터 broken 상태였음. cleanup arc commits (b464bb4, 765d7fb 등) 또는 그 이전 어디선가 ABS byte-exact가 깨졌고 측정 누락.
+
+### 최종 상태
+
+- Plan invariant 변경 모두 main에서 revert됨 (`725b2aa`, `15a9d19`)
+- production code는 quick task 시작 전 상태(2ec3fab 시점)와 동등
+- Plan invariant 작업은 **abandoned가 아니라 보류** — ABS broken root cause 식별 후 별도 quick task로 재시도 가능 (assert/sentinel 자체는 ABS에 영향 없음을 측정으로 확인)
+
+### Followups (재정리)
+
+1. **ABS regression root cause debug** (최우선) — `/gsd:debug`로 cleanup arc commits bisect. 가장 유력 candidate: `b464bb4` (single-source SPR addresses). `dump=0.0` first byte부터 = store path 자체 broken 의미. SPR 변경이 dispatch/store path에 영향 가능성.
+2. **Plan invariant 재시도** — ABS broken fix 후 별도 quick task. 옵션 B 완화(sloop strict + tloop counter ≤ GTX_SPU_NUM) 그대로 land 가능 — 이미 ABS와 독립임을 측정으로 확인.
+3. **Extend regression** (Followups #3 그대로 보류): GELU/ADD_VV/MUL_VV/SIGMOID.
+4. **Stale-test sibling audit** (Followups #4 그대로 보류): test_deferred_store.py 재작성.
