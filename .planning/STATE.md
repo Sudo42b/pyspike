@@ -37,7 +37,7 @@ Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
 Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
 Total Plans in Phase: 6
 Status: Phase complete — ready for verification
-Last activity: 2026-05-15 — Completed cleanup arc 4-step 전체 종결. Step 4 (silent-clamp → assert) 적용 후 26/26 PASS. Step 3 (RegisterView attribute access)는 (b) bit-field/broadcast write 용도로만 도입 결정 — 이미 npu.py reset의 nspr/lspr broadcast 패턴에서 활용 중이라 추가 작업 없음. 사용자 광범위 정리 완료. 잔여 후속 후보: D-4 stubs (mcast_s2l/g2s/s2s/copy_mem) 진짜 구현, 5개 pre-existing stale test 정리, R3 n1s16 sweep 재시도.
+Last activity: 2026-05-15 — Quick task 260515-je2 (stale test cleanup, Task 1 only): tests/gtx/test_ddr_modes.py 삭제(commit 36f5cc5). 639ddb4에서 riscv.gtx.ddr 모듈이 GtxMemory 메서드로 통합된 뒤 import broken. `uv run pytest tests/gtx --collect-only` 0 errors / 190 tests collected 회복. Task 2 (test_deferred_store.py 수정)는 audit 결과 5개 breakage 발견(numpy/torch fixture + 2개 import + _ddr_bytes attr 제거 + dispatch_4mode.py 통째 삭제 a79e418 + credit_st_chk NOP 의미론 전환) — fixture 수준 fix를 넘어 contract-level 재작성 범위라 별도 follow-up quick task로 deferral. 사용자 정정: credit_st_chk가 functional-model NOP인 본질은 "DMA 즉각이라 spin이 자명히 통과"(start_t↔end_t spin_lock 확인 의미론), deferred-store flush 인용과 conflate 금지 — memory project_gtx_credit_semantics에 기록. 잔여 후속: test_deferred_store.py 재작성, D-4 stubs 진짜 구현, R3 n1s16 sweep 재시도.
 
 ### Phase 8 Plan Outcomes (2026-05-10)
 
@@ -396,6 +396,7 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 | 260515-0c4 | Step 1/4 — base 상수 재정의 제거 (config_params.py → csr/__init__.py) + dma.py GSPR_GTX_OPERAND3 import uncomment | 2026-05-15 | e8a5f25 | [260515-0c4-step-1-4-base-config-params-py-csr-init-](./quick/260515-0c4-step-1-4-base-config-params-py-csr-init-/) |
 | 260515-0ro | Step 2/4 — single-source SPR addresses via csr (no aliases, inline `.address`) + KeyError fix in mm/act (14+sites) + OPERAND4 → OPCODE @ 0x004 vendor 매핑 | 2026-05-15 | b464bb4 | [260515-0ro-step-2-4-keyerror-fix-mm-py-lspr-spm-add](./quick/260515-0ro-step-2-4-keyerror-fix-mm-py-lspr-spm-add/) |
 | 260515-step4 | Step 4/4 — silent-clamp → assert (dma.py _select_nest/_select_spu + vec.py:243-248). #!TODO assert로 처리 marker 해소. Step 3는 이미 (b) 패턴 사용 중 — 추가 작업 없음. | 2026-05-15 | 765d7fb | (inline, no separate dir) |
+| 260515-je2 | Stale test cleanup (Task 1 only): tests/gtx/test_ddr_modes.py 삭제 (riscv.gtx.ddr 639ddb4에서 제거됨). Task 2 (test_deferred_store.py) 별도 follow-up으로 deferral — 5개 breakage 중 4개가 contract-level 재작성 범위. | 2026-05-15 | 36f5cc5 | [260515-je2-stale-test-cleanup-drop-test-ddr-modes-p](./quick/260515-je2-stale-test-cleanup-drop-test-ddr-modes-p/) |
 
 ## Session Continuity
 
