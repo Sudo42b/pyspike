@@ -196,7 +196,7 @@ def _dispatch_sasmd(npu, nest: int, spu: int, funct3: int,
         return 0
 
     a_reg = rs1 & 0x1F
-    r_reg = int(npu.gspr.get("GSPR['GSPR_GTX_OPERAND3'].address", insn.rd)) & 0x1F
+    r_reg = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, insn.rd)) & 0x1F
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     result = sasmd_kernel(view_a, scalar, op=op_map[sub])
     _l0_block_view(npu, nest, spu, r_reg).copy_(result)
@@ -210,7 +210,7 @@ def _dispatch_arith_l0_ii(npu, nest: int, spu: int, sub_op: int,
         return 0
     a_reg = rs1 & 0x1F
     b_reg = rs2 & 0x1F
-    r_reg = int(npu.gspr.get("GSPR['GSPR_GTX_OPERAND3'].address", insn.rd)) & 0x1F
+    r_reg = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, insn.rd)) & 0x1F
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     view_b = _l0_block_view(npu, nest, spu, b_reg)
     result = sasmd_kernel(view_a, view_b, op=op_map[sub_op])
