@@ -16,7 +16,7 @@ Phase 3 plan 02 Task 2b: 5 disasm-only stubs + credit_st_chk stub.
 from ..._registry import handler
 from . import dma_engine
 from ..ins.encoding import (
-    # GTX_ISS_F7_DMA_TPOSE, GTX_ISS_F7_DMA_FILL,  # handler 자체가 주석 (line 205,227)
+    GTX_ISS_F7_TPOSE, GTX_ISS_F7_FILL,
     GTX_ISS_F7_DMA_LD_ST, GTX_ISS_F7_DMA_3D,
     GTX_ISS_F7_DMA_MCAST_S2L, GTX_ISS_F7_DMA_LD_SVR_L1,
     GTX_ISS_F7_DMA_MCAST_GS, GTX_ISS_F7_DMA_ST_SVR_L1,
@@ -52,90 +52,90 @@ def _select_spu(npu) -> int:
 # ============================================================================
 # firmware_dma load/store/copy (funct7=0x40, mask_funct3=True)
 # ============================================================================
-# @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_ST, funct3=0,
-#          mnemonic='load', mask_funct3=True)
-# def _firmware_dma_load(npu, proc, insn, xs1, xs2):
-#     """firmware_dma LOAD (funct7=0x40 funct3=0).
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_ST, funct3=0,
+         mnemonic='load', mask_funct3=True)
+def _firmware_dma_load(npu, proc, insn, xs1, xs2):
+    """firmware_dma LOAD (funct7=0x40 funct3=0).
 
-#     Pitfall 3 (CORE-04): xs1/xs2 args are unreliable when the encoding flag is 0
-#     (Spike marshals -1). Read XPR[insn.rs1] / XPR[insn.rs2] directly.
-#     """
-#     state = proc.state
-#     rs1 = state.XPR[insn.rs1]
-#     rs2 = state.XPR[insn.rs2]
-#     rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)   # 0x003 per gtx_params.h:40
-#     args = dma_engine.decode_firmware_dma_args(
-#         rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
-#     nest = _select_nest(npu)
-#     if npu.warp.is_sloop:
-#         return dma_engine.firmware_dma_sloop_load(
-#             npu.mem, nest=nest,
-#             addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-#             length=args['length'], height=args['height'],
-#             rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-#     if npu.warp.is_tloop:
-#         spu = _select_spu(npu)
-#         return dma_engine.firmware_dma_tloop_load_store(
-#             npu.mem, nest=nest, spu=spu, is_store=False,
-#             addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-#             length=args['length'], height=args['height'],
-#             rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-#     return 0
-
-
-# @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_ST, funct3=1,
-#          mnemonic='store', mask_funct3=True)
-# def _firmware_dma_store(npu, proc, insn, xs1, xs2):
-#     """firmware_dma STORE (funct7=0x40 funct3=1).
-
-#     is_sloop branch passes `npu` (not `npu.mem`) so firmware_dma_sloop_store can
-#     push DeferredDdrStore onto npu.deferred_ddr_stores (Plan 05 flushes).
-#     """
-#     state = proc.state
-#     rs1 = state.XPR[insn.rs1]
-#     rs2 = state.XPR[insn.rs2]
-#     rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
-#     args = dma_engine.decode_firmware_dma_args(
-#         rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
-#     nest = _select_nest(npu)
-#     if npu.warp.is_sloop:
-#         return dma_engine.firmware_dma_sloop_store(
-#             npu, nest=nest,
-#             addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-#             length=args['length'], height=args['height'],
-#             rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-#     if npu.warp.is_tloop:
-#         spu = _select_spu(npu)
-#         return dma_engine.firmware_dma_tloop_load_store(
-#             npu.mem, nest=nest, spu=spu, is_store=True,
-#             addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-#             length=args['length'], height=args['height'],
-#             rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-#     return 0
+    Pitfall 3 (CORE-04): xs1/xs2 args are unreliable when the encoding flag is 0
+    (Spike marshals -1). Read XPR[insn.rs1] / XPR[insn.rs2] directly.
+    """
+    state = proc.state
+    rs1 = state.XPR[insn.rs1]
+    rs2 = state.XPR[insn.rs2]
+    rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)   # 0x003 per gtx_params.h:40
+    args = dma_engine.decode_firmware_dma_args(
+        rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
+    nest = _select_nest(npu)
+    if npu.warp.is_sloop:
+        return dma_engine.firmware_dma_sloop_load(
+            npu.mem, nest=nest,
+            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    if npu.warp.is_tloop:
+        spu = _select_spu(npu)
+        return dma_engine.firmware_dma_tloop_load_store(
+            npu.mem, nest=nest, spu=spu, is_store=False,
+            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    return 0
 
 
-# @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_ST, funct3=2,
-#          mnemonic='copy', mask_funct3=True)
-# def _firmware_dma_copy(npu, proc, insn, xs1, xs2):
-#     """firmware_dma COPY (funct7=0x40 funct3=2). T-loop L1->L1 only.
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_ST, funct3=1,
+         mnemonic='store', mask_funct3=True)
+def _firmware_dma_store(npu, proc, insn, xs1, xs2):
+    """firmware_dma STORE (funct7=0x40 funct3=1).
 
-#     Pitfall 1: COPY decodes addr_hi from rs1>>32 (32-bit dst), NOT (rs1>>27)&0x1F..
-#     addr_hi is the dst, addr_lo is the src.
-#     """
-#     state = proc.state
-#     rs1 = state.XPR[insn.rs1]
-#     rs2 = state.XPR[insn.rs2]
-#     rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
-#     args = dma_engine.decode_firmware_dma_args(
-#         rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
-#     nest = _select_nest(npu)
-#     if npu.warp.is_tloop:
-#         spu = _select_spu(npu)
-#         return dma_engine.firmware_dma_tloop_copy(
-#             npu.mem, nest=nest, spu=spu,
-#             src_addr=args['addr_lo'], dst_addr=args['addr_hi'],
-#             length=args['length'], height=args['height'])
-#     return 0
+    is_sloop branch passes `npu` (not `npu.mem`) so firmware_dma_sloop_store can
+    push DeferredDdrStore onto npu.deferred_ddr_stores (Plan 05 flushes).
+    """
+    state = proc.state
+    rs1 = state.XPR[insn.rs1]
+    rs2 = state.XPR[insn.rs2]
+    rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
+    args = dma_engine.decode_firmware_dma_args(
+        rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
+    nest = _select_nest(npu)
+    if npu.warp.is_sloop:
+        return dma_engine.firmware_dma_sloop_store(
+            npu, nest=nest,
+            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    if npu.warp.is_tloop:
+        spu = _select_spu(npu)
+        return dma_engine.firmware_dma_tloop_load_store(
+            npu.mem, nest=nest, spu=spu, is_store=True,
+            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    return 0
+
+
+@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_ST, funct3=2,
+         mnemonic='copy', mask_funct3=True)
+def _firmware_dma_copy(npu, proc, insn, xs1, xs2):
+    """firmware_dma COPY (funct7=0x40 funct3=2). T-loop L1->L1 only.
+
+    Pitfall 1: COPY decodes addr_hi from rs1>>32 (32-bit dst), NOT (rs1>>27)&0x1F..
+    addr_hi is the dst, addr_lo is the src.
+    """
+    state = proc.state
+    rs1 = state.XPR[insn.rs1]
+    rs2 = state.XPR[insn.rs2]
+    rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
+    args = dma_engine.decode_firmware_dma_args(
+        rs1, rs2, rs3, xd=insn.xd, xs1=insn.xs1, xs2=insn.xs2)
+    nest = _select_nest(npu)
+    if npu.warp.is_tloop:
+        spu = _select_spu(npu)
+        return dma_engine.firmware_dma_tloop_copy(
+            npu.mem, nest=nest, spu=spu,
+            src_addr=args['addr_lo'], dst_addr=args['addr_hi'],
+            length=args['length'], height=args['height'])
+    return 0
 
 
 # ============================================================================
@@ -201,45 +201,45 @@ def _store_svr_l1(npu, proc, insn, xs1, xs2):
 # ============================================================================
 # tpose / fill (funct7=0x38 / 0x39, mask_funct3=False)
 # ============================================================================
-# @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_TPOSE, mnemonic='tpose')
-# def _tpose(npu, proc, insn, xs1, xs2):
-#     """tpose (funct7=0x38): matrix transpose in L1 (FP16, 2 bytes per elem).
+@handler(kind='custom0', funct7=GTX_ISS_F7_TPOSE, mnemonic='tpose')
+def _tpose(npu, proc, insn, xs1, xs2):
+    """tpose (funct7=0x38): matrix transpose in L1 (FP16, 2 bytes per elem).
 
-#     Source matrix base: LSPR['SPM_ADDRA'].address (0x900) -- gtx_params.h:64
-#     Result matrix base: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67
-#     AUTHORITATIVE values; no magic numbers in handler body.
-#     """
-#     state = proc.state
-#     rs1 = state.XPR[insn.rs1]
-#     rs2 = state.XPR[insn.rs2]
-#     rows = rs1 & 0xFFFF
-#     cols = rs2 & 0xFFFF
-#     nest = _select_nest(npu)
-#     spu = _select_spu(npu)
-#     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0) & 0xFFFFFFFF
-#     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
-#     return dma_engine.exec_transpose(
-#         npu.mem, nest_id=nest, spu_id=spu, rows=rows, cols=cols,
-#         addr_a=addr_a, addr_r=addr_r)
+    Source matrix base: LSPR['SPM_ADDRA'].address (0x900) -- gtx_params.h:64
+    Result matrix base: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67
+    AUTHORITATIVE values; no magic numbers in handler body.
+    """
+    state = proc.state
+    rs1 = state.XPR[insn.rs1]
+    rs2 = state.XPR[insn.rs2]
+    rows = rs1 & 0xFFFF
+    cols = rs2 & 0xFFFF
+    nest = _select_nest(npu)
+    spu = _select_spu(npu)
+    addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0) & 0xFFFFFFFF
+    addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
+    return dma_engine.exec_transpose(
+        npu.mem, nest_id=nest, spu_id=spu, rows=rows, cols=cols,
+        addr_a=addr_a, addr_r=addr_r)
 
 
-# @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_FILL, mnemonic='fill')
-# def _fill(npu, proc, insn, xs1, xs2):
-#     """fill (funct7=0x39): fill L1 region at addr_r with constant FP16 value.
+@handler(kind='custom0', funct7=GTX_ISS_F7_FILL, mnemonic='fill')
+def _fill(npu, proc, insn, xs1, xs2):
+    """fill (funct7=0x39): fill L1 region at addr_r with constant FP16 value.
 
-#     Result address: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67. AUTHORITATIVE
-#     constant; no magic number in handler body (LSPR_SPM_ADDRB is NOT used here).
-#     """
-#     state = proc.state
-#     rs1 = state.XPR[insn.rs1]
-#     length = rs1 & 0xFFFF
-#     fill_val = (rs1 >> 16) & 0xFFFF
-#     nest = _select_nest(npu)
-#     spu = _select_spu(npu)
-#     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
-#     return dma_engine.exec_fill(
-#         npu.mem, nest_id=nest, spu_id=spu,
-#         length=length, fill_val=fill_val, addr_r=addr_r)
+    Result address: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67. AUTHORITATIVE
+    constant; no magic number in handler body (LSPR_SPM_ADDRB is NOT used here).
+    """
+    state = proc.state
+    rs1 = state.XPR[insn.rs1]
+    length = rs1 & 0xFFFF
+    fill_val = (rs1 >> 16) & 0xFFFF
+    nest = _select_nest(npu)
+    spu = _select_spu(npu)
+    addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
+    return dma_engine.exec_fill(
+        npu.mem, nest_id=nest, spu_id=spu,
+        length=length, fill_val=fill_val, addr_r=addr_r)
 
 
 # ============================================================================
