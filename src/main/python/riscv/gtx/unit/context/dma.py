@@ -18,8 +18,8 @@ from . import dma_engine
 from ..ins.encoding import (
     GTX_ISS_F7_TPOSE, GTX_ISS_F7_FILL,
     GTX_ISS_F7_DMA_LD_ST, GTX_ISS_F7_DMA_3D,
-    GTX_ISS_F7_DMA_MCAST_S2L, GTX_ISS_F7_DMA_LD_SVR_L1,
-    GTX_ISS_F7_DMA_MCAST_GS, GTX_ISS_F7_DMA_ST_SVR_L1,
+    GTX_ISS_F7_DMA_LD_SVR_L1, GTX_ISS_F7_DMA_ST_SVR_L1,
+    GTX_ISS_F7_MCAST_S2L, GTX_ISS_F7_MCAST_G2S,
     GTX_ISS_F7_CREDIT_LD, GTX_ISS_F7_CREDIT_ST,
     GTX_ISS_F7_CREDIT_LD_CHK, GTX_ISS_F7_CREDIT_ST_CHK,
 )
@@ -142,9 +142,9 @@ def _firmware_dma_copy(npu, proc, insn, xs1, xs2):
 # load_svr/store_svr (funct7=0x41, mask_funct3=True)
 # ============================================================================
 @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_3D, funct3=0,
-         mnemonic='load_svr', mask_funct3=True)
+         mnemonic='load.svr', mask_funct3=True)
 def _load_svr(npu, proc, insn, xs1, xs2):
-    """load_svr (funct7=0x41 funct3=0): L1 -> L0 SVR transfer (32 bytes)."""
+    """load.svr (funct7=0x41 funct3=0): L1 -> L0 SVR transfer (32 bytes)."""
     state = proc.state
     l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
     l0_reg = state.XPR[insn.rs2] & 0x1F
@@ -156,38 +156,9 @@ def _load_svr(npu, proc, insn, xs1, xs2):
 
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_DMA_3D, funct3=1,
-         mnemonic='store_svr', mask_funct3=True)
+         mnemonic='store.svr', mask_funct3=True)
 def _store_svr(npu, proc, insn, xs1, xs2):
-    """store_svr (funct7=0x41 funct3=1): L0 -> L1 SVR transfer (32 bytes)."""
-    state = proc.state
-    l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
-    l0_reg = state.XPR[insn.rs2] & 0x1F
-    nest = _select_nest(npu)
-    spu = _select_spu(npu)
-    dma_engine.exec_store_svr(npu.mem, nest_id=nest, spu_id=spu,
-                               l1_addr=l1_addr, l0_reg=l0_reg)
-    return 0
-
-
-# ============================================================================
-# load_svr_l1 / store_svr_l1 (funct7=0x43 / 0x45, mask_funct3=False) -- aliases
-# ============================================================================
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_LD_SVR_L1, mnemonic='load_svr_l1')
-def _load_svr_l1(npu, proc, insn, xs1, xs2):
-    """load_svr_l1 (funct7=0x43): L1-bound load_svr alias."""
-    state = proc.state
-    l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
-    l0_reg = state.XPR[insn.rs2] & 0x1F
-    nest = _select_nest(npu)
-    spu = _select_spu(npu)
-    dma_engine.exec_load_svr(npu.mem, nest_id=nest, spu_id=spu,
-                              l1_addr=l1_addr, l0_reg=l0_reg)
-    return 0
-
-
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_ST_SVR_L1, mnemonic='store_svr_l1')
-def _store_svr_l1(npu, proc, insn, xs1, xs2):
-    """store_svr_l1 (funct7=0x45): L1-bound store_svr alias."""
+    """store.svr (funct7=0x41 funct3=1): L0 -> L1 SVR transfer (32 bytes)."""
     state = proc.state
     l1_addr = state.XPR[insn.rs1] & 0x7FFFFFF
     l0_reg = state.XPR[insn.rs2] & 0x1F
@@ -249,45 +220,55 @@ def _fill(npu, proc, insn, xs1, xs2):
 #   load_3d, store_3d, mcast_s2l, mcast_g2s, mcast_s2s, copy_mem
 # are registered for disasm parity with C++ but body is NOP in P3.
 # ============================================================================
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_3D, funct3=4,
-         mnemonic='load_3d', mask_funct3=True)
-def _load_3d_stub(npu, proc, insn, xs1, xs2):
-    """v2 deferral (DMA-V2-01)."""
-    return 0
-
-
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_3D, funct3=5,
-         mnemonic='store_3d', mask_funct3=True)
-def _store_3d_stub(npu, proc, insn, xs1, xs2):
-    """v2 deferral."""
-    return 0
-
-
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_S2L,
-         mnemonic='mcast_s2l')
+@handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_S2L, funct3=0,
+         mnemonic='mcast.s2l')
 def _mcast_s2l_stub(npu, proc, insn, xs1, xs2):
-    """v2 deferral."""
+    """#!TODO: 구현
+    broadcast L2SPM data to selected L1SPM 
+    operand1: dst_addr[23:0], src_addr[58:32]
+    operand2: read_stride[31:0], length[47:32], height[63:48]
+    operand3: target_spu[63:0]
+    
+    """
     return 0
 
 
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_GS, funct3=0,
-         mnemonic='mcast_g2s', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_G2S, funct3=0,
+         mnemonic='mcast.g2s', mask_funct3=True)
 def _mcast_g2s_stub(npu, proc, insn, xs1, xs2):
-    """v2 deferral."""
+    """#!TODO: 구현
+    broadcast DDR data to selected L2SPM(zero fill if src address is all 1)
+    operand1: dst_addr[26:0], src_addr[63:27]
+    operand2: read_stride[31:0], length[47:32], height[63:48]
+    operand3: target_nest[63:0]
+    """
     return 0
 
 
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_GS, funct3=2,
-         mnemonic='mcast_s2s', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_G2S, 
+         funct3=2,
+         mnemonic='mcast.s2s', mask_funct3=True)
 def _mcast_s2s_stub(npu, proc, insn, xs1, xs2):
-    """v2 deferral."""
+    """#!TODO: 구현
+    broadcast L2SPM data to selected L2SPM
+        - self broadcast is not supported(use copy instead), if target_nest_sel == 0, target_nest[31:0] else target_nest[63:32]
+    operand1: src_addr[26:0], dst_addr[54:27],src_nest_id[61:56], target_nest_sel[63]
+    operand2: read_stride[31:0], length[47:32], height[63:48]
+    operand3: write_stride[31:0], target_nest[63:32]
+    """
     return 0
 
 
-@handler(kind='custom0', funct7=GTX_ISS_F7_DMA_MCAST_GS, funct3=3,
-         mnemonic='copy_mem', mask_funct3=True)
+@handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_G2S, funct3=3,
+         mnemonic='copy.mem', mask_funct3=True)
 def _copy_mem_stub(npu, proc, insn, xs1, xs2):
-    """v2 deferral."""
+    """#!TODO: 구현
+    DMA from DDR to DDR (gspr: read_stride_H, write_stride_H, ddr_addr_H)
+    operand1: src_addr_DDR[36:0], write_stride_L[63:48]
+    operand2: read_stride[31:0], length[47:32], height[63:48]
+    operand3: dst_addr_DDR[36:0], write_stride_H[63:48]
+    """
+    
     return 0
 
 
@@ -322,11 +303,15 @@ def _credit_ld(npu, proc, insn, xs1, xs2):
     pyspike's sequential model makes the *_chk variants pass unconditionally,
     so the counter state is currently unobserved by control flow. Tracked
     anyway for vendor 1:1 parity and to surface future check-path coupling.
+    #!TODO: operand 맞는지 확인.
+    operand1: *target_spu[63:0]
+    operand2: *target_nest[63:0]
     """
     warp = npu.warp
     nest_id = warp.tmu_id if warp.is_ploop else 0
     if nest_id < GTX_NEST_NUM:
         if warp.is_sloop:
+            #!TODO: vector연산으로 바꿀 것.
             for s in range(GTX_SPU_NUM):
                 npu._credit_ld[nest_id, s] += 1
         elif warp.is_tloop and warp.curr_id < GTX_SPU_NUM:
@@ -341,6 +326,7 @@ def _credit_st(npu, proc, insn, xs1, xs2):
     Loop-context-dependent per-NEST/per-SPU credit_st counter update:
       T-loop (is_tloop): SPU done computing → increment credit_st[curr_id]
       S-loop (is_sloop): DMA store consumes credit → decrement credit_st[s] for all SPUs
+    operand1: *target_spu[63:0]
     """
     warp = npu.warp
     nest_id = warp.tmu_id if warp.is_ploop else 0
@@ -348,6 +334,7 @@ def _credit_st(npu, proc, insn, xs1, xs2):
         if warp.is_tloop and warp.curr_id < GTX_SPU_NUM:
             npu._credit_st[nest_id, warp.curr_id] += 1
         elif warp.is_sloop:
+            #!TODO: vector연산으로 바꿀 것. npu._credit_st[nest_id, :] -= 1
             for s in range(GTX_SPU_NUM):
                 npu._credit_st[nest_id, s] -= 1
     return 0
@@ -357,7 +344,7 @@ def _credit_st(npu, proc, insn, xs1, xs2):
          mnemonic='credit.ld.chk')
 def _credit_ld_chk(npu, proc, insn, xs1, xs2):
     """Credit-gated TMU dequeue (260517-s9k) — runs in C3 (is_tloop) context.
-
+    #!operand1: *target_spu[63:0]
     Vendor parity
     -------------
     Mirrors ``gtx_npu_dispatch.cc:41-61`` (use_spu_queue / scredit_flag
@@ -473,6 +460,8 @@ def _credit_st_chk(npu, proc, insn, xs1, xs2):
         total = int(row.sum().item())
         if total > 0:
             # Decrement one credit (first non-zero SPU slot only).
+            #!TODO 만약 0보다 작은데 감소시키면 오류 발생. 해야함.
+            #!TODO vector연산으로 바꿀 것. if total > 0: row[row > 0] -= 1; break
             for s in range(GTX_SPU_NUM):
                 if int(row[s]) > 0:
                     row[s] = int(row[s]) - 1
