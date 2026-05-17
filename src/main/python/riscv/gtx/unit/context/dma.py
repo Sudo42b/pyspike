@@ -356,33 +356,134 @@ def _credit_st(npu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_LD_CHK,
          mnemonic='credit.ld.chk')
 def _credit_ld_chk(npu, proc, insn, xs1, xs2):
-    """Direct port of gtx_npu_dispatch.cc credit.ld.chk branch.
+    """Credit-gated TMU dequeue (260517-s9k) — runs in C3 (is_tloop) context.
 
-    Functional-model NOP — checks always pass (DMA is instantaneous in this
-    model). The previous P8 MTDMA-01 fix flushed deferred stores here, but
-    that breaks firmwares like ADD whose shared block sandwiches
-    ``__credit_chk`` BETWEEN successive ``__store`` calls in the same loop:
-    flushing on the *next* iteration's chk drains the previous iteration's
-    deferred entry while the corresponding ``L2_RES`` bank is still empty
-    (thread hasn't written it yet → DDR gets zeros).
+    Vendor parity
+    -------------
+    Mirrors ``gtx_npu_dispatch.cc:41-61`` (use_spu_queue / scredit_flag
+    push/pop infrastructure). Vendor C++ pushes opcodes onto per-SPU
+    queues when ``scredit_flag[spu]`` is set, and pops them when credit
+    becomes available. pyspike's functional model has no actual stall
+    (DMA instantaneous), so this handler is effectively
+    "consume one credit, dispatch one batch from the T-loop buffer."
 
-    Vendor C++ Spike commented out the same flush call (see
-    ``gtx_npu_dispatch.cc`` "GTX ggml bring-up: do not commit deferred
-    L2->DDR stores from credit_chk; endp/launch boundary must own
-    visibility."). All deferred stores instead drain at ``end_p`` (when
-    not ``wsplit_seen``) or at ``__join`` — both of which run after the
-    thread loop has finished writing ``L2_RES``.
+    Spec rule 7 (260517-s9k task spec)
+    ---------------------------------
+    S-loop drains FIRST whenever both buffers have entries at a chk
+    point. DDR<->L2 is the sole data path, so an SMU batch that's still
+    queued can't be replayed AFTER a TMU compute batch that consumed its
+    output — drain the producer (SMU) before the consumer (TMU) here.
+
+    Double-decrement resolution: chose option (a) — CLAMP-at-0
+    ---------------------------------------------------------
+    The producer-side ``_credit_ld`` already decrements
+    ``npu._credit_ld[nest, curr_id]`` in the T-loop branch
+    (see :func:`_credit_ld` lines 325-334). If THIS handler ALSO
+    decremented unconditionally, the counter would go negative on real
+    firmware (e.g. ABS emits credit.ld once per SPU per tile inside the
+    TMU thread, then credit.ld.chk consumes it).
+
+    Chose (a) over (b) because:
+      - Safer: clamp-at-0 is a no-op when the producer-side already
+        decremented, so the existing eager-mode behavior is preserved
+        bit-for-bit (verified: ABS .elf 96-tile strict byte-exact PASS).
+      - Reversible: if a future cycle-accurate path needs (b) — remove
+        the T-loop branch decrement at dma.py:325-334 and make this
+        handler the sole consumer — the change is local to two functions.
+      - (b) is "cleaner semantically" but riskier; it may surface
+        regressions in non-multi-tile firmware that relied on the prior
+        producer-side decrement pattern. Defer to a separate plan if
+        actually needed.
+
+    Non-regression invariant (CRITICAL)
+    -----------------------------------
+    This handler MUST NOT call :meth:`flush_deferred_ddr_stores`.
+    Deferred-store visibility stays owned EXCLUSIVELY by:
+      - ``control.py:_do_endp`` when ``!wsplit_seen``
+      - ``control.py:wjoin_with_exit`` (custom1 funct3=0b101)
+      - ``control.py:wjoin_custom0_no_exit`` (custom0 funct7=0x03)
+    The earlier Plan 04 attempt to flush here broke ADD-style firmware
+    whose shared block sandwiches ``__credit_chk`` BETWEEN successive
+    ``__store`` calls (see the pre-260517-s9k NOP rationale preserved
+    in git history). The buffer dequeue below is a different mechanism:
+    it replays SMU-snapshotted DMA ops in firmware-emitted order; it
+    does NOT commit the deferred-DDR queue.
     """
+    warp = npu.warp
+    nest_id = warp.tmu_id if warp.is_ploop else 0
+    spu_id = warp.curr_id if warp.is_tloop else 0
+
+    # Spec rule 7: S-loop drains first if both have content.
+    if npu._sloop_buf:
+        from ...sloop_buffer import flush as _sloop_flush
+        _sloop_flush(npu)
+
+    # Credit-gated TMU dequeue. Counter may already be zero on the very
+    # first tile when no producer has fired yet — clamp to 0 (option a).
+    if nest_id < GTX_NEST_NUM and spu_id < GTX_SPU_NUM:
+        cred = int(npu._credit_ld[nest_id, spu_id])
+        if cred > 0:
+            npu._credit_ld[nest_id, spu_id] = cred - 1
+
+    # Drain T-loop buffer (existing fusion path preserved). The chk
+    # boundary is the natural batch-end for the inner (load, vec, store)
+    # cadence; ``tloop_buffer.flush`` re-arms ``_tloop_buf`` to ``[]``
+    # afterward so subsequent bufferable ops keep accumulating until the
+    # next chk or ``end_t``.
+    if npu._tloop_buf:
+        from ...tloop_buffer import flush as _tloop_flush
+        _tloop_flush(npu)
+
     return 0
 
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_CREDIT_ST_CHK,
          mnemonic='credit.st.chk')
 def _credit_st_chk(npu, proc, insn, xs1, xs2):
-    """Direct port of gtx_npu_dispatch.cc credit.st.chk branch.
+    """Credit-gated SMU dequeue (260517-s9k) — runs in C2 (is_sloop) context.
 
-    Functional-model NOP — same rationale as :func:`_credit_ld_chk`:
-    deferred-store visibility is owned by ``end_p`` / ``__join``, not by
-    in-loop credit checks.
+    Mirror of :func:`_credit_ld_chk` for the SMU side: TMU publishes a
+    store credit (via ``credit.st`` in T-loop branch, dma.py:347-349),
+    SMU consumes it here and dequeues the next L2->DDR batch from
+    ``_sloop_buf``.
+
+    SMU is per-NEST (no curr_id meaning), but ``credit_st`` is tracked
+    per-(NEST, SPU) by the producer (T-loop increment). Decrement the
+    first non-zero SPU slot — one credit per chk invocation, mirroring
+    the producer pattern at dma.py:351-352.
+
+    Double-decrement resolution: chose option (a) — CLAMP-at-0
+    ---------------------------------------------------------
+    Same rationale as :func:`_credit_ld_chk` — the producer-side
+    ``_credit_st`` S-loop branch already decrements
+    ``npu._credit_st[nest, :]``. Clamp-at-0 here keeps the existing
+    eager-mode behavior bit-for-bit if the producer already drained.
+
+    Non-regression invariant
+    ------------------------
+    Does NOT call :meth:`flush_deferred_ddr_stores` — see
+    :func:`_credit_ld_chk` docstring. The buffer dequeue below replays
+    SMU-snapshotted DMA ops; it does NOT commit the deferred-DDR queue.
     """
+    warp = npu.warp
+    nest_id = warp.tmu_id if warp.is_ploop else 0
+
+    if nest_id < GTX_NEST_NUM:
+        row = npu._credit_st[nest_id]
+        total = int(row.sum().item())
+        if total > 0:
+            # Decrement one credit (first non-zero SPU slot only).
+            for s in range(GTX_SPU_NUM):
+                if int(row[s]) > 0:
+                    row[s] = int(row[s]) - 1
+                    break
+
+    # Drain S-loop buffer (sequential replay, no fusion). Spec rule 7
+    # ("S-loop drains first") is trivially satisfied here because
+    # ``_tloop_buf`` is None in C2 context (TMU is not active inside an
+    # SMU section — see warp_state.WarpState mutual exclusion).
+    if npu._sloop_buf:
+        from ...sloop_buffer import flush as _sloop_flush
+        _sloop_flush(npu)
+
     return 0

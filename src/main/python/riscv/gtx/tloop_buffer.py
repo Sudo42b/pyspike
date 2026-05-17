@@ -79,9 +79,13 @@ BUFFERABLE_MNEMONICS = frozenset({
 #   - ``wrspr``           writes LSPR for the current (NEST, SPU); fires
 #     a handful of times at thread-start (``__set_spm_addr``) and never
 #     inside the inner loop, so the buffer is empty when these run.
-#   - ``credit_*_chk``    flush triggers for deferred S-loop DDR stores;
-#     in T-loop the is_sloop guard makes them no-ops, so they can run
-#     eagerly without affecting our T-loop buffer.
+#   - ``credit_*_chk``    credit-gated dequeue point (260517-s9k): runs
+#     eagerly in the FSM; the handler internally drains the T-loop
+#     buffer at the chk boundary (TMU side, ``unit.context.dma.
+#     _credit_ld_chk``) or the S-loop buffer (SMU side, see
+#     :mod:`gtx.sloop_buffer` + ``_credit_st_chk``). Kept in the
+#     TRANSPARENT set so the FSM does not force an additional hard
+#     flush before the handler runs — the handler owns the drain.
 # ----------------------------------------------------------------------
 TRANSPARENT_MNEMONICS = frozenset({
     'opset',
