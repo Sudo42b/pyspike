@@ -16,6 +16,12 @@ from .fsm import NpuState
 from .tloop_buffer import (
     BUFFERABLE_MNEMONICS, TRANSPARENT_MNEMONICS, try_buffer, flush,
 )
+from .sloop_buffer import (
+    SLOOP_BUFFERABLE_MNEMONICS,
+    SLOOP_TRANSPARENT_MNEMONICS,
+    try_buffer as sloop_try_buffer,
+    flush as sloop_flush,
+)
 
 
 def state_execute(npu) -> NpuState:
@@ -40,6 +46,19 @@ def state_execute(npu) -> NpuState:
         # flush boundary: drain in firmware-emitted order before running.
         if buf and mnemonic not in TRANSPARENT_MNEMONICS:
             flush(npu)
+
+    # S-loop buffering hook (260517-s9k). Mirror of the T-loop branch above;
+    # ``warp.is_sloop`` and ``warp.is_tloop`` are mutually exclusive per the
+    # FSM. ``credit_*_chk`` is in SLOOP_TRANSPARENT_MNEMONICS so the chk
+    # handler runs eagerly and owns the dequeue itself (see dma.py).
+    sbuf = npu._sloop_buf
+    if sbuf is not None and npu.warp.is_sloop:
+        mnemonic = npu._ctx.get("mnemonic")
+        if mnemonic in SLOOP_BUFFERABLE_MNEMONICS:
+            sloop_try_buffer(npu)
+            return NpuState.WRITEBACK
+        if sbuf and mnemonic not in SLOOP_TRANSPARENT_MNEMONICS:
+            sloop_flush(npu)
 
     npu._ctx["rd"] = handler(
         npu._ctx["proc"],

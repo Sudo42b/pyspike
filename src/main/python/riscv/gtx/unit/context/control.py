@@ -111,15 +111,34 @@ def _do_starts(npu: "GtxNpu", rs1: int, rs2: int) -> None:
 
     GTX_GDMAC_NUM == GTX_NUM_NESTS == 4 in the C++ reference, so we clamp
     against GTX_NEST_NUM.
+
+    Also opens the S-loop instruction buffer (see :mod:`gtx.sloop_buffer`)
+    so subsequent bufferable SMU mnemonics are captured for credit-gated
+    dequeue at ``credit_st_chk`` (or full drain at ``_do_ends``) instead
+    of executing immediately. Mirror of ``_do_startt`` for the SMU side.
     """
     gdmac_id = _extract_id(rs1, rs2)
     assert 0 <= gdmac_id < GTX_NEST_NUM, f"Invalid GDMAC ID {gdmac_id} in starts (is_sloop={npu.warp.is_sloop})"
     npu.warp.curr_id = gdmac_id
     npu.warp.is_sloop = True
+    # Hard kill-switch: ``GTX_SLOOP_DISABLE=1`` keeps the FSM on the eager
+    # path while leaving the buffer wiring in place, parity with the
+    # ``GTX_TLOOP_DISABLE`` escape hatch used by tloop_buffer A/B tests.
+    if not os.environ.get("GTX_SLOOP_DISABLE"):
+        npu._sloop_buf = []
 
 
 def _do_ends(npu: "GtxNpu", rs1: int, rs2: int) -> None:
-    """Port of gtx_npu_t::ends. Clears is_sloop."""
+    """Port of gtx_npu_t::ends. Clears is_sloop.
+
+    Drains any buffered S-loop instructions BEFORE clearing ``is_sloop``
+    so replayed handlers see the warp state they were captured under
+    (mirror of ``_do_endt`` for the SMU side).
+    """
+    if npu._sloop_buf:
+        from ...sloop_buffer import flush as _flush_sloop_buf
+        _flush_sloop_buf(npu)
+    npu._sloop_buf = None
     npu.warp.is_sloop = False
 
 

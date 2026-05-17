@@ -24,6 +24,12 @@ from .tloop_buffer import (
     TLoopEntry as _TLoopEntry,
     flush as _tloop_flush,
 )
+from .sloop_buffer import (
+    SLOOP_BUFFERABLE_MNEMONICS as _SLOOP_BUFFERABLE,
+    SLOOP_TRANSPARENT_MNEMONICS as _SLOOP_TRANSPARENT,
+    SLoopEntry as _SLoopEntry,
+    flush as _sloop_flush,
+)
 from .unit.ins.encoding import GTX_ISS_F7_OPSET
 from .fsm import NpuState, run_pipeline
 from .unit.context import INITIAL_CONTEXT, NpuContext
@@ -115,6 +121,9 @@ class GtxNpu(isa.ROCC):
         self._ctx: dict = {}
         # T-loop instruction buffer.
         self._tloop_buf: list | None = None
+        # S-loop instruction buffer (260517-s9k). Opened by ``_do_starts``,
+        # drained by ``_do_ends`` / ``_credit_st_chk``. See :mod:`sloop_buffer`.
+        self._sloop_buf: list | None = None
         # NPU execution context.
         self._context: NpuContext = INITIAL_CONTEXT
 
@@ -210,7 +219,8 @@ class GtxNpu(isa.ROCC):
         self._state = NpuState.IDLE
         self._ctx = {}
         self._tloop_buf = None
-        
+        self._sloop_buf = None
+
         # Context reset
         self._context = INITIAL_CONTEXT
         self.refresh_dispatch_cache(INITIAL_CONTEXT)
@@ -270,6 +280,61 @@ class GtxNpu(isa.ROCC):
                 
                 if buf and mnemonic not in _TLOOP_TRANSPARENT:
                     _tloop_flush(self)
+
+        # S-loop buffering hot path (260517-s9k). Parallel to the T-loop
+        # branch above; ``warp.is_sloop`` and ``warp.is_tloop`` are mutually
+        # exclusive per the FSM (``_do_starts`` sets is_sloop only,
+        # ``_do_startt`` sets is_tloop only — they share ``curr_id`` slot
+        # so only one can be active per dispatch). See :mod:`sloop_buffer`.
+        sbuf = self._sloop_buf
+        if sbuf is not None and self.warp.is_sloop:
+            funct7 = insn.funct
+
+            # OPSET is transparent in C2 context — same staging semantics
+            # as C3 (preserves OPERAND3/5 write ordering). Fast-path it
+            # so we never pay the dispatch table lookup for the hottest
+            # transparent op.
+            gspr_tensor = self.gspr.tensor
+            state = proc.state
+            xpr = state.XPR
+            if funct7 == GTX_ISS_F7_OPSET:
+                if (int(xpr[insn.rs1]) & 1) == 0:
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND3'].address] = int(xpr[insn.rs2])
+                else:
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND5'].address] = int(xpr[insn.rs2])
+                return 0
+
+            xd = insn.xd
+            xs1_bit = insn.xs1
+            xs2_bit = insn.xs2
+            funct3 = (xd << 2) | (xs1_bit << 1) | xs2_bit
+
+            inner = self._custom0_resolved.get(funct7)
+            if inner is not None:
+                handler = inner.get(None)
+                if handler is None:
+                    handler = inner.get(funct3)
+            else:
+                handler = None
+
+            if handler is not None:
+                mnemonic = handler.gtx_mnemonic
+                if mnemonic in _SLOOP_BUFFERABLE:
+                    sbuf.append(_SLoopEntry(
+                        handler, mnemonic,
+                        int(xpr[insn.rs1]),
+                        int(xpr[insn.rs2]),
+                        int(gspr_tensor[GSPR['GSPR_GTX_OPERAND3'].address]),
+                        int(gspr_tensor[GSPR['GSPR_GTX_OPERAND5'].address]),
+                        funct7, xd, xs1_bit, xs2_bit, insn.rd,
+                    ))
+                    # Mirror WRITEBACK's OPSET-aware clear.
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND3'].address] = 0
+                    gspr_tensor[GSPR['GSPR_GTX_OPERAND5'].address] = 0
+                    return 0
+
+                if sbuf and mnemonic not in _SLOOP_TRANSPARENT:
+                    _sloop_flush(self)
 
         return run_pipeline(self, "custom0", proc, insn, xs1, xs2)
 
