@@ -10,24 +10,23 @@ from enum import Enum
 CUSTOM0 = 0x0b # custom-0 0b001011
 CUSTOM1 = 0x2b # custom-1 0b101011
 
-# ----- funct7 (custom0) -------
-GTX_F7_WRSPR: int = 0x00        # 0b1001001
-GTX_F7_RDSPR: int = 0x01        # 0b1001010
-GTX_F7_WSPLIT: int = 0x02
-GTX_F7_WJOIN: int = 0x03        # 0b1001011
+# ----- funct7 (custom0) -- vendor gtx_npu.h:266-277 -----
+# Firmware path (collides with MM/MMC funct7=0x00/0x01 — protected by the
+# rs1==0 guard in ops/mm.py "Pitfall F"):
+GTX_F7_WRSPR: int = 0x00        # firmware WRSPR (gtx_npu.h:266)
+GTX_F7_RDSPR: int = 0x01        # firmware RDSPR (gtx_npu.h:267)
+# ISS-full path (distinct funct7 — no collision):
+GTX_ISS_F7_RDSPR_ISS: int = 0x48        # 0b1001000 (gtx_npu.h:276)
+GTX_ISS_F7_WRSPR_ISS: int = 0x49        # 0b1001001 (gtx_npu.h:277)
+GTX_ISS_F7_OPSET: int = 0x4A            # 0b1001010
+GTX_ISS_F7_CPSVR: int = 0x4B            # 0b1001011
+GTX_ISS_F7_MVSVR: int = 0x4C            # 0b1001100
+
 GTX_F7_DISPATCH_MM: int = 0x04
 GTX_F7_DISPATCH_VEC: int = 0x05
 GTX_F7_DISPATCH_ACT: int = 0x06
 GTX_F7_DISPATCH_DMA: int = 0x07
 
-# ----- ISS-full funct7 (custom0) -- gtx_npu.h -----
-GTX_ISS_F7_RDSPR_ISS: int = 0x48        # 0b1001000
-GTX_ISS_F7_WRSPR_ISS: int = 0x49        # 0b1001001
-GTX_ISS_F7_OPSET: int = 0x4A            # 0b1001010
-GTX_ISS_F7_CPSVR: int = 0x4B            # 0b1001011
-GTX_ISS_F7_MVSVR: int = 0x4C            # 0b1001100
-GTX_ISS_F7_DEBUG_WR: int = 0x7D         # 0x7D
-GTX_ISS_F7_DEBUG_RD: int = 0x7E         # 0x7E
 
 # ----- DISPATCH funct7 sub-opcode -----
 # ============================================================================
@@ -46,9 +45,12 @@ GTX_OP_DMA: int = 3
 # These are the funct7 values from the ISS for fine-grained opcode dispatch.
 # Spike supports BOTH encodings: simplified (0-3) from gem5 and full ISS.
 # ============================================================================
-GTX_ISS_F7_MM: int = 0b0000000        # MM variants/ mm.s, mm.o, mm.v, mm, mm.t
-GTX_ISS_F7_MMC: int = 0b0000001       # MMC (accumulate) / mmc.s, mmc.o, mmc.v, mmc, mmc.t
-GTX_ISS_F7_IM2COL_N: int = 0b0001000  # IM2COL normal 
+# NOTE: 0b0000000 (MM) and 0b0000001 (MMC) intentionally aliased to
+# GTX_F7_WRSPR/GTX_F7_RDSPR above — vendor uses funct7 collision protected by
+# rs1==0 guard in ops/mm.py (Pitfall F). Do NOT re-add GTX_ISS_F7_MM/_MMC
+# constants here — they were dead duplicates and consumers reference
+# GTX_F7_WRSPR/GTX_F7_RDSPR per vendor convention.
+GTX_ISS_F7_IM2COL_N: int = 0b0001000  # IM2COL normal
 GTX_ISS_F7_IM2COL_D: int = 0b0001001  # IM2COL depthwise
 # Scalar Calulations
 GTX_ISS_F7_SCALAR_ARITH:int = 0b0010000 # ADD/SUB/MUL/DIV scalar add.vs, sub.vs, mul.vs, div.vs, add.is, sub.is, mul.is, div.is
@@ -93,11 +95,10 @@ GTX_ISS_F7_CREDIT_ST: int = 0x51      # credit.st -- per-NEST/SPU counter inc/de
 GTX_ISS_F7_CREDIT_LD_CHK: int = 0x52  # credit.ld.chk -- flush trigger when is_sloop 0b1010010
 GTX_ISS_F7_CREDIT_ST_CHK: int = 0x53  # credit.st.chk -- flush trigger when is_sloop 0b1010011
 GTX_ISS_F7_DMA_LD_ST: int = 0x40      # firmware DMA load/store/copy
-GTX_ISS_F7_DMA_3D: int = 0x41         # SVR + 3D variants (load_svr/store_svr/load_3d/store_3d)
-GTX_ISS_F7_DMA_MCAST_S2L: int = 0x42  # disasm-only stub in P3
-GTX_ISS_F7_DMA_LD_SVR_L1: int = 0x43  # load_svr_l1 alias
-GTX_ISS_F7_DMA_MCAST_GS: int = 0x44   # disasm-only stub (mcast_g2s/mcast_s2s/copy_mem share funct7)
-GTX_ISS_F7_DMA_ST_SVR_L1: int = 0x45  # store_svr_l1 alias
+GTX_ISS_F7_DMA_3D: int = 0x41         # SVR + 3D variants (load.svr/store.svr/load.3d/store.3d)
+
+GTX_ISS_F7_DMA_LD_SVR_L1: int = 0x43  # load.svr_l1 alias
+GTX_ISS_F7_DMA_ST_SVR_L1: int = 0x45  # store.svr_l1 alias
 # MicroCode
 GTX_ISS_F7_MEXEC:int = 0b1110000       # Macro execute
 GTX_ISS_F7_MBAR:int = 0b1110100        # Memory barrier (NOP)
@@ -132,6 +133,12 @@ GTX_ACT_GELU:int    = 3
 GTX_ACT_SIGMOID:int = 4
 GTX_ACT_PRELU:int   = 5
 GTX_ACT_ESUM:int    = 6
+
+# Activations that swap LSPR direction: rd=ADDRR, wr=ADDRA (vendor
+# gtx_npu_act.cc:37-42). RELU/SOFTMAX/ESUM use forward ADDRA→ADDRR.
+ACT_OPS_REVERSED: frozenset = frozenset({
+    GTX_ACT_PRELU, GTX_ACT_GELU, GTX_ACT_TANH, GTX_ACT_SIGMOID,
+})
 
 # ============================================================================
 # Vector sub-opcodes (passed via GSPR_GTX_OPCODE)

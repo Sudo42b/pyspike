@@ -27,7 +27,7 @@ from torch import Tensor
 from ...._registry import handler
 from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM
 from ..encoding import (
-    # ACT_OPS_REVERSED,
+    ACT_OPS_REVERSED,
     GTX_ACT_ESUM, GTX_ACT_GELU, GTX_ACT_PRELU,
     GTX_ACT_RELU, GTX_ACT_SIGMOID, GTX_ACT_SOFTMAX, GTX_ACT_TANH,
     GTX_F7_ACT_GELU, GTX_F7_ACT_PRELU, GTX_F7_ACT_SIGM,

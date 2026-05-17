@@ -39,12 +39,14 @@ def compare_hex(actual_path: str, golden_path: str, *,
         if r_raw == g_raw:
             exact += 1
             continue
-        # Decode for tolerance compare
-        r_arr = torch.frombuffer(torch.uint16(r_raw).tobytes(), dtype=torch.float16)
-        g_arr = torch.frombuffer(torch.uint16(g_raw).tobytes(), dtype=torch.float16)
+        # Decode for tolerance compare. `r_raw`/`g_raw` are uint16 bit patterns;
+        # use int.to_bytes (LE host) → torch.frombuffer to get the matching FP16.
+        # NOTE: `torch.uint16` is a dtype, not a constructor — do not call it.
+        r_arr = torch.frombuffer(r_raw.to_bytes(2, 'little'), dtype=torch.float16)
+        g_arr = torch.frombuffer(g_raw.to_bytes(2, 'little'), dtype=torch.float16)
         r_val = r_arr[0].item()
         g_val = g_arr[0].item()
-        if torch.isnan(r_val) or torch.isnan(g_val):
+        if r_val != r_val or g_val != g_val:  # NaN check (FP16 already .item()-ed)
             ulp_dist = 0xFFFF
             abs_diff = float('inf')
         else:

@@ -18,10 +18,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from ...._registry import handler
-from ...context.spr_router import rd_spr, wr_spr
 from ..encoding import (
-    GTX_F7_RDSPR,
-    GTX_F7_WRSPR,
     GTX_ISS_F7_CPSVR,
     GTX_ISS_F7_MVSVR,
     GTX_ISS_F7_OPSET,
@@ -31,47 +28,56 @@ from ..encoding import (
 
 if TYPE_CHECKING:
     from ....npu import GtxNpu
+"""SPR routing -- port of vendor/gtx_cpp_reference/gtx/gtx_npu_spr.cc.
 
-# =============================================================================
-# WRSPR / RDSPR (gem5 simplified encoding, funct7=0x00/0x01)
-# =============================================================================
+GSPR (0x000-0x3FF) flat single-instance.
+NSPR (0x400-0x7FF) per-NEST -- routed by tmu_id when is_ploop, else NEST 0.
+LSPR (0x800-0xBFF) per-(NEST,SPU) -- routed by (tmu_id, curr_id) when is_tloop,
+broadcast across SPUs when is_ploop, fallback to (0,0) otherwise.
 
-@handler(kind='custom0', funct7=GTX_F7_WRSPR, mnemonic='wrspr_gem5')
-def wrspr_gem5(npu: GtxNpu, proc, insn, xs1, xs2):
-    """gem5 WRSPR with funct7=0x00 collision (D-02): insn.rs1!=0 → MM stub.
-    
-    Port of ``custom0.cc:63-72``. When rs1==0, it writes to SPR 0
-    (GSPR_GTX_RUN). When rs1!=0, it's actually an MM instruction which
-    is handled by mm.py (each mm handler has a rs1==0 -> NOP guard).
-    """
-    if insn.rs1 != 0:
-        return 0  # Should be unreachable if mm.py is loaded correctly
-    
-    state = proc.state
-    # Even for rs1==0, we read XPR[0] (0) to match C++ verbatim
-    addr = state.XPR[insn.rs1]
-    val = state.XPR[insn.rs2]
-    wr_spr(npu, addr & 0xFFFF, val)
-    return 0
+Loop-control GSPR addresses 0x100..0x105 trigger startp/endp/starts/ends/startt/endt
+side-effect handlers from ops.control (lazy imported to avoid plan 02 -> plan 03
+circular import; plan 03 provides the _do_* helpers).
+"""
+from ....config_params import GTX_NEST_NUM, GTX_SPU_NUM
+from ...csr import (GSPR_BASE, GSPR_END, NSPR_BASE, NSPR_END,
+                   LSPR_BASE, LSPR_END)
+# from ..ins.encoding import (GSPR_STARTP, GSPR_ENDP, GSPR_STARTS,
+#                        GSPR_ENDS, GSPR_STARTT, GSPR_ENDT)
 
 
-@handler(kind='custom0', funct7=GTX_F7_RDSPR, mnemonic='rdspr_gem5')
-def rdspr_gem5(npu: GtxNpu, proc, insn, xs1, xs2):
-    """gem5 RDSPR with funct7=0x01 collision (D-02): insn.rs1!=0 → MMC stub."""
-    if insn.rs1 != 0:
-        return 0
-    
-    state = proc.state
-    addr = state.XPR[insn.rs1]
-    val = rd_spr(npu, addr & 0xFFFF)
-    if insn.rd != 0:
-        state.XPR.write(insn.rd, val)
-    return val
-
+def _in_range(addr: int, base: int, end: int) -> bool:
+    return base <= addr <= end
 
 # =============================================================================
 # ISS Full Encoding (funct7=0x48-0x4C)
 # =============================================================================
+
+
+def rd_spr(npu, addr: int) -> int:
+    """
+        Read SPR. Port of gtx_npu_t::rd_spr (gtx_npu_spr.cc:83-107).
+        
+    operand1: nest_id[29:24],spu_id[21:16],spr_addr[11:0]  
+    result: spr_data[63:0]  
+    """
+    addr &= 0xFFFF
+
+    if _in_range(addr, LSPR_BASE, LSPR_END):
+        if (npu.warp.is_tloop and npu.warp.tmu_id < GTX_NEST_NUM
+                and npu.warp.curr_id < GTX_SPU_NUM):
+            return npu.lspr[npu.warp.tmu_id][npu.warp.curr_id].get(addr, 0)
+        return npu.lspr[0][0].get(addr, 0)
+
+    if _in_range(addr, NSPR_BASE, NSPR_END):
+        nid = npu.warp.tmu_id if (npu.warp.is_ploop and
+                                  npu.warp.tmu_id < GTX_NEST_NUM) else 0
+        return npu.nspr[nid].get(addr, 0)
+
+    if _in_range(addr, GSPR_BASE, GSPR_END):
+        return npu.gspr.get(addr, 0)
+
+    return 0
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_RDSPR_ISS, mnemonic='rdspr')
 def rdspr_full(npu: GtxNpu, proc, insn, xs1, xs2):
@@ -82,6 +88,49 @@ def rdspr_full(npu: GtxNpu, proc, insn, xs1, xs2):
     if insn.rd != 0:
         state.XPR.write(insn.rd, val)
     return val
+
+
+
+
+def wr_spr(npu, addr: int, value: int) -> None:
+    """Write SPR.
+    Port of gtx_npu_t::wr_spr (gtx_npu_spr.cc:16-78).
+    rs3 is for masking broadcast only, spu or nest is selected  by target address
+    operand1: spr_addr[11:0], wrstb_n[23:16]
+    operand2: spr_data[63:0]
+    operand3: *target_mask[63:0]
+    """
+    addr &= 0xFFFF
+
+    if _in_range(addr, LSPR_BASE, LSPR_END):
+        if (npu.warp.is_tloop and npu.warp.tmu_id < GTX_NEST_NUM
+                and npu.warp.curr_id < GTX_SPU_NUM):
+            npu.lspr[npu.warp.tmu_id][npu.warp.curr_id][addr] = value
+        elif npu.warp.is_ploop and npu.warp.tmu_id < GTX_NEST_NUM:
+            # P-loop: same value into every SPU's LSPR within the active
+            # nest. C++ vendor writes each SPU RF separately
+            # (gtx_npu_spr.cc:24-25) — semantically equivalent to the
+            # docstring's "broadcast across SPUs in the NEST", so a
+            # tight per-SPU loop matches both.
+            nest_lsprs = npu.lspr[npu.warp.tmu_id]
+            for spu_rf in nest_lsprs:
+                spu_rf[addr] = value
+        else:
+            npu.lspr[0][0][addr] = value   # fallback NEST 0, SPU 0
+        return
+
+    if _in_range(addr, NSPR_BASE, NSPR_END):
+        if npu.warp.is_ploop and npu.warp.tmu_id < GTX_NEST_NUM:
+            npu.nspr[npu.warp.tmu_id][addr] = value
+        else:
+            npu.nspr[0][addr] = value
+        return
+
+    if _in_range(addr, GSPR_BASE, GSPR_END):
+        npu.gspr[addr] = value
+        return
+
+    # Out-of-range: silently drop (matches C++ behavior -- log only).
 
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_WRSPR_ISS, mnemonic='wrspr')
@@ -96,7 +145,12 @@ def wrspr_full(npu: GtxNpu, proc, insn, xs1, xs2):
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_OPSET, mnemonic='opset')
 def opset(npu: GtxNpu, proc, insn, xs1, xs2):
-    """ISS-full OPSET: stage rs3/rs4 for the next instruction."""
+    """ISS-full OPSET: stage rs3/rs4 for the next instruction.
+    #!TODO: 제대로 했는지 확인.
+    set operand3(target==0) or operrand_sel(target==1)
+    operand1: target 
+    operand2: *data[63:0]
+    """
     state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
@@ -111,9 +165,12 @@ def opset(npu: GtxNpu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_ISS_F7_CPSVR, mnemonic='cpsvr')
 def cpsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     """CPSVR (funct7=0x4B): replicate L0 SVR register pattern.
-    
-    rs1 = SVR address/index, rs2 = pattern size [1:0].
-    Port of ``custom0.cc:138-164`` verbatim.
+    #!TODO: 제대로 했는지 확인.
+        - copy svr low bytes to upper bytes
+    operand1: svr_addr[4:0]
+        - rs1 = SVR address/index, rs2 = pattern size [1:0].
+    operand2: byte_size[1:0]
+        - byte size decoding (0:1byte, 1:2byte, 2:4byte 3:8byte)
     """
     state = proc.state
     rs1_val = state.XPR[insn.rs1]
@@ -144,7 +201,15 @@ def cpsvr(npu: GtxNpu, proc, insn, xs1, xs2):
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_MVSVR, mnemonic='mvsvr')
 def mvsvr(npu: GtxNpu, proc, insn, xs1, xs2):
-    """MVSVR (funct7=0x4C): Move 32B L0 SVR register (copy + clear source)."""
+    """MVSVR (funct7=0x4C): Move 32B L0 SVR register (copy + clear source).
+        - move srd to nvr
+    #!TODO: 제대로 했는지 확인.
+    operand1: src_svr_addr[4:0]
+    operand2: dst_svr_addr[4:0]
+    operand3: wrstrb_n[31:0]
+    result: result[255:0]
+    
+    """
     state = proc.state
     rs1_val = state.XPR[insn.rs1]
     rs2_val = state.XPR[insn.rs2]
