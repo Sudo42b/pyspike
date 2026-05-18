@@ -279,7 +279,7 @@ plans across these waves.
   5. **Wheel base remains NumPy-only (BM-06):** `pyproject.toml` adds `[project.optional-dependencies] cuda = ["cupy-cuda12x>=13.0"]`. Default `pip install spike` does NOT pull cuda runtime. Wheel size delta vs pre-migration ≤ 0 MB (PyTorch removal should reduce wheel).
   6. **CLAUDE.md updated (BM-06):** "Dependencies" section reflects NumPy default + CuPy opt-in. PyTorch removal recorded in dependency history.
 
-**Plans:** 6 plans (Wave 0 scaffold + Wave 1a memory + Wave 1b regs/gate + Wave 2a ops + Wave 2b engines + Wave 3 finalize — Wave 1 split B-4 for context budget)
+**Plans:** 3/6 plans executed
 - [x] 09-backend-migration-numpy-cupy/09-00-scaffold-PLAN.md — xp alias + helpers + conftest port + FP8/scope decisions (BM-01)
 - [x] 09-backend-migration-numpy-cupy/09-01a-memory-PLAN.md — unit/memory.py xp port (BM-02 partial)
 - [ ] 09-backend-migration-numpy-cupy/09-01b-regs-PLAN.md — register_file.py + npu.py xp port + Wave 1 gate (BM-02 closure)
@@ -302,7 +302,7 @@ plans across these waves.
 | 6. Verification & Wheel | 1/5 | In Progress|  |
 | 7. Numba Dynamic Optimization | 6/6 | Complete | 2026-05-09 |
 | 8. Multi-tile DMA Parity (v1.1) | 5/6 | In Progress|  |
-| 9. Backend migration: NumPy + CuPy opt-in (v1.1) | 2/6 | In Progress |  |
+| 9. Backend migration: NumPy + CuPy opt-in (v1.1) | 3/6 | In Progress|  |
 
 ---
 
