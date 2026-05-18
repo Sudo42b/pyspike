@@ -3,7 +3,7 @@
 Inside ``__start_thread(tid)`` ... ``__end_thread(tid)`` the firmware
 emits a tight ``(opset, load, abs.v, opset, store)`` cadence per row,
 hundreds of times per SPU. Each row pays Python dispatch + 3 micro
-torch ops; the actual ABS work is trivial in comparison.
+xp ops; the actual ABS work is trivial in comparison.
 
 This module sets up the *infrastructure* to capture those instructions
 without changing per-handler code: when T-loop buffering is enabled
@@ -14,7 +14,7 @@ At ``__end_thread`` (or any non-bufferable boundary), :func:`flush`
 replays each entry in order through the same handler the FSM would
 have resolved.
 
-Fusion (turning the replay loop into one bulk ``torch.abs`` over the
+Fusion (turning the replay loop into one bulk ``xp.abs`` over the
 whole tile) is intentionally NOT done here — it lands in a follow-up
 once this layer is proven correctness-neutral against ABS/NEG/EXP
 regressions.
@@ -32,6 +32,7 @@ from __future__ import annotations
 from collections import namedtuple
 from typing import TYPE_CHECKING
 
+from .config_params import xp
 from .unit.csr import GSPR
 
 if TYPE_CHECKING:
@@ -95,9 +96,9 @@ TRANSPARENT_MNEMONICS = frozenset({
 
 
 # Mnemonics handled by :func:`unit.ins.ops.vec._apply_unary` — the element-
-# wise unaries that share the (read addr_a → torch op → write addr_r) path.
+# wise unaries that share the (read addr_a → xp op → write addr_r) path.
 # These are the fusion candidates: a run of (load, vec_unary, store) frames
-# with matching params collapses into a single bulk torch op.
+# with matching params collapses into a single bulk xp op.
 _VEC_UNARY_MNEMONICS = frozenset({
     'abs_v', 'neg_v', 'sign_v', 'step_v',
     'ceil_v', 'trunc_v', 'floor_v', 'rne_v',
@@ -231,7 +232,7 @@ def flush(npu: 'GtxNpu') -> None:
     Walks the buffer once, trying :func:`_try_fuse_unary` at each
     position to collapse a run of ``(load, vec_unary, store)`` frames
     (with optional ``credit_ld`` / ``credit_st`` for ``__load_cr`` /
-    ``__store_cr``) into a single bulk torch op. Anything that doesn't
+    ``__store_cr``) into a single bulk xp op. Anything that doesn't
     match falls through to :func:`_replay` — same shim-based handler
     invocation as the pre-fusion path, so non-fused mnemonics keep their
     eager-mode semantics.
@@ -264,7 +265,7 @@ def _drain(npu: 'GtxNpu', buf) -> None:
 
 # ----------------------------------------------------------------------
 # Frame fusion — collapse (load, [credit_ld], vec_unary, store, [credit_st])
-# runs into one bulk torch op. Targets the ABS-style inner loop:
+# runs into one bulk xp op. Targets the ABS-style inner loop:
 #
 #   for r in 0..N-1:
 #     opset(write_stride)                        # TRANSPARENT (eager)
@@ -277,10 +278,10 @@ def _drain(npu: 'GtxNpu', buf) -> None:
 #                            L2[R_off+r*length]  # buffered
 #     [credit_st]  (only on r == N-1)            # buffered
 #
-# Each row is one Python ``torch.abs(view)``-class call, dominated by
-# PyTorch dispatch overhead. Detecting N identical-shape frames lets us
+# Each row is one Python ``xp.abs(view)``-class call, dominated by
+# Python-level dispatch overhead. Detecting N identical-shape frames lets us
 # read the N-row L2 slab once, run the unary on the full ``(N, vec_size)``
-# tensor, and write the slab back — one torch op per kernel instead of
+# ndarray, and write the slab back — one xp op per kernel instead of
 # N micro-ops. Credit counters still replay individually (state parity).
 # ----------------------------------------------------------------------
 class _Frame:
@@ -413,14 +414,13 @@ def _try_fuse_unary(npu, buf, start):
 
 
 def _execute_fused(npu, frames) -> None:
-    """Bulk-execute N identical-shape frames as one torch op.
+    """Bulk-execute N identical-shape frames as one xp op.
 
     Fast path requires uniform L2 stride and ``length == vec_size * 2``
     (single contiguous row per frame, exactly the ABS firmware shape).
     Anything else falls back to a per-frame :func:`_replay` so we never
     miscompile an unusual stride layout.
     """
-    import torch  # local to keep module import cycle-free at top level
     from .unit.ins.ops.vec import _apply_unary
 
     n = len(frames)
@@ -456,34 +456,40 @@ def _execute_fused(npu, frames) -> None:
     nest = npu.warp.tmu_id if npu.warp.is_ploop else 0
     spu = npu.warp.curr_id
 
-    l2 = npu.mem.l2_byte(nest)
+    # Bypass the WAVE-1-SHIM accessors (mem.l2_byte / mem.l1_byte) and read
+    # raw xp storage directly. Same pattern Wave 2a (op-handlers) and Wave 5
+    # (dma_engine) adopted. Wave 6 removes the shims entirely.
+    l2 = npu.mem.l2[nest]
     src_base = src_offs[0]
     dst_base = dst_offs[0]
     total_bytes = n * l_len
 
-    # Read N rows from L2 as a single (N, vec_size) fp16 tensor — no copy,
-    # just a strided view.
+    # Read N rows from L2 as a single (N, vec_size) fp16 ndarray — no copy,
+    # just a strided view. Per RESEARCH Pitfall 1, use `.reshape(n, vec_size)`
+    # (numpy/cupy `.view(n, m)` differs from torch's dual-purpose view-as-reshape).
     src_f16 = (
         l2[src_base:src_base + total_bytes]
-        .view(torch.float16)
-        .view(n, vec_size)
+        .view(xp.float16)
+        .reshape(n, vec_size)
     )
 
-    # One torch op for all rows — pyTorch dispatch cost is amortised
+    # One xp op for all rows — Python-level dispatch cost is amortised
     # across the whole tile.
     result_f16 = _apply_unary(funct7, sub_op, src_f16)
 
-    # Write N rows back to L2 dst slab.
+    # Write N rows back to L2 dst slab. `xp.copyto` is the in-place
+    # equivalent of torch's `.copy_()`. The src needs to be reshaped to 1D
+    # uint8 view to match the dst's flat byte layout.
     dst_view = l2[dst_base:dst_base + total_bytes]
-    dst_view.copy_(result_f16.reshape(-1).view(torch.uint8))
+    xp.copyto(dst_view, result_f16.reshape(-1).view(xp.uint8))
 
     # Maintain L1 invariant: the non-fused path would leave the LAST
     # row's input at ``BANK_A`` and the last row's output at ``BANK_R``.
     # Keep that observable, so end-of-thread debug dumps match.
-    l1 = npu.mem.l1_byte(nest, spu)
+    l1 = npu.mem.l1[nest, spu]
     last_src = src_offs[-1]
-    l1[l_lo:l_lo + l_len].copy_(l2[last_src:last_src + l_len])
-    l1[s_lo:s_lo + l_len].copy_(result_f16[-1].view(torch.uint8))
+    xp.copyto(l1[l_lo:l_lo + l_len], l2[last_src:last_src + l_len])
+    xp.copyto(l1[s_lo:s_lo + l_len], result_f16[-1].view(xp.uint8))
 
     # Credit counters are independent state — replay only the entries
     # firmware actually emitted (last iter for __load_cr / __store_cr).
