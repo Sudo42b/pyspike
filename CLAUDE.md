@@ -60,6 +60,8 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 - **libdisasm.a** - Spike disassembler (static, bundled)
 - **libfesvr.a** - Front-end server (static, bundled)
 - **pybind11** [>3] - Mandatory for binding extension_t and rocc_t classes; supports trampoline_self_life_support for virtual method dispatch
+- **numpy** [>=2.0,<3] - Default array backend. All `gtx.*` modules use the `xp` alias (numpy by default). Phase 9 BM-01..06 made NumPy the canonical backend (PyTorch removed from runtime dependencies).
+- **cupy-cuda12x** [>=13,<15] (opt-in via `pip install spike[cuda]`) - GPU backend; activates when `GTX_USE_CUDA=1` env-var is set. Fails loud with `RuntimeError("...pip install 'spike[cuda]'")` if env var is set but cupy is missing.
 - **auditwheel** - Binary wheel auditing (manylinux compliance)
 - **patchelf** - ELF manipulation for bundled libraries
 - **dtc** (device-tree-compiler) - Required before-all in cibuildwheel
@@ -67,6 +69,8 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
 - `RISCV` env var sets toolchain prefix (default: `/opt/riscv`)
 - `PYSPIKE_LIBS` - Name of env var for loading spike libraries dynamically (defined in `src/main/python/riscv/__init__.py:30`)
 - `PYSPIKE_EXTS` - Name of env var for extension library paths (defined in `src/main/python/riscv/__init__.py:32`)
+- `GTX_USE_CUDA` - Opt-in for the cupy backend (xp=cupy). Default unset (xp=numpy). When set to `1` / `true` / `TRUE`, requires `cupy-cuda12x` installed via `pip install spike[cuda]`. Silent fallback is FORBIDDEN — missing cupy raises `RuntimeError` at import time (see `config_params.py:_resolve_backend`).
+- `GTX_DDR_SIZE` - DDR size override (default 4 GiB). Recommended `1G` on consumer GPUs with <12 GB VRAM when `xp=cupy`.
 - C++ compilation with `-std=c++2a` (C++20) - `setup.py:45`
 - pybind11 detailed error messages enabled via `PYBIND11_DETAILED_ERROR_MESSAGES=1` macro - `setup.py:49`
 - Runtime library paths: `-Wl,-rpath,$ORIGIN/data/lib` and `-Wl,-rpath,{RISCV}/lib` - `setup.py:52-53`
