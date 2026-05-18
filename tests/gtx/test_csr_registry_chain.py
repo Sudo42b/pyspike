@@ -1,15 +1,18 @@
-"""CSR registry + RegisterFile tensor chain coverage.
+"""CSR registry + RegisterFile array chain coverage.
 
 Locks the post-d6f73f9 invariants: @csr decorator populates module-level
 GSPR/NSPR/LSPR dicts at import time, Register schemas are stateless, and
-RegisterFile materializes them as int64 torch.Tensor storage with
+RegisterFile materializes them as int64 xp.ndarray storage with
 PIPE-only addr indexing (APB excluded, scope-masked to 10 bits).
+
+Ported off torch in Phase 9 Plan 09-01b Task 3 — assertions now use
+`xp.int64` (numpy default; cupy under GTX_USE_CUDA=1).
 """
 from __future__ import annotations
 
 import pytest
-import torch
 
+from riscv.gtx.config_params import xp
 from riscv.gtx.unit.csr import (
     GSPR,
     NSPR,
@@ -46,12 +49,12 @@ def test_csr_decorator_produces_register_schema():
     assert field.mask == 0xFFFF
 
 
-def test_register_file_gspr_is_1024_int64_tensor():
-    """RegisterFile(GSPR) allocates a zero-initialized int64 tensor."""
-    rf = RegisterFile(GSPR, shape=(1024,), device="cpu")
-    assert rf.tensor.shape == (1024,)
-    assert rf.tensor.dtype == torch.int64
-    assert bool((rf.tensor == 0).all())
+def test_register_file_gspr_is_1024_int64_array():
+    """RegisterFile(GSPR) allocates a zero-initialized int64 xp.ndarray."""
+    rf = RegisterFile(GSPR, shape=(1024,))
+    assert tuple(rf.tensor.shape) == (1024,)
+    assert rf.tensor.dtype == xp.int64
+    assert bool(xp.all(rf.tensor == 0))
 
 
 def test_register_file_nspr_lspr_multidim_shapes(gtx_npu):
@@ -63,7 +66,7 @@ def test_register_file_nspr_lspr_multidim_shapes(gtx_npu):
 
 def test_addr_by_name_pipe_only_masked_to_10_bits():
     """_addr_by_name covers PIPE only; APB entries are excluded; addr & 0x3FF."""
-    rf = RegisterFile(LSPR, shape=(4, 16, 1024), device="cpu")
+    rf = RegisterFile(LSPR, shape=(4, 16, 1024))
     assert "SPM_ADDRA" in rf._addr_by_name
     assert rf._addr_by_name["SPM_ADDRA"] == (0x900 & 0x3FF)
     apb_keys = [n for n, r in LSPR.items() if r.bus_type is BusType.APB]
@@ -103,15 +106,17 @@ def test_register_view_64bit_field_broadcast_write_no_overflow(gtx_npu):
     """64-bit field writes (e.g. SGPR0.gpr) must not OverflowError.
 
     Pins the register_file.py:188 fix: ~(mask << shift) was leaking a
-    Python negative bigint into torch's int64 cast path.
+    Python negative bigint into the int64 cast path. The xp port (Plan
+    09-01b Task 1) preserves this behavior on numpy/cupy with an
+    additional signed-wrap on the raw mask for full-int64 fields.
     """
     val_u64 = 0xCAFEBABEDEADBEEF
     gtx_npu.lspr.SGPR0.gpr = val_u64  # must not raise
     addr = 0x800 & 0x3FF
     stored = gtx_npu.lspr.tensor[..., addr]
     signed = val_u64 - (1 << 64)  # int64 reinterpretation (top bit set)
-    assert stored.shape == (4, 16)
-    assert (stored == signed).all().item()
+    assert tuple(stored.shape) == (4, 16)
+    assert bool(xp.all(stored == signed))
     # Round-trip read through the field getter path must restore the
     # unsigned value.
     readback = int(gtx_npu.lspr[0][0].SGPR0.gpr) & 0xFFFFFFFFFFFFFFFF

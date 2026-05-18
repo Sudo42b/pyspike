@@ -170,7 +170,13 @@ class RegisterView:
             return self._tensor if self._tensor.ndim > 0 else int(self._tensor)
         if name in self._reg.fields:
             field = self._reg.fields[name]
-            val = (self._tensor >> field.shift) & field.mask
+            # Same signed-int64 wrap as __setattr__ — numpy bitwise-AND
+            # overflows on raw unsigned 0xFFFFFFFFFFFFFFFF masks (e.g.
+            # SGPR0.gpr is a full 64-bit field).
+            mask_signed = field.mask & ((1 << 64) - 1)
+            if mask_signed >> 63:
+                mask_signed = mask_signed - (1 << 64)
+            val = (self._tensor >> field.shift) & mask_signed
             return val if self._tensor.ndim > 0 else int(val)
 
         raise AttributeError(f"Register {self._reg.name} has no field {name!r}")
