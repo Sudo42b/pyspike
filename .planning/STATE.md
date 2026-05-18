@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Post-Ship Polish
-status: executing
-last_updated: "2026-05-18T11:15:16.542Z"
-last_activity: 2026-05-18
+status: completed
+last_updated: "2026-05-18T11:43:41.859Z"
+last_activity: "2026-05-18 — Plan 09-01a Wave 1a memory.py xp port landed (1/1 task GREEN; 21 new unit tests, 11 torch sites converted). Commits c162ace (RED tests) + eacf75e (GREEN port). SUMMARY at .planning/phases/09-backend-migration-numpy-cupy/09-01a-SUMMARY.md. memory.py is now torch-free; _DDR_DEVICE removed across gtx/; D-10 VRAM-budget comment landed. Wave 1a transit-state: downstream callers (npu.py, dma_engine.py, tloop_buffer.py, ops/*) still use torch and will surface runtime mismatches when handling memory.py's xp outputs — that's expected per CONTEXT D-06. The 6-op smoke + tile-2 gate runs at Wave 1b end (plan 09-01b Task 4). Next: 09-01b-regs (register_file + npu.py + Wave 1 gate)."
 progress:
   total_phases: 7
   completed_phases: 7
@@ -404,6 +404,7 @@ NOT roadmap blockers — to be confirmed during phase execution:
 All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 
 - Phase 2 needs_followup: Categories A-D before /gsd:phase-evolve 2 can run; see 02-06-SUMMARY.md
+- Phase 9 Wave 1 gate (plan 09-01b Task 4) RED — D-07 smoke set fails with 'numpy.ndarray has no attribute to' at dma_engine.py:348. Wave 2/3 files (194 torch refs across 7 files) still consume torch APIs on Wave 1's xp.ndarray outputs. See .planning/phases/09-backend-migration-numpy-cupy/09-01-WAVE-GATE.md for 4 resolution options. Tasks 1-3 of plan 09-01b complete (8 commits). User decision required before Wave 2 entry.
 
 ### Quick Tasks Completed
 
