@@ -81,13 +81,19 @@ def test_shim_sites_carry_removal_wave_markers():
 
     The marker tells future readers (and the wave that owns removal) which
     plan inherits the obligation to delete that shim.
+
+    Wave 1b landed 7 shims (3 byte + 3 f16 + ddr.read). Wave 2a (plan
+    09-02a-ops) removed the 3 f16 shims after porting ops/*.py off
+    torch — those accessors no longer have any torch consumers. The 4
+    remaining shims (l0_byte, l1_byte, l2_byte, ddr.read) are inherited
+    by Wave 5 (09-02b-engines) and Wave 6 (09-03-finalize) per the
+    09-01b-SUMMARY removal-wave inheritance table.
     """
     src = MEMORY_PY.read_text()
-    # At least one marker per shim site we expect (~7 accessors).
     markers = re.findall(r"WAVE-1-SHIM:\s*remove in Wave \w+", src)
-    assert len(markers) >= 7, (
-        f"Expected >= 7 WAVE-1-SHIM removal markers (one per shimmed "
-        f"accessor); found {len(markers)}: {markers}"
+    assert len(markers) >= 4, (
+        f"Expected >= 4 WAVE-1-SHIM removal markers (post-Wave-2a: l0_byte, "
+        f"l1_byte, l2_byte, ddr.read); found {len(markers)}: {markers}"
     )
 
 
@@ -177,31 +183,34 @@ def test_l0_byte_returns_torch_tensor_on_numpy_path():
     assert buf.dtype == torch.uint8
 
 
-def test_l1_f16_returns_torch_tensor_on_numpy_path():
+def test_l1_f16_returns_xp_ndarray_post_wave2a():
+    """Wave 2a removed the f16 shim — accessor returns bare xp.ndarray."""
     if xp is not np:
         pytest.skip("Numpy-path test (default xp=numpy)")
     mem = GtxMemory()
     buf = mem.l1_f16(0, 0)
-    assert isinstance(buf, torch.Tensor)
-    assert buf.dtype == torch.float16
+    assert isinstance(buf, np.ndarray)
+    assert buf.dtype == np.float16
 
 
-def test_l0_f16_returns_torch_tensor_on_numpy_path():
+def test_l0_f16_returns_xp_ndarray_post_wave2a():
+    """Wave 2a removed the f16 shim — accessor returns bare xp.ndarray."""
     if xp is not np:
         pytest.skip("Numpy-path test (default xp=numpy)")
     mem = GtxMemory()
     buf = mem.l0_f16(0, 0)
-    assert isinstance(buf, torch.Tensor)
-    assert buf.dtype == torch.float16
+    assert isinstance(buf, np.ndarray)
+    assert buf.dtype == np.float16
 
 
-def test_l2_f16_returns_torch_tensor_on_numpy_path():
+def test_l2_f16_returns_xp_ndarray_post_wave2a():
+    """Wave 2a removed the f16 shim — accessor returns bare xp.ndarray."""
     if xp is not np:
         pytest.skip("Numpy-path test (default xp=numpy)")
     mem = GtxMemory()
     buf = mem.l2_f16(0)
-    assert isinstance(buf, torch.Tensor)
-    assert buf.dtype == torch.float16
+    assert isinstance(buf, np.ndarray)
+    assert buf.dtype == np.float16
 
 
 def test_ddr_read_returns_torch_tensor_on_numpy_path():

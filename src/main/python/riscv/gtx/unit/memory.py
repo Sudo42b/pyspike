@@ -339,27 +339,21 @@ class GtxMemory(MEMORY):
         return _torch_view(self._l2_views[nest])
 
     # ----- Halfword fp16 views (D-10 named, D-12 view guarantee) -----
+    #
+    # Wave 2a (plan 09-02a-ops) removed the WAVE-1-SHIM at these accessors.
+    # All ops/* consumers (act.py L312/433, vec.py L124) now bypass these
+    # accessors entirely and read raw xp byte storage via
+    # `npu.mem.l[012][nest, spu].view(xp.float16)`. The accessors stay as
+    # pure xp.ndarray returns for future external consumers.
 
-    def l0_f16(self, nest: int, spu: int) -> "xp.ndarray | object":
-        # WAVE-1-SHIM: remove in Wave 2 — no Wave-2/3 callers actually
-        # invoke l0_f16 (the audit shows act/mm/vec hit l0_byte then
-        # .view(torch.float16) themselves). Shim kept defensively to keep
-        # the accessor return-type invariant uniform across all f16 views;
-        # delete in plan 09-02a together with l1_f16.
-        return _torch_view(self._l0_f16_views[nest, spu])
+    def l0_f16(self, nest: int, spu: int) -> "xp.ndarray":
+        return self._l0_f16_views[nest, spu]
 
-    def l1_f16(self, nest: int, spu: int) -> "xp.ndarray | object":
-        # WAVE-1-SHIM: remove in Wave 2 (port ops/act.py:312/433 + ops/
-        # vec.py:124 — only torch consumers of l1_f16, owned by Wave 2
-        # plan 09-02a-ops).
-        return _torch_view(self._l1_f16_views[nest, spu])
+    def l1_f16(self, nest: int, spu: int) -> "xp.ndarray":
+        return self._l1_f16_views[nest, spu]
 
-    def l2_f16(self, nest: int) -> "xp.ndarray | object":
-        # WAVE-1-SHIM: remove in Wave 2 — no Wave-2/3 callers actually
-        # invoke l2_f16 in the smoke path (audit shows zero direct uses).
-        # Shim kept defensively for the FP16-view return-type contract;
-        # delete in plan 09-02a alongside the other f16 shims.
-        return _torch_view(self._l2_f16_views[nest])
+    def l2_f16(self, nest: int) -> "xp.ndarray":
+        return self._l2_f16_views[nest]
 
     def ensure_ddr(self, end_offset: int) -> Optional[xp.ndarray]:
         return self.ddr.ensure(end_offset)

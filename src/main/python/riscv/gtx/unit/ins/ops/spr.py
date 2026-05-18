@@ -199,7 +199,9 @@ def cpsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     base = ((rs1_val & 0x1F) // 4) * 32
     bsz = rs2_val & 3
     
-    l0 = npu.mem.l0_byte(nest, spu)
+    # Bypass WAVE-1-SHIM: raw xp storage. dma_engine.py still consumes
+    # `mem.l0_byte()` (Wave 5 obligation per 09-01b-SUMMARY removal table).
+    l0 = npu.mem.l0[nest, spu]
     # Build 8B pattern from L0[base]
     # NB: xp.tile is the byte-stream replication primitive (matches vendor
     # C++ memcpy fill semantics). xp.ndarray.repeat tiles per-element which
@@ -257,7 +259,9 @@ def mvsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     if src_idx == dst_idx:
         return 0
         
-    l0 = npu.mem.l0_byte(nest, spu)
+    # Bypass WAVE-1-SHIM: raw xp storage. dma_engine.py still consumes
+    # `mem.l0_byte()` (Wave 5 obligation per 09-01b-SUMMARY removal table).
+    l0 = npu.mem.l0[nest, spu]
     src_off = src_idx * 32
     dst_off = dst_idx * 32
 
