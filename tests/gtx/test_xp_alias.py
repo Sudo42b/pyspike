@@ -1,12 +1,11 @@
-"""BM-01 unit tests: xp alias + helpers + fail-loud + DEVICE deprecation.
+"""BM-01 unit tests: xp alias + helpers + fail-loud + DEVICE clean-cut.
 
-Note (Option-A deferral, 2026-05-18 user decision): the original Wave 0 plan
-required `from riscv.gtx.config_params import DEVICE` to raise ImportError. That
-clean-cut is deferred to Wave 3 (plan 09-03-finalize) per CONTEXT.md line 232,
-because downstream files still import DEVICE and removing it now would break
-the wave-end smoke gate. Test 4 below therefore asserts the deprecated alias
-exists (string 'cpu' under xp=numpy) instead of asserting ImportError. The
-ImportError assertion becomes a Wave 3 acceptance criterion.
+Phase 9 Wave 6 (plan 09-03-finalize) closed the D-04 DEVICE clean-cut deferred
+from Wave 0 (Option-A user decision 2026-05-18). All downstream consumers
+(memory.py, register_file.py, npu.py, dma_engine.py, ops/*.py) ported off
+`device=DEVICE` in Waves 1/2/5; the symbol is now removed from
+config_params.py and the re-export from riscv.gtx.__init__.py is gone too.
+Test 4 below asserts `ImportError` per the Wave 6 acceptance contract.
 """
 from __future__ import annotations
 import os
@@ -66,17 +65,14 @@ def test_gtx_use_cuda_without_cupy_fails_loud():
     assert "pip install 'spike[cuda]'" in combined
 
 
-def test_device_symbol_deprecated_alias_present():
-    """D-04 (Option-A Wave 0/Wave 3 deferral): DEVICE retained as deprecated
-    string alias until Wave 3 clean-cut. See module docstring + CONTEXT line 232.
+def test_device_symbol_removed():
+    """D-04 Wave 6 clean-cut: DEVICE symbol removed from config_params.py.
 
-    Wave 3 will flip this to `pytest.raises(ImportError)`."""
-    from riscv.gtx.config_params import DEVICE, xp
-    assert isinstance(DEVICE, str), (
-        f"DEVICE must be a string alias under Option-A deferral, "
-        f"got {type(DEVICE).__name__}={DEVICE!r}"
-    )
-    expected = "cpu" if xp.__name__ == "numpy" else "cuda"
-    assert DEVICE == expected, (
-        f"DEVICE={DEVICE!r} does not match xp-backed expected={expected!r}"
-    )
+    The Option-A Wave 0/Wave 3 deferral is closed. Both
+    `from riscv.gtx.config_params import DEVICE` and `from riscv.gtx import
+    DEVICE` raise ImportError. All downstream consumers were ported off
+    `device=DEVICE` kwarg in Waves 1/2/5."""
+    with pytest.raises(ImportError):
+        from riscv.gtx.config_params import DEVICE  # noqa: F401
+    with pytest.raises(ImportError):
+        from riscv.gtx import DEVICE  # noqa: F401

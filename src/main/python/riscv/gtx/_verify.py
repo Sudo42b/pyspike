@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
-import torch
+import numpy as np
 
 def _parse_hex(path: str) -> bytes:
     out = bytearray()
@@ -40,12 +40,13 @@ def compare_hex(actual_path: str, golden_path: str, *,
             exact += 1
             continue
         # Decode for tolerance compare. `r_raw`/`g_raw` are uint16 bit patterns;
-        # use int.to_bytes (LE host) → torch.frombuffer to get the matching FP16.
-        # NOTE: `torch.uint16` is a dtype, not a constructor — do not call it.
-        r_arr = torch.frombuffer(r_raw.to_bytes(2, 'little'), dtype=torch.float16)
-        g_arr = torch.frombuffer(g_raw.to_bytes(2, 'little'), dtype=torch.float16)
-        r_val = r_arr[0].item()
-        g_val = g_arr[0].item()
+        # use int.to_bytes (LE host) → np.frombuffer to get the matching FP16.
+        # _verify.py is host-only (file I/O); bare numpy is sufficient — no
+        # xp/cupy needed since DDR file dumps cross the H/D boundary upstream.
+        r_arr = np.frombuffer(r_raw.to_bytes(2, 'little'), dtype=np.float16)
+        g_arr = np.frombuffer(g_raw.to_bytes(2, 'little'), dtype=np.float16)
+        r_val = float(r_arr[0])
+        g_val = float(g_arr[0])
         if r_val != r_val or g_val != g_val:  # NaN check (FP16 already .item()-ed)
             ulp_dist = 0xFFFF
             abs_diff = float('inf')

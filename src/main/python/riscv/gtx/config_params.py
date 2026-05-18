@@ -36,17 +36,12 @@ def _resolve_backend():
 # All gtx.* modules: `from .config_params import xp, to_host, to_device`.
 xp, to_host, to_device = _resolve_backend()
 
-# DEPRECATED — `DEVICE` retained as Wave 0 backwards-compat alias only.
-# Per CONTEXT.md line 232 (D-05 Wave mapping), `DEVICE` clean-cut removal is
-# owned by Wave 3 (plan 09-03-finalize) once downstream files (npu.py,
-# unit/memory.py, unit/register_file.py, unit/context/dma_engine.py,
-# unit/ins/ops/vec.py, ...) have been ported off `device=DEVICE` usage. Removing
-# it here in Wave 0 would break the wave-end smoke gate (D-07: 6-op smoke +
-# tile-2 baseline preserved). User decision 2026-05-18 (Option A deferral)
-# locks this string alias so downstream call sites continue to import without
-# ImportError until Wave 3 ports them. Value chosen so any caller treating it
-# as a placeholder string still works; do NOT rely on `torch.device` API.
-DEVICE: str = "cpu" if xp is _np else "cuda"
+# Phase 9 Wave 6 D-04 clean-cut: DEVICE symbol REMOVED. The previous Wave 0
+# deferred string alias (`DEVICE: str = "cpu" if xp is _np else "cuda"`) is
+# gone. All downstream consumers ported in Waves 1/2/5 (memory.py,
+# register_file.py, npu.py, dma_engine.py, ops/*.py). `from
+# riscv.gtx.config_params import DEVICE` now raises ImportError —
+# behavior verified by tests/gtx/test_xp_alias.py.
 
 
 # NEST x SPU topology

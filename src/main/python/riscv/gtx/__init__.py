@@ -51,6 +51,12 @@ from .unit.ins import encoding
 # extension findable by Spike's PythonBridge. Wrapped in try/except so
 # missing optional helpers (e.g. ``ddr.py`` in WIP refactor states) do
 # not block import of the FSM / CSR / topology surface.
+#
+# Diagnostic policy (Phase 9 Wave 6, plan 09-03-finalize): surface the
+# exception class in the warning so silent ImportError cascades (see
+# project_gtx_extension_silent_import_failure.md memory for the D1-D5
+# precedent where ImportErrors were swallowed and produced universal
+# rc=255 "couldn't find extension 'gtx'") are visible to users.
 try:
     from . import npu   # noqa: F401
     from .npu import GtxNpu
@@ -61,7 +67,8 @@ except ImportError as _exc:
     _NPU_AVAILABLE = False
     import warnings
     warnings.warn(
-        f"riscv.gtx.npu unavailable ({_exc}); FSM / CSR / topology surface "
+        f"riscv.gtx submodule import failed "
+        f"({type(_exc).__name__}): {_exc}; FSM / CSR / topology surface "
         f"still importable.",
         ImportWarning,
         stacklevel=2,
@@ -76,8 +83,7 @@ __all__ = [
     "GtxNpu",
 ]
 
-# Phase 9 Wave 0: torch ImportError surface removed (D-04). xp/to_host/to_device
-# defined in config_params.py are the new SSOT. DEVICE clean-cut deferred to
-# Wave 3 (CONTEXT.md line 232) — the re-export below keeps downstream callers
-# working until plan 09-03-finalize ports them.
-from .config_params import DEVICE  # noqa: E402,F401
+# Phase 9 Wave 6 D-04 clean-cut: DEVICE re-export removed. `from
+# riscv.gtx import DEVICE` and `from riscv.gtx.config_params import DEVICE`
+# now both raise ImportError per the Wave 6 acceptance contract. xp /
+# to_host / to_device in config_params.py are the canonical SSOT.
