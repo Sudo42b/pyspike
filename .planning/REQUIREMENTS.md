@@ -264,11 +264,17 @@ extras (`pip install spike[fast]`) are opt-in.
 | VTW-02 | Phase 8 | Complete |
 | VTW-03 | Phase 8 | Pending |
 | VTW-04 | Phase 8 | Complete |
+| BM-01 | Phase 9 | Complete |
+| BM-02 | Phase 9 | Complete |
+| BM-03 | Phase 9 | Complete |
+| BM-04 | Phase 9 | Complete |
+| BM-05 | Phase 9 | Complete |
+| BM-06 | Phase 9 | Complete |
 
 **Coverage:**
 - v1.0 requirements: 50 total — 50 mapped, 100% coverage
-- v1.1 requirements: 8 total — 8 mapped, 100% coverage
-- Combined: 58 requirements ↔ 58 mapped ✓
+- v1.1 requirements: 14 total — 14 mapped, 100% coverage (8 MTDMA/VTW + 6 BM)
+- Combined: 64 requirements ↔ 64 mapped ✓
 
 **Phase distribution:**
 - Phase 1 (Foundation): 5 (FOUND-01..04, PKG-02)
@@ -279,6 +285,7 @@ extras (`pip install spike[fast]`) are opt-in.
 - Phase 6 (Verification & Wheel): 6 (VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04)
 - Phase 7 (Numba Optimization): 8 (NJIT-01..NJIT-08)
 - Phase 8 (Multi-tile DMA Parity, v1.1): 8 (MTDMA-01..04, VTW-01..04)
+- Phase 9 (Backend Migration, v1.1): 6 (BM-01..06)
 
 ## Milestone v1.1 Post-Ship Polish — Multi-tile DMA Orchestration Parity
 
@@ -315,7 +322,39 @@ extras (`pip install spike[fast]`) are opt-in.
   커밋할지, symlink로 둘지, 별도 데이터 레포로 분리할지 명시. `MANIFEST.in` /
   wheel size 영향 평가 + `tests/gtx/data/firmware/README.md` 동기화
 
+### Backend Migration (BM)
+
+- [x] **BM-01**: `xp` alias scaffold + `GTX_USE_CUDA` env contract —
+  `import torch` count = 0 across `src/main/python/riscv/gtx/`;
+  `GTX_USE_CUDA=1` activates cupy path with fail-loud RuntimeError when
+  cupy missing. `DEVICE` symbol removed (Wave 6 D-04 clean-cut). All
+  `gtx.*` modules import `xp` / `to_host` / `to_device` from
+  `config_params.py` SSOT.
+- [x] **BM-02**: NumPy port of memory layer — `unit/memory.py` (DDR +
+  L0/L1/L2 scratchpads) and `unit/register_file.py` (SPR int64) use
+  `xp.zeros`. ABS strict byte-exact PASS preserved. DDR-on-GPU verified
+  with VRAM budget documented when `xp=cupy`. WAVE-1-SHIM strangler-fig
+  pattern fully sunset (Wave 2a + Wave 5 + Wave 6 closure).
+- [x] **BM-03**: NumPy port of dispatch + ops — `unit/ins/ops/{spr,mm,vec,act}.py`
+  + `unit/context/dma_engine.py` all use xp. FP8 strategy locked to LUT-only
+  path (`FP16_TO_FP8_LUT` / `FP8_TO_FP16_LUT` precomputed at import).
+  GELU + RELU + SIGMOID + TANH + SOFTMAX strict PASS.
+- [x] **BM-04**: NumPy port of tloop/sloop fusion — `tloop_buffer._execute_fused`
+  and `_verify.compare_hex` torch-free. ABS perf within ±10% of 94.82s
+  baseline (target 85-105s window). Final walltime recorded in
+  `.planning/phases/09-backend-migration-numpy-cupy/09-final-walltime.txt`.
+- [x] **BM-05**: CuPy opt-in extras + GPU smoke test gated on `GTX_USE_CUDA`
+  — `pyproject.toml` `[project.optional-dependencies] cuda = ["cupy-cuda12x>=13,<15"]`.
+  ABS smoke (`tests/gtx/test_regression_fw_full_sweep.py::test_vendor_op_sweep_strict[ABS]`)
+  byte-identical between xp=numpy and xp=cupy paths (manual verify on GPU
+  hardware deferred per resource availability).
+- [x] **BM-06**: CLAUDE.md "Dependencies" updated + wheel size delta recorded.
+  PyTorch removed from runtime; wheel size delta measured at end of Wave 6
+  (expected -50 to -200 MB per RESEARCH BM-06 row). Pre-migration baseline
+  pinned in `09-pre-wheel-size.txt`; post-migration size captured in
+  `09-post-wheel-size.txt`.
+
 ---
-*Requirements defined: 2026-05-04 (v1.0); v1.1 added 2026-05-10*
-*Phase mappings filled: 2026-05-04 by gsd-roadmapper; v1.1 mappings 2026-05-10*
-*Last updated: 2026-05-10 after milestone v1.1 startup (MTDMA-01..04 + VTW-01..04 added)*
+*Requirements defined: 2026-05-04 (v1.0); v1.1 added 2026-05-10; v1.1 BM-01..06 added 2026-05-19*
+*Phase mappings filled: 2026-05-04 by gsd-roadmapper; v1.1 mappings 2026-05-10; v1.1 BM mappings 2026-05-19*
+*Last updated: 2026-05-19 after Phase 9 Wave 6 closure (BM-01..06 transcribed; Coverage 64/64)*
