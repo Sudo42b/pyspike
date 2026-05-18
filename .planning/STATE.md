@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Post-Ship Polish
-status: verifying
-last_updated: "2026-05-18T17:00:00.000Z"
+status: executing
+last_updated: "2026-05-18T10:50:33.198Z"
 last_activity: 2026-05-18
 progress:
-  total_phases: 9
+  total_phases: 7
   completed_phases: 7
   total_plans: 38
   completed_plans: 38
@@ -24,7 +24,7 @@ progress:
 통과하고 DDR 결과가 C++ libgtx_npu.so(SystemC HW sim과 ULP 내 일치 검증 완료된
 golden)와 ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능도 의미가 없다.
 
-**Current Focus:** Phase 08 — multi-tile-dma-parity
+**Current Focus:** Phase 09 — backend-migration-numpy-cupy
 
 **Acceptance Gate:** vendor `pyspike/test/<OP>/n1s16/n1s16_<op>.elf` × `GTX_DDR_REVERSED=1`
 sweep → DDR dump that `compare_hex(strict=True)` reports byte-exact against
@@ -33,11 +33,11 @@ M ≥ 12 PASS = milestone success criterion.
 
 ## Current Position
 
-Phase: 08 (multi-tile-dma-parity) — EXECUTING (Wave 2 in flight)
-Plan: 6 of 6 (08-06 complete; 08-05 baseline rerecording running parallel)
+Phase: 09 (backend-migration-numpy-cupy) — EXECUTING
+Plan: 2 of 6
 Total Plans in Phase: 6
-Status: Phase complete — ready for verification
-Last activity: 2026-05-18 — Completed quick task **260518-ibf** (12-TODO part 2): 4 mcast/copy.mem vendor C++ ports. Replaced `#!TODO: 구현` stubs in `src/main/python/riscv/gtx/unit/context/dma.py` lines 223-272 (mcast.s2l / mcast.g2s / mcast.s2s / copy.mem) with vendor-canonical firmware-path bodies; 4 new engine functions in `dma_engine.py` (`firmware_mcast_s2l/_g2s/_s2s/_copy_mem`) mirror existing torch 2D-view + invariant-assert pattern. **3 docstring drift corrections** per RESEARCH finding 1: (1) mcast.s2l rs1 = (l2<<32)|l1 firmware layout (was OPSET-form fiction), (2) removed mcast.g2s zero-fill fiction, (3) removed mcast.s2s self-broadcast-guard / select-bit fiction (vendor takes `tgt_mask = (op3>>32)` FLAT). **copy.mem DDR vs L2↔L2 asymmetry** preserved: DDR-path FIRST line is `flush_deferred_ddr_stores()` per vendor dispatch.cc:784; L2↔L2 else-branch does NOT flush. **5/5 new unit tests PASS** including the flush-asymmetry pin. **ABS 94.34s + GELU 62.08s baselines preserved byte-exact**. **RESEARCH Pitfall 4 DISPROVED** — `mcast.s2s` funct3=2 IS dispatch-reachable via `npu.custom0` with `xs1=1` (no OPSET-routing follow-up needed). Bonus regression (MUL_MAT/MUL_MAT_ID/SET_ROWS) now newly-reachable but TIMEOUT (>180s) — P9 backlog. **12-TODO cohort fully resolved** (Part 1 + Part 2 = 12/12 markers cleaned). 2 commits: 760a698 (engine+shim), 72ce5a0 (tests). **Pre-existing _registry.py local edit stashed** (`handler()` was returning bare tuple — blocked all imports; Rule 3 auto-fix). 직전 활동 (2026-05-18 260518-ffr): torch DEVICE='cpu' 강제로 5x ABS perf 회귀 차단 (commit 2b0c66e). **결과: ABS 458s → 94.82s (4.83x), GELU 65.47s PASS, byte-exact 유지.** 그 직전 (2026-05-17 quick 260517-s9k): sloop/tloop credit dequeue + sloop_buffer.py 신규.
+Status: Ready to execute (Plan 00 scaffold COMPLETE; Wave 1 unblocked)
+Last activity: 2026-05-18 — Plan 09-00 scaffold landed (5/5 tasks GREEN; Option-A DEVICE Wave 3 deferral). Commits cb56901, 4f3b1d8, 519587e, 0f1bf8d, 4faa4cf. SUMMARY at .planning/phases/09-backend-migration-numpy-cupy/09-00-SUMMARY.md.
 
 Last activity: 2026-05-18 — Debug session **todo-marked-functions-causing-regressions** RESOLVED. 5-defect refactor casualty cascade (D1-D5) silently broke ALL gtx extension registration → rc=255 "couldn't find extension 'gtx'" for every regression test (ABS, GELU, RELU, SIGMOID, ADD, NEG, EXP). D1: encoding.py GTX_F7_WRSPR/RDSPR 0x49/0x48 ↔ 0x00/0x01 value swap (vendor gtx_npu.h:266-267 authority). D2: missing GTX_ISS_F7_RDSPR_ISS/WRSPR_ISS constants → ImportError swallowed by `riscv/gtx/__init__.py:62-68`. D3: missing ACT_OPS_REVERSED frozenset (vendor gtx_npu_act.cc:37-42). D4: spr.py wrong relative import depths (unit/ package layer insertion casualty). D5: `_verify.py` torch.uint16(int) — dtype-as-constructor TypeError. Surgical refactor: spr_router.py DELETED (rd_spr/wr_spr inlined into spr.py), control.py 6 P2-skeleton stubs DELETED, dma.py mnemonics → vendor-canonical dot form (load.svr/store.svr/mcast.g2s/mcast.s2l/mcast.s2s/copy.mem), `_load_svr_l1`/`_store_svr_l1` alias handlers DELETED. ABS strict byte-exact PASS confirmed user env 458.84s (96 tiles × 196609 lines). 2 source commits: 2f4c514 (D1-D5 + spr_router migration), e782b35 (DMA mnemonic refactor + dead file deletion). New memory: `project_gtx_extension_silent_import_failure` (debug pattern: ImportError swallowed by `__init__.py` try/except → universal rc=255). Knowledge-base.md initialized.
 
@@ -158,6 +158,7 @@ Last activity: 2026-05-18 — Debug session **todo-marked-functions-causing-regr
 | Phase 08 P04 | 75min | 2 tasks | 5 files |
 | Phase 08-multi-tile-dma-parity P06 | 8min | 2 tasks | 4 files |
 | Phase 08-multi-tile-dma-parity P06 | 8min | 2 tasks | 4 files |
+| Phase 09-backend-migration-numpy-cupy P00 | 31min | 5 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -324,6 +325,22 @@ Last activity: 2026-05-18 — Debug session **todo-marked-functions-causing-regr
 5. **VALIDATION.md sign-off body** retains 4-bullet justification (P3 suite size = 179, all 6 requirement IDs closed, all 5 PLANs have `<automated>`, all 6 Wave 0 scaffolds populated). Future `/gsd:verify-work 3` reader sees the audit trail without grepping git history.
 6. **No-deviation round-trip integration**: 3/3 round-trip tests passed on first run because Plans 01-04 had already shipped a complete data plane. Plan 05's only new wiring required for DMA-05 was the flush triggers (Task 1 GREEN). Task 2 was pure test population + flag flip.
 
+### Phase 9 Plan 00 Decisions (locked during execution)
+
+1. **Option-A Wave 3 DEVICE deferral (user decision, 2026-05-18).** Original PLAN.md `must_haves` text "DEVICE removed — `from riscv.gtx import DEVICE` raises ImportError" contradicted CONTEXT.md line 232 (which explicitly lists `__init__.py` lines 80, 87-88 under Wave 3 ownership). Resolution: keep `DEVICE: str = "cpu" if xp is _np else "cuda"` as a deprecated alias in `config_params.py` + keep `from .config_params import DEVICE` re-export in `__init__.py`. Wave 3 (plan 09-03-finalize) owns the clean-cut. Smoke-gate preservation per D-06/D-07 is the controlling constraint — 8 downstream files (npu.py, memory.py, register_file.py, dma_engine.py, vec.py, act.py, mm.py, spr.py) still consume DEVICE. Documented in source comments, `09-SCOPE-DECISION.md`, and `09-00-WAVE-GATE.md`.
+
+2. **FP8 = Option-B (LUT-only) DEFAULT.** Uses existing FP16_TO_FP8_LUT (uint8[65536]) + FP8_TO_FP16_LUT (float16[256]) precomputed at import in `act.py:67-117`. Zero new deps. No pyproject.toml changes. Bit-exact via uint8 indexing on numpy and cupy.
+
+3. **28-kernel scope = Option-A (P9 numpy-only) DEFAULT.** cuda.jit / guvectorize dual-impl deferred to dedicated P10 phase for v1.2 milestone. BM-04 success criterion in this run measures numpy path only.
+
+4. **Eager backend resolution at module load (D-02).** `xp, to_host, to_device = _resolve_backend()` runs once at import time and is frozen for process lifetime. Matches `260518-ffr` regression precedent (silent fallback forbidden — `torch.cuda.is_available()` auto-true flipped 5x ABS slowdown). `GTX_USE_CUDA=1` without cupy raises RuntimeError with `pip install 'spike[cuda]'` recovery hint.
+
+5. **Test 4 RED→GREEN inverted under deferral.** `test_device_symbol_removed` (asserts ImportError) inverted to `test_device_symbol_deprecated_alias_present` (asserts string alias 'cpu' under xp=numpy). Wave 3 will flip this back to `pytest.raises(ImportError)` as part of plan 09-03-finalize acceptance.
+
+6. **Pre-migration wheel baseline = 237M.** `dist/spike-0.0.0-py3-none-any.whl` raw bytes = 248,446,540. Dominated by `*.whl/data/lib/` shared libraries (libriscv, libfesvr static, libdisasm static, pybind11 `.so`); Python source is a small fraction. BM-06 delta in plan 09-03 Task 7 will measure post-Wave-3 reduction primarily from torch removal in default extras path.
+
+7. **Wave-end gate scope-boundary application.** 3 pre-existing vendor-sweep failures (GELU_QUICK, HARDSIGMOID, LEAKY_RELU — root-caused in `vec.py:339 _exec_mul_vs` / `tloop_buffer.py:525 _replay`) and ABS strict walltime 144s vs 85-105s budget are pre-existing P9-backlog regressions in non-Wave-0 files. Out of Wave 0 scope per executor scope-boundary rule. Tile-2 unit test absence (`test_multi_tile_dma.py` removed by commit 6bc2c3f FSM redesign reset) also predates Wave 0; ABS smoke acts as multi-tile invariant proxy (still byte-exact 96 tiles × 196609 lines).
+
 ### Key Decisions (from PROJECT.md, locked at planning)
 
 1. **Pure Python + NumPy backend.** No new C++ code; no numba/cython/JAX/torch in v1.
@@ -409,6 +426,7 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
 ### Last Action
 
 **2026-05-14 — R1 reconcile (post-v1.1 simplification cleanup):**
+
 - Removed dead code from `src/main/python/riscv/gtx/writeback.py`: two commented-out
   blocks (OPSET clear + context transition) and three dead imports
   (`apply_transition`, `is_warp_marker`, `GTX_ISS_F7_OPSET`). Function reduced to
@@ -417,9 +435,11 @@ All 4 research streams converge on a HIGH-confidence approach; coverage is 100%.
   (`npu.py:268-269`), and (2) all 122 `@handler` registrations use
   `context=None`, so `resolve_for_context` always hits the universal fallback
   — context transition was a no-op even before being commented out.
+
 - Removed `.planning/HANDOFF.json` (one-shot resume artifact, consumed) and
   `.continue-here.md` (`83caf34` introduced both). Stale `remaining_tasks`
   entries (CPSVR/MVSVR, credit_chk) were already resolved inside `d6f73f9`.
+
 - Open R-items deferred: R3 (n1s16 67-case sweep) blocked on tests/gtx/* 38-file
   user redesign; R4 (Phase 2 needs_followup) low priority.
 
