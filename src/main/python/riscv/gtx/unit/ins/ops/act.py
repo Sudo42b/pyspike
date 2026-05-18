@@ -21,11 +21,8 @@ Vendor authority for funct7/funct3 values:
 """
 from __future__ import annotations
 
-import torch
-from torch import Tensor
-
 from ...._registry import handler
-from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM
+from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM, xp
 from ..encoding import (
     ACT_OPS_REVERSED,
     GTX_ACT_ESUM, GTX_ACT_GELU, GTX_ACT_PRELU,
@@ -42,7 +39,7 @@ from ...csr import GSPR, LSPR
 # =============================================================================
 # 1. LUT builders + module-level tables
 # =============================================================================
-def _build_fp8_to_fp16_lut() -> torch.Tensor:
+def _build_fp8_to_fp16_lut():
     vals: list[float] = []
     for h in range(256):
         h_sign = (h & 0x80) >> 7
@@ -57,14 +54,15 @@ def _build_fp8_to_fp16_lut() -> torch.Tensor:
         if h_sign and not (val != val):   # x != x is NaN-safe
             val = -val
         vals.append(val)
-    out = torch.tensor(vals, dtype=torch.float16)
+    out = xp.array(vals, dtype=xp.float16)
     # Preserve negative-zero bit pattern for h=0x80 (sign=1, exp=0, frac=0).
-    out[0x80] = torch.tensor(-0.0, dtype=torch.float16)
+    # xp.float16(-0.0) round-trip; the explicit cast keeps the sign bit.
+    out[0x80] = xp.float16(-0.0)
     return out
 
 
-def _build_fp16_to_fp8_lut() -> torch.Tensor:
-    out = torch.zeros(65536, dtype=torch.uint8)
+def _build_fp16_to_fp8_lut():
+    out = xp.zeros(65536, dtype=xp.uint8)
     for h in range(65536):
         h_sign = (h >> 15) & 0x1
         h_exp = (h >> 10) & 0x1F
@@ -113,149 +111,182 @@ def _build_fp16_to_fp8_lut() -> torch.Tensor:
     return out
 
 
-FP8_TO_FP16_LUT: torch.Tensor = _build_fp8_to_fp16_lut()
-FP16_TO_FP8_LUT: torch.Tensor = _build_fp16_to_fp8_lut()
+FP8_TO_FP16_LUT = _build_fp8_to_fp16_lut()
+FP16_TO_FP8_LUT = _build_fp16_to_fp8_lut()
 
 
 # =============================================================================
 # 2. Format-conversion kernels
 # =============================================================================
-def fp8_e4m3_to_fp16(t_e4m3: torch.Tensor) -> torch.Tensor:
-    return t_e4m3.to(torch.float16)
+# FP8 strategy: Option-B LUT-only (locked default per 09-SCOPE-DECISION.md).
+# Single deterministic code path (H-1). The FP16_TO_FP8_LUT (uint8[65536])
+# and FP8_TO_FP16_LUT (float16[256]) are precomputed at module import; FP8
+# round-trips are uint8 indexing into the precomputed tables. The alternative
+# strategies considered (a new-dtype-package import or a descope branch) are
+# explicitly rejected by 09-SCOPE-DECISION.md.
+def fp8_e4m3_to_fp16(t_e4m3):
+    """FP8 -> FP16 via LUT (Option-B). uint8 index into 256-byte LUT."""
+    return FP8_TO_FP16_LUT[t_e4m3]
 
 
-def fp16_to_fp8_e4m3(t_fp16: torch.Tensor) -> torch.Tensor:
-    return t_fp16.to(torch.float8_e4m3fn)
+def fp16_to_fp8_e4m3(t_fp16):
+    """FP16 -> FP8 via LUT (Option-B). 16-bit reinterpret index into 64KB LUT."""
+    u16 = xp.ascontiguousarray(t_fp16.astype(xp.float16)).view(xp.uint16)
+    return FP16_TO_FP8_LUT[u16]
 
 
-def cvt_qh(arr_f16: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
-    """FP16 -> FP8. ``a = a * scale + offset``."""
-    a_f32 = arr_f16.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (a_f32 * s_f32 + o_f32).to(torch.float8_e4m3fn)
+def cvt_qh(arr_f16, scale: float, offset: float):
+    """FP16 -> FP8. ``a = a * scale + offset`` then LUT-based FP8 cast."""
+    a_f32 = arr_f16.astype(xp.float32)
+    scaled = (a_f32 * xp.float32(scale) + xp.float32(offset)).astype(xp.float16)
+    return fp16_to_fp8_e4m3(scaled)
 
 
-def cvt_hq(arr_f8: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
-    """FP8 -> FP16. ``out = decoded * scale + offset``."""
-    arr_f32 = arr_f8.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (arr_f32.to(torch.float16) * s_f32 + o_f32).to(torch.float16)
+def cvt_hq(arr_f8, scale: float, offset: float):
+    """FP8 -> FP16. ``out = decoded * scale + offset`` (LUT-based decode)."""
+    arr_f16 = fp8_e4m3_to_fp16(arr_f8)
+    arr_f32 = arr_f16.astype(xp.float32)
+    return (arr_f32 * xp.float32(scale) + xp.float32(offset)).astype(xp.float16)
 
 
-def cvt_ih(arr_f16: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
+def cvt_ih(arr_f16, scale: float, offset: float):
     """FP16 -> INT8 saturating in [-128, 127]. ``gtx_npu_act.cc:288-297``."""
-    a_f32 = arr_f16.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return torch.clamp(torch.round(a_f32 * s_f32 + o_f32), -128, 127).to(torch.int8)
+    a_f32 = arr_f16.astype(xp.float32)
+    scaled = a_f32 * xp.float32(scale) + xp.float32(offset)
+    return xp.clip(xp.round(scaled), -128, 127).astype(xp.int8)
 
 
-def cvt_hi(arr_f16: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
+def cvt_hi(arr_i8, scale: float, offset: float):
     """INT8 -> FP16. ``out = int8 * scale + offset``."""
-    arr_f32 = arr_f16.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (arr_f32 * s_f32 + o_f32).to(torch.float16)
+    arr_f32 = arr_i8.astype(xp.float32)
+    return (arr_f32 * xp.float32(scale) + xp.float32(offset)).astype(xp.float16)
 
 
-def cvt_hn(arr_i32: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
+def cvt_hn(arr_i32, scale: float, offset: float):
     """INT32 -> FP16 normalize. ``gtx_npu_act.cc:301-313``."""
-    arr_f32 = arr_i32.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (arr_f32 * s_f32 + o_f32).to(torch.float16)
+    arr_f32 = arr_i32.astype(xp.float32)
+    return (arr_f32 * xp.float32(scale) + xp.float32(offset)).astype(xp.float16)
 
 
-def cvt_sh(arr_f32: torch.Tensor) -> torch.Tensor:
-    """FP32 -> FP16 (bit-pattern preserving)."""
-    return arr_f32.to(torch.float16)
+def cvt_sh(arr_f32):
+    """FP32 -> FP16 (single rounding)."""
+    return arr_f32.astype(xp.float16)
 
 
-def cvt_hs(arr_f16: torch.Tensor) -> torch.Tensor:
-    """FP16 -> FP32 (bit-pattern preserving)."""
-    return arr_f16.to(torch.float32)
+def cvt_hs(arr_f16):
+    """FP16 -> FP32 (bit-pattern widening)."""
+    return arr_f16.astype(xp.float32)
 
 
-def cvt_dh(arr_f64: torch.Tensor) -> torch.Tensor:
+def cvt_dh(arr_f64):
     """FP64 -> FP16 (single rounding)."""
-    return arr_f64.to(torch.float16)
+    return arr_f64.astype(xp.float16)
 
 
-def cvt_hd(arr_f16: torch.Tensor) -> torch.Tensor:
+def cvt_hd(arr_f16):
     """FP16 -> FP64 (bit-exact widening)."""
-    return arr_f16.to(torch.float64)
+    return arr_f16.astype(xp.float64)
 
 
 # =============================================================================
 # 3. Activation kernels
 # =============================================================================
-def relu(arr_f16: Tensor) -> torch.Tensor:
-    return torch.relu(arr_f16.to(torch.float32)).to(torch.float16)
+def relu(arr_f16):
+    # numpy has no .relu; use xp.maximum(x, 0).
+    f32 = arr_f16.astype(xp.float32)
+    return xp.maximum(f32, xp.float32(0.0)).astype(xp.float16)
 
 
-def prelu(arr_f16: Tensor, slope: Tensor) -> Tensor:
-    return torch.nn.functional.prelu(arr_f16.to(torch.float32), slope).to(torch.float16)
+def prelu(arr_f16, slope):
+    """PReLU: x if x >= 0 else slope * x (per-element). `slope` is a 0-d/scalar."""
+    f32 = arr_f16.astype(xp.float32)
+    s32 = xp.float32(float(slope))
+    return xp.where(f32 >= 0.0, f32, s32 * f32).astype(xp.float16)
 
 
-def gelu(arr_f16: Tensor) -> Tensor:
-    return torch.nn.functional.gelu(arr_f16.to(torch.float32)).to(torch.float16)
+def gelu(arr_f16):
+    """Approximate GELU (tanh form) — matches vendor C++ default + the
+    approximate path: ``0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))``.
+    """
+    f32 = arr_f16.astype(xp.float32)
+    c = xp.float32(0.7978845608028654)   # sqrt(2/pi)
+    inner = c * (f32 + xp.float32(0.044715) * (f32 ** 3))
+    out = xp.float32(0.5) * f32 * (xp.float32(1.0) + xp.tanh(inner))
+    return out.astype(xp.float16)
 
 
-def tanh(arr_f16: Tensor) -> Tensor:
-    return torch.tanh(arr_f16.to(torch.float32)).to(torch.float16)
+def tanh(arr_f16):
+    return xp.tanh(arr_f16.astype(xp.float32)).astype(xp.float16)
 
 
-def sigmoid(arr_f16: Tensor) -> Tensor:
-    return torch.sigmoid(arr_f16.to(torch.float32)).to(torch.float16)
+def sigmoid(arr_f16):
+    # numpy has no .sigmoid; explicit 1/(1+exp(-x)) on FP32 accumulator.
+    f32 = arr_f16.astype(xp.float32)
+    return (xp.float32(1.0) / (xp.float32(1.0) + xp.exp(-f32))).astype(xp.float16)
 
 
-def softmax(arr_f16: Tensor) -> Tensor:
-    return torch.nn.functional.softmax(arr_f16.to(torch.float32), dim=0).to(torch.float16)
+def softmax(arr_f16):
+    # Stable softmax: subtract max for numerical stability.
+    f32 = arr_f16.astype(xp.float32)
+    shift = f32 - xp.max(f32)
+    exp = xp.exp(shift)
+    return (exp / xp.sum(exp)).astype(xp.float16)
 
 
-def esum(arr_f16: Tensor, max_val: float, init_accum: float) -> Tensor:
-    arr_f32 = arr_f16.to(torch.float32)
-    max_val_f32 = torch.as_tensor(max_val, dtype=torch.float32)
-    init_accum_f32 = torch.as_tensor(init_accum, dtype=torch.float32)
-    return (init_accum_f32 + torch.sum(torch.exp(arr_f32 - max_val_f32))).to(torch.float16)
+def esum(arr_f16, max_val: float, init_accum: float):
+    arr_f32 = arr_f16.astype(xp.float32)
+    max_val_f32 = xp.float32(float(max_val))
+    init_accum_f32 = xp.float32(float(init_accum))
+    return (init_accum_f32 + xp.sum(xp.exp(arr_f32 - max_val_f32))).astype(xp.float16)
 
 
 # =============================================================================
 # 4. Pool kernels
 # =============================================================================
-def pool_max(arr_f16: Tensor, kernel_size: int) -> Tensor:
-    out = torch.max_pool1d(arr_f16.to(torch.float32),
-                            kernel_size=kernel_size, stride=kernel_size)
-    return out.to(torch.float16)
+def pool_max(arr_f16, kernel_size: int):
+    """1-D max-pool with non-overlapping windows (stride == kernel_size).
+
+    Reshape to (N, K) windows then reduce over K.
+    """
+    f32 = arr_f16.astype(xp.float32).reshape(-1)
+    n = f32.shape[0]
+    # truncate to multiple of kernel_size (matches torch's stride=kernel_size
+    # contract with no padding).
+    nfull = (n // kernel_size) * kernel_size
+    windows = f32[:nfull].reshape(-1, kernel_size)
+    return xp.max(windows, axis=1).astype(xp.float16)
 
 
-def pool_avg(arr_f16: Tensor, kernel_size: int) -> Tensor:
-    out = torch.avg_pool1d(arr_f16.to(torch.float32),
-                            kernel_size=kernel_size, stride=kernel_size,
-                            count_include_pad=False)
-    return out.to(torch.float16)
+def pool_avg(arr_f16, kernel_size: int):
+    """1-D avg-pool with non-overlapping windows; count_include_pad=False
+    is moot under stride==kernel_size (no implicit padding)."""
+    f32 = arr_f16.astype(xp.float32).reshape(-1)
+    n = f32.shape[0]
+    nfull = (n // kernel_size) * kernel_size
+    windows = f32[:nfull].reshape(-1, kernel_size)
+    return xp.mean(windows, axis=1).astype(xp.float16)
 
 
 # =============================================================================
 # 5. FP16 bit-pattern helpers + L0 block view + warp routing
 # =============================================================================
-def _fp16_low16(packed: int) -> torch.Tensor:
+def _fp16_low16(packed: int):
     """Decode bits[15:0] of an integer as an FP16 scalar (LE bit pattern)."""
-    u16 = torch.tensor([packed & 0xFFFF], dtype=torch.int16)
-    return u16.view(torch.float16)[0]
+    u16 = xp.array([packed & 0xFFFF], dtype=xp.uint16)
+    return u16.view(xp.float16)[0]
 
 
-def _fp16_high16(packed: int) -> torch.Tensor:
+def _fp16_high16(packed: int):
     """Decode bits[31:16] of an integer as an FP16 scalar (LE bit pattern)."""
-    u16 = torch.tensor([(packed >> 16) & 0xFFFF], dtype=torch.int16)
-    return u16.view(torch.float16)[0]
+    u16 = xp.array([(packed >> 16) & 0xFFFF], dtype=xp.uint16)
+    return u16.view(xp.float16)[0]
 
 
-def _fp16_raw_bits(scalar: torch.Tensor) -> int:
+def _fp16_raw_bits(scalar) -> int:
     """Reinterpret an FP16 scalar as its little-endian uint16 bit pattern."""
-    t = scalar.to(torch.float16).reshape(1).contiguous().view(torch.int16)
+    t = xp.ascontiguousarray(
+        xp.asarray(scalar, dtype=xp.float16).reshape(1)
+    ).view(xp.uint16)
     return int(t[0]) & 0xFFFF
 
 
@@ -269,17 +300,20 @@ def _resolve_nest_spu(npu) -> tuple[int, int]:
     return nest, spu
 
 
-def _l0_block_view(npu, nest: int, spu: int, reg: int) -> torch.Tensor:
-    """Return an FP16 view of ``L0[(reg & 0x1F)*32 .. +32]`` (16 elements)."""
-    l0 = npu.mem.l0_byte(nest, spu)
+def _l0_block_view(npu, nest: int, spu: int, reg: int):
+    """Return an FP16 view of ``L0[(reg & 0x1F)*32 .. +32]`` (16 elements).
+
+    Bypasses the WAVE-1-SHIM by reading raw xp storage (npu.mem.l0) and
+    taking the .view(xp.float16) ourselves.
+    """
+    l0 = npu.mem.l0[nest, spu]
     off = ((reg & 0x1F) * 32) % GTX_L0_SIZE_BYTES
-    return l0.view(torch.float16)[off // 2:off // 2 + 16]
+    return l0.view(xp.float16)[off // 2:off // 2 + 16]
 
 
-def _write_l0_fp16_scalar(npu, nest: int, spu: int, l0_offset: int,
-                          scalar: torch.Tensor) -> None:
+def _write_l0_fp16_scalar(npu, nest: int, spu: int, l0_offset: int, scalar) -> None:
     """Write a single FP16 LE word at ``L0[l0_offset]``."""
-    l0 = npu.mem.l0_byte(nest, spu)
+    l0 = npu.mem.l0[nest, spu]
     u16 = _fp16_raw_bits(scalar)
     l0[l0_offset] = u16 & 0xFF
     l0[l0_offset + 1] = (u16 >> 8) & 0xFF
@@ -309,7 +343,8 @@ def firmware_act(npu, proc, insn, *, op_id: int, is_reversed: bool) -> int:
     if length == 0:
         length = 0x10000
 
-    l1_f16 = npu.mem.l1_f16(nest, spu)
+    # Bypass WAVE-1-SHIM: read raw xp storage and take fp16 view ourselves.
+    l1_f16 = npu.mem.l1[nest, spu].view(xp.float16)
     rd_off = (rd_addr // 2) % (l1_f16.shape[0])
     view_in = l1_f16[rd_off:rd_off + length]
 
@@ -389,7 +424,7 @@ def firmware_softmax_imm(npu, proc, insn, *, op_id: int) -> int:
 
     if op_id == GTX_ACT_ESUM:
         scalar = esum(view_in, max_val=max_val, init_accum=accum_val)
-        l0 = npu.mem.l0_byte(nest, spu)
+        l0 = npu.mem.l0[nest, spu]
         r_off = ((out_reg & 0x1F) * 32) % GTX_L0_SIZE_BYTES
         r16 = _fp16_raw_bits(scalar)
         m16 = _fp16_raw_bits(max_val)
@@ -397,17 +432,15 @@ def firmware_softmax_imm(npu, proc, insn, *, op_id: int) -> int:
         l0[r_off + 1] = (r16 >> 8) & 0xFF
         l0[r_off + 2] = m16 & 0xFF
         l0[r_off + 3] = (m16 >> 8) & 0xFF
-        for x in range(2, 16):
-            l0[r_off + x * 2] = 0
-            l0[r_off + x * 2 + 1] = 0
+        # zero bytes 4..31 in one slice-assign (replaces per-element loop).
+        l0[r_off + 4:r_off + 32] = 0
     elif op_id == GTX_ACT_SOFTMAX:
         # r[i] = exp(x[i] - max - ln(esum)); vendor uses pre-computed esum.
-        f32 = view_in.to(torch.float32)
-        max_f = max_val.to(torch.float32)
-        esum_f = accum_val.to(torch.float32)
-        ln_esum = (torch.log(esum_f) if float(esum_f) > 0.0
-                   else torch.tensor(0.0, device=esum_f.device))
-        result = torch.exp(f32 - max_f - ln_esum).to(torch.float16)
+        f32 = view_in.astype(xp.float32)
+        max_f = xp.float32(float(max_val))
+        esum_f = xp.float32(float(accum_val))
+        ln_esum = xp.log(esum_f) if float(esum_f) > 0.0 else xp.float32(0.0)
+        result = xp.exp(f32 - max_f - ln_esum).astype(xp.float16)
         view_out = _l0_block_view(npu, nest, spu, out_reg)
         view_out[:] = result
     return 0
@@ -430,7 +463,8 @@ def firmware_pool(npu, proc, insn, *, is_max: bool) -> int:
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
-    l1_f16 = npu.mem.l1_f16(nest, spu)
+    # Bypass WAVE-1-SHIM: read raw xp storage and take fp16 view ourselves.
+    l1_f16 = npu.mem.l1[nest, spu].view(xp.float16)
     in_off = (addr_a // 2) % l1_f16.shape[0]
     in_view = l1_f16[in_off:in_off + length]
 
@@ -444,8 +478,8 @@ def firmware_pool(npu, proc, insn, *, is_max: bool) -> int:
 _BYTES_PER_ELEM = {'fp16': 2, 'fp32': 4, 'fp64': 8,
                    'fp8': 1, 'int8': 1, 'int32': 4}
 
-_CVT_DTYPE_IN = {'fp16': torch.float16, 'fp32': torch.float32, 'fp64': torch.float64,
-                 'fp8': torch.uint8, 'int8': torch.int8, 'int32': torch.int32}
+_CVT_DTYPE_IN = {'fp16': xp.float16, 'fp32': xp.float32, 'fp64': xp.float64,
+                 'fp8': xp.uint8, 'int8': xp.int8, 'int32': xp.int32}
 
 
 def firmware_format(npu, proc, insn, *, src_kind: str, dst_kind: str) -> int:
@@ -463,9 +497,12 @@ def firmware_format(npu, proc, insn, *, src_kind: str, dst_kind: str) -> int:
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
-    l1 = npu.mem.l1_byte(nest, spu)
+    # Bypass WAVE-1-SHIM: raw xp byte storage. .copy() (xp) replaces
+    # .clone().contiguous() (torch) — xp.copy is already a contiguous
+    # alloc + memcpy.
+    l1 = npu.mem.l1[nest, spu]
     in_size = length * _BYTES_PER_ELEM[src_kind]
-    in_bytes = l1[addr_a:addr_a + in_size].clone().contiguous()
+    in_bytes = xp.ascontiguousarray(l1[addr_a:addr_a + in_size].copy())
     in_arr = in_bytes.view(_CVT_DTYPE_IN[src_kind])
 
     if src_kind == 'fp16' and dst_kind == 'fp8':
@@ -489,8 +526,8 @@ def firmware_format(npu, proc, insn, *, src_kind: str, dst_kind: str) -> int:
     else:
         return 0
 
-    out_bytes = out_arr.contiguous().view(torch.uint8)
-    l1[addr_r:addr_r + out_bytes.numel()] = out_bytes
+    out_bytes = xp.ascontiguousarray(out_arr).view(xp.uint8)
+    l1[addr_r:addr_r + int(out_bytes.size)] = out_bytes
     return 0
 
 
