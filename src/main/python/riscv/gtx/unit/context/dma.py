@@ -303,7 +303,16 @@ def _credit_ld(npu, proc, insn, xs1, xs2):
     pyspike's sequential model makes the *_chk variants pass unconditionally,
     so the counter state is currently unobserved by control flow. Tracked
     anyway for vendor 1:1 parity and to surface future check-path coupling.
-    #!TODO: operand 맞는지 확인.
+
+    # Operand layout verified against
+    # vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:646-661 +
+    # gtx_npu_dispatch.cc:874-882 (parity confirmed 260518-hxk):
+    # vendor consumes ONLY warp state (is_ploop / is_sloop / is_tloop +
+    # tmu_id + curr_id) — no rs1/rs2 GPR reads, no GSPR operand staging.
+    # The target_spu / target_nest bitmask docstring fields below describe
+    # the ENCODING SLOTS reserved by the ISA but NOT used by the functional
+    # model (mirrors vendor: both the dispatch.cc and custom0.cc paths
+    # ignore them — they only matter for a future cycle-accurate path).
     operand1: *target_spu[63:0]
     operand2: *target_nest[63:0]
     """
@@ -311,9 +320,9 @@ def _credit_ld(npu, proc, insn, xs1, xs2):
     nest_id = warp.tmu_id if warp.is_ploop else 0
     if nest_id < GTX_NEST_NUM:
         if warp.is_sloop:
-            #!TODO: vector연산으로 바꿀 것.
-            for s in range(GTX_SPU_NUM):
-                npu._credit_ld[nest_id, s] += 1
+            # Vector port of per-SPU for-loop (260518-hxk perf cleanup).
+            # Equivalent to: for s in range(GTX_SPU_NUM): _credit_ld[nest_id, s] += 1
+            npu._credit_ld[nest_id, :] += 1
         elif warp.is_tloop and warp.curr_id < GTX_SPU_NUM:
             npu._credit_ld[nest_id, warp.curr_id] -= 1
     return 0
@@ -334,9 +343,11 @@ def _credit_st(npu, proc, insn, xs1, xs2):
         if warp.is_tloop and warp.curr_id < GTX_SPU_NUM:
             npu._credit_st[nest_id, warp.curr_id] += 1
         elif warp.is_sloop:
-            #!TODO: vector연산으로 바꿀 것. npu._credit_st[nest_id, :] -= 1
-            for s in range(GTX_SPU_NUM):
-                npu._credit_st[nest_id, s] -= 1
+            # Vector port of per-SPU for-loop (260518-hxk perf cleanup).
+            # Verified against vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:668-672
+            # (S-loop decrements all SPUs in NEST). Equivalent to:
+            # for s in range(GTX_SPU_NUM): _credit_st[nest_id, s] -= 1
+            npu._credit_st[nest_id, :] -= 1
     return 0
 
 
@@ -460,8 +471,18 @@ def _credit_st_chk(npu, proc, insn, xs1, xs2):
         total = int(row.sum().item())
         if total > 0:
             # Decrement one credit (first non-zero SPU slot only).
-            #!TODO 만약 0보다 작은데 감소시키면 오류 발생. 해야함.
-            #!TODO vector연산으로 바꿀 것. if total > 0: row[row > 0] -= 1; break
+            # Negative-decrement is impossible here: outer `total > 0`
+            # gate (line above) + inner `row[s] > 0` guard below jointly
+            # ensure we only touch positive slots. (260518-hxk verified.)
+            # NOT vectorisable: must decrement ONLY the first non-zero SPU
+            # slot to mirror the producer-side single-SPU increment at
+            # `_credit_st` T-loop branch (this file, T-loop +=1 branch).
+            # `row[row > 0] -= 1` would decrement every non-zero slot —
+            # semantic mismatch with producer pattern. for-loop with break
+            # is intentional. Vendor parity: gtx_npu_custom0.cc:662-676
+            # functional model has no observable wait (DMA instantaneous);
+            # the counter delta is the only side-effect that matters.
+            # (260518-hxk verified.)
             for s in range(GTX_SPU_NUM):
                 if int(row[s]) > 0:
                     row[s] = int(row[s]) - 1
