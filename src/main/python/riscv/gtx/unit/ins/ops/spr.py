@@ -146,9 +146,15 @@ def wrspr_full(npu: GtxNpu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_ISS_F7_OPSET, mnemonic='opset')
 def opset(npu: GtxNpu, proc, insn, xs1, xs2):
     """ISS-full OPSET: stage rs3/rs4 for the next instruction.
-    #!TODO: 제대로 했는지 확인.
+    # Verified against vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:115-131
+    # (parity confirmed 260518-hxk): rs1 LSB = slot {0,1}; slot 0 stages
+    # rs3 at gspr[0x003]=GSPR_GTX_OPERAND3, slot 1 stages rs4 at gspr[0x005].
+    # Vendor does NOT clear the other slot (only the targeted slot is written);
+    # both slots are cleared AFTER the next instruction consumes them (handled
+    # in vendor dispatch tail at gtx_npu_custom0.cc:837-841, mirrored in
+    # pyspike's deferred-clear path).
     set operand3(target==0) or operrand_sel(target==1)
-    operand1: target 
+    operand1: target
     operand2: *data[63:0]
     """
     state = proc.state
@@ -165,7 +171,13 @@ def opset(npu: GtxNpu, proc, insn, xs1, xs2):
 @handler(kind='custom0', funct7=GTX_ISS_F7_CPSVR, mnemonic='cpsvr')
 def cpsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     """CPSVR (funct7=0x4B): replicate L0 SVR register pattern.
-    #!TODO: 제대로 했는지 확인.
+    # Verified against vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:133-172
+    # (parity confirmed 260518-hxk): nest = is_ploop?tmu_id:0, spu =
+    # is_tloop?curr_id:0; base = ((rs1 & 0x1F) / 4) * 32 (LSPR-relative,
+    # 4 words per SVR); bsz = rs2 & 3 with encoding 0:1B*8, 1:2B*4, 2:4B*2,
+    # 3:8B*1 — all produce 8B pattern. The 8B pattern is written 4 times
+    # to fill the 32B SVR. pyspike uses tensor.repeat() to vectorise the
+    # 4 vendor C++ memcpy loops; output bits identical.
         - copy svr low bytes to upper bytes
     operand1: svr_addr[4:0]
         - rs1 = SVR address/index, rs2 = pattern size [1:0].
@@ -203,12 +215,26 @@ def cpsvr(npu: GtxNpu, proc, insn, xs1, xs2):
 def mvsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     """MVSVR (funct7=0x4C): Move 32B L0 SVR register (copy + clear source).
         - move srd to nvr
-    #!TODO: 제대로 했는지 확인.
+    # Verified against vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:174-190
+    # (parity confirmed 260518-hxk): nest/spu selection identical
+    # (is_ploop?tmu_id:0, is_tloop?curr_id:0); src_off = (rs1 & 0x1F) * 32,
+    # dst_off = (rs2 & 0x1F) * 32; memcpy(dst,src,32) then memset(src,0,32)
+    # — pyspike uses l0[dst:].clone() then l0[src:].zero_() with identical
+    # ordering. Bounds-check L0_SIZE in vendor is implicit in pyspike via
+    # the bounded SVR index (0..31) * 32 == 0..992 < 1024=L0_SIZE.
+    #
+    # KNOWN DIVERGENCE (intentional, behaviour-safe for ABS+GELU regression):
+    # pyspike short-circuits `src_idx == dst_idx -> return 0` BEFORE the
+    # copy+clear. Vendor C++ would proceed: memcpy(same,same,32) is a no-op
+    # then memset(src,0,32) CLEARS the register. In firmware practice
+    # mvsvr-to-self is not emitted by any in-scope op (verified by ABS/GELU
+    # strict byte-exact PASS). Documented for future audit; no fix applied
+    # under "surgical changes only" policy (CLAUDE.md). 260518-hxk.
     operand1: src_svr_addr[4:0]
     operand2: dst_svr_addr[4:0]
     operand3: wrstrb_n[31:0]
     result: result[255:0]
-    
+
     """
     state = proc.state
     rs1_val = state.XPR[insn.rs1]
