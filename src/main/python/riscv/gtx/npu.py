@@ -7,16 +7,15 @@ typed name (``self.gspr.GTX_OPERAND3``) wherever the source
 register is declared in :mod:`unit.csr`.
 """
 import os
-from typing import List, Optional
+from typing import Any, List, Optional
 
-import torch
 # pylint: disable=import-error,no-name-in-module
 from riscv import isa
 from riscv.csrs import csr_t
 from riscv.disasm import disasm_insn_t
 from riscv.processor import insn_desc_t, processor_t
 
-from .config_params import GTX_NEST_NUM, GTX_SPU_NUM, DEVICE
+from .config_params import GTX_NEST_NUM, GTX_SPU_NUM, xp, to_host
 from .dispatch import build_custom0_table, build_custom1_table, resolve_for_context
 from .tloop_buffer import (
     BUFFERABLE_MNEMONICS as _TLOOP_BUFFERABLE,
@@ -87,23 +86,22 @@ class GtxNpu(isa.ROCC):
         # Deferred S-loop L2->DDR store queue.
         self.deferred_ddr_stores: list = []
         
-        # Layered SPR storage — Tensor-backed via RegisterFile.
+        # Layered SPR storage — xp-backed via RegisterFile (D-11: follows
+        # scratchpad device; numpy=host, cupy=GPU).
         #   gspr: single instance               (shape: [1024])
         #   nspr: per-NEST                       (shape: [NEST, 1024])
         #   lspr: per-(NEST, SPU)                (shape: [NEST, SPU, 1024])
-        self.gspr = RegisterFile(GSPR, shape=(1024,), device=DEVICE)
-        self.nspr = RegisterFile(NSPR, shape=(GTX_NEST_NUM, 1024), device=DEVICE)
-        self.lspr = RegisterFile(LSPR, shape=(GTX_NEST_NUM, GTX_SPU_NUM, 1024), device=DEVICE)
+        self.gspr = RegisterFile(GSPR, shape=(1024,))
+        self.nspr = RegisterFile(NSPR, shape=(GTX_NEST_NUM, 1024))
+        self.lspr = RegisterFile(LSPR, shape=(GTX_NEST_NUM, GTX_SPU_NUM, 1024))
 
-        self._mxe_accum: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.float32,
-            device=DEVICE)
-        self._credit_ld: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32,
-            device=DEVICE)
-        self._credit_st: torch.Tensor = torch.zeros(
-            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=torch.int32,
-            device=DEVICE)
+        # NEST × SPU state arrays — xp.ndarray (D-11 device-implicit).
+        self._mxe_accum: Any = xp.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=xp.float32)
+        self._credit_ld: Any = xp.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=xp.int32)
+        self._credit_st: Any = xp.zeros(
+            (GTX_NEST_NUM, GTX_SPU_NUM), dtype=xp.int32)
 
         self._disasm_entries: List[disasm_insn_t] = []
 
@@ -202,10 +200,10 @@ class GtxNpu(isa.ROCC):
         except Exception:
             pass
 
-        # Per-(NEST, SPU) state reset
-        self._mxe_accum.fill_(0.0)
-        self._credit_ld.fill_(0)
-        self._credit_st.fill_(0)
+        # Per-(NEST, SPU) state reset (xp-uniform in-place broadcast assign).
+        self._mxe_accum[...] = 0.0
+        self._credit_ld[...] = 0
+        self._credit_st[...] = 0
 
         # Memory hierarchy reset
         self.mem.reset_scratchpads()
@@ -351,7 +349,11 @@ class GtxNpu(isa.ROCC):
             return
         from .config_params import GTX_L2_SIZE_BYTES
         for req in self.deferred_ddr_stores:
-            l2_src = self.mem.l2_byte(req.nest).cpu()
+            # D-12: explicit H/D bridge at DMA boundary. Identity under
+            # xp=numpy (no copy); under xp=cupy this is the documented
+            # contract point — Wave 3 will revisit whether L2→DDR should
+            # bridge or stay device-resident (D-10 GPU-uniform DDR).
+            l2_src = to_host(self.mem.l2_byte(req.nest))
             max_off = req.ddr_off + (req.height - 1) * req.ddr_stride + req.length
             self.mem.ensure_ddr(max_off)
             cap = self.mem.ddr.capacity()

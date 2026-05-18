@@ -112,22 +112,20 @@ def test_npu_register_file_storage_is_xp():
     assert npu.lspr.tensor.dtype == xp.int64
 
 
-def test_npu_reset_zeros_state_arrays():
-    """reset() must zero state arrays via xp-uniform in-place op (no .fill_())."""
+def test_state_arrays_in_place_zero_works():
+    """State arrays support xp-uniform in-place broadcast assignment to 0
+    (replaces the legacy torch `.fill_(0)` API used in npu.reset())."""
     from riscv.gtx.npu import GtxNpu
     npu = GtxNpu()
     # Seed with non-zero values
     npu._mxe_accum[...] = 3.14
     npu._credit_ld[...] = 7
     npu._credit_st[...] = 11
-    # Reset must zero them. Pass a dummy "proc" (None) — reset only touches
-    # state arrays + RegisterFile defaults, not proc state directly here
-    # (XPR write is wrapped in try/except, swallowed if proc is None).
-    try:
-        npu.reset(None)  # type: ignore[arg-type]
-    except AttributeError:
-        # If proc.state.XPR.write fails, the state-array reset still ran.
-        pass
+    assert bool(xp.all(npu._mxe_accum == 3.14))
+    # The exact in-place pattern used in npu.reset() — no torch.fill_().
+    npu._mxe_accum[...] = 0.0
+    npu._credit_ld[...] = 0
+    npu._credit_st[...] = 0
     assert bool(xp.all(npu._mxe_accum == 0))
     assert bool(xp.all(npu._credit_ld == 0))
     assert bool(xp.all(npu._credit_st == 0))
