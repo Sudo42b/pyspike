@@ -32,7 +32,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 ### Milestone v1.1 — Post-Ship Polish
 
 - [ ] **Phase 8: Multi-tile DMA Parity** — Port vendor `gtx_npu_dma.cc` multi-tile loop so vendor 84-op `n1s16` regression passes strict-mode past the first `MAX_SHARED_DMA_BYTES=65535` boundary; close P7 HUMAN-UAT items #1 (M ≥ 12 sweep PASS) and #2 (5x walltime measurement)
-- [ ] **Phase 9: Backend migration — PyTorch → NumPy + CuPy opt-in (dual-backend xp alias)** — Replace torch.Tensor with numpy.ndarray as default; introduce `xp` alias (`xp = numpy` or `xp = cupy` based on `GTX_USE_CUDA` env-var) so optional CUDA acceleration becomes a drop-in swap. Realigns with CLAUDE.md design intent ("NumPy 백엔드 가정"). Removes torch hard dependency; CuPy added as `pip install spike[cuda]` extra.
+- [ ] **Phase 9: Backend migration — PyTorch → NumPy + CuPy opt-in (dual-backend `xp` alias)** — Replace torch.Tensor with numpy.ndarray as default; introduce `xp` alias (`xp = numpy` or `xp = cupy` based on `GTX_USE_CUDA` env-var) so optional CUDA acceleration becomes a drop-in swap. Realigns with CLAUDE.md design intent ("NumPy 백엔드 가정"). Removes torch hard dependency; CuPy added as `pip install spike[cuda]` extra.
 
 ---
 
