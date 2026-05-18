@@ -2,9 +2,10 @@
 phase: 09-backend-migration-numpy-cupy
 plan: 02a
 type: execute
-wave: 3
+wave: 4
+# CONTEXT D-05 Wave 2 = plans 09-02a + 09-02b (this is part a — op handlers).
 depends_on:
-  - 09-backend-migration-numpy-cupy/01-memory-regs
+  - "01b"
 files_modified:
   - src/main/python/riscv/gtx/unit/ins/ops/spr.py
   - src/main/python/riscv/gtx/unit/ins/ops/mm.py
@@ -18,16 +19,17 @@ user_setup: []
 
 must_haves:
   truths:
-    - "`unit/ins/ops/spr.py` is torch-free; SPR write/read paths use xp scalars."
+    - "`unit/ins/ops/spr.py` is torch-free; SPR write/read paths use Python ints (no xp import — file uses pure integer arithmetic per H-3)."
     - "`unit/ins/ops/mm.py` `gemm_core` + variant helpers use `xp.matmul` / `xp.dot` / `xp.sum` (BLAS dispatch identical to current torch path)."
     - "`unit/ins/ops/vec.py` `_apply_unary` + sasmd/dot/vsum/clamp/cumsum/arange use xp; FP32-internal-accumulate preserved (RESEARCH Pattern 4)."
-    - "`unit/ins/ops/act.py` activations (relu, prelu, gelu, tanh, sigmoid, softmax, esum) use xp; FP8 conversion path follows locked strategy from 09-SCOPE-DECISION.md (LUT-only if option B chosen)."
+    - "`unit/ins/ops/act.py` activations (relu, prelu, gelu, tanh, sigmoid, softmax, esum) use xp; FP8 conversion uses LUT-only path (locked default per 09-SCOPE-DECISION.md Option-B)."
     - "FP8 LUTs (`FP16_TO_FP8_LUT` + `FP8_TO_FP16_LUT`) preserved as import-time uint8/float16 arrays via xp."
+    - "No `float8_e4m3fn` reference anywhere in act.py (H-1: deterministic single code path)."
     - "Wave-end gate: GELU + RELU + SIGMOID + TANH + SOFTMAX + ABS smoke + tile-2 all PASS; ABS perf in 85-105s."
   artifacts:
     - path: "src/main/python/riscv/gtx/unit/ins/ops/spr.py"
-      provides: "SPR custom0/1 handlers using xp"
-      contains: "from ....config_params import xp"
+      provides: "SPR custom0/1 handlers (torch-free, pure Python ints)"
+      contains: "# spr.py uses Python ints"
     - path: "src/main/python/riscv/gtx/unit/ins/ops/mm.py"
       provides: "gemm_core + MM variants on xp (BLAS-equivalent semantics)"
       contains: "xp.matmul"
@@ -35,7 +37,7 @@ must_haves:
       provides: "Vector unary/binary ops + _apply_unary dispatch on xp"
       contains: "xp.abs"
     - path: "src/main/python/riscv/gtx/unit/ins/ops/act.py"
-      provides: "Activation functions + FP8 LUT cvt paths on xp"
+      provides: "Activation functions + FP8 LUT cvt paths on xp (Option-B locked)"
       contains: "FP16_TO_FP8_LUT"
   key_links:
     - from: "src/main/python/riscv/gtx/unit/ins/ops/mm.py"
@@ -49,7 +51,7 @@ must_haves:
 ---
 
 <objective>
-Wave 2a: Port the four op-handler modules (`spr.py`, `mm.py`, `vec.py`, `act.py`) plus the CSR `register.py` doc-string update from torch to xp. These modules implement the per-RoCC-instruction custom0/1 handler dispatch — they are the hot path called once per dispatched instruction. Activation kernels (`act.py`) carry the FP8 strategy locked in Wave 0 (`09-SCOPE-DECISION.md`).
+Wave 2a: Port the four op-handler modules (`spr.py`, `mm.py`, `vec.py`, `act.py`) plus the CSR `register.py` doc-string update from torch to xp. These modules implement the per-RoCC-instruction custom0/1 handler dispatch — they are the hot path called once per dispatched instruction. Activation kernels (`act.py`) use the FP8 LUT-only path (Option-B, locked default per 09-SCOPE-DECISION.md).
 
 Purpose: Wave 2b (engines) consumes the function-level results from these op handlers. Without the op layer ported, engines cannot transition off torch. The 6-op smoke set (ABS, GELU, RELU, SIGMOID, TANH, SOFTMAX) directly exercises vec + act paths — Wave 2a's gate proves the bit-exact invariant holds.
 
@@ -67,7 +69,8 @@ Output: 4 op modules + 1 CSR register module torch-free; FP8 LUT path verified; 
 @.planning/phases/09-backend-migration-numpy-cupy/09-RESEARCH.md
 @.planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md
 @.planning/phases/09-backend-migration-numpy-cupy/09-00-SUMMARY.md
-@.planning/phases/09-backend-migration-numpy-cupy/09-01-SUMMARY.md
+@.planning/phases/09-backend-migration-numpy-cupy/09-01a-SUMMARY.md
+@.planning/phases/09-backend-migration-numpy-cupy/09-01b-SUMMARY.md
 @src/main/python/riscv/gtx/unit/ins/ops/spr.py
 @src/main/python/riscv/gtx/unit/ins/ops/mm.py
 @src/main/python/riscv/gtx/unit/ins/ops/vec.py
@@ -89,7 +92,7 @@ Op API surface (preserved by Wave 2a — backwards-compatible with existing test
 - `vec._apply_unary(funct7, sub_op, view) -> xp.ndarray` — unified unary dispatch.
 - `vec.sasmd_kernel`, `vec.dot_kernel`, `vec.vsum_kernel`, `vec.clamp_*` (signatures unchanged).
 - `act.relu`, `act.prelu`, `act.gelu`, `act.tanh`, `act.sigmoid`, `act.softmax`, `act.esum` — fp16 in, fp16 out.
-- `act.cvt_qh`, `act.cvt_hq` — FP16↔FP8 (strategy per 09-SCOPE-DECISION.md).
+- `act.cvt_qh`, `act.cvt_hq` — FP16↔FP8 via LUT-only (Option-B per 09-SCOPE-DECISION.md).
 - `act.cvt_ih/hi/hn/sh/hs/dh/hd` — bit-exact int/float conversions on xp.
 
 Established patterns to preserve verbatim:
@@ -102,7 +105,7 @@ Established patterns to preserve verbatim:
 <tasks>
 
 <task type="auto" tdd="true">
-  <name>Task 1: Port unit/ins/ops/spr.py — SPR custom0/1 handlers + WRSPR/RDSPR off torch</name>
+  <name>Task 1: Port unit/ins/ops/spr.py — remove `import torch`; do NOT add xp import (H-3: spr.py uses Python ints)</name>
   <files>src/main/python/riscv/gtx/unit/ins/ops/spr.py</files>
   <read_first>
     - src/main/python/riscv/gtx/unit/ins/ops/spr.py (full file — single import at line 18 per RESEARCH canonical_refs; mostly integer arithmetic)
@@ -112,12 +115,15 @@ Established patterns to preserve verbatim:
   <behavior>
     - Test 1 `test_spr_handlers_unchanged`: existing test_spr.py passes (WRSPR/RDSPR semantics preserved).
     - Test 2 no torch references.
-    - Test 3 SPR address-field decoding unchanged.
+    - Test 3 no xp references either (H-3: spr.py uses pure Python integer arithmetic; xp not needed).
+    - Test 4 SPR address-field decoding unchanged.
   </behavior>
   <action>
-    **Line 18** — Remove `import torch`. Replace with `from ....config_params import xp` ONLY IF xp is actually referenced in the body. Per RESEARCH "1 torch ref, import only" — likely the body doesn't use torch beyond legacy decoration. After removing the import, run pyflakes/grep to confirm no orphan torch references.
+    **Line 18** — Remove `import torch`. **DO NOT add `from ....config_params import xp`** — per RESEARCH "1 torch ref, import only", the file body is pure Python integer arithmetic (no array operations). Adding xp would be a phantom import.
 
     If any torch type hint exists (e.g., `xs1: torch.Tensor`), replace with `xs1: int` (RoCC ISA gives xs1/xs2 as `reg_t` = Python int via pybind11 binding).
+
+    After the edit, the file should have NO references to either `torch` or `xp`. SPR handlers work entirely on Python int values from `proc.get_state().XPR[...]` (via the RoCC dispatch boilerplate).
 
     Per CLAUDE.md surgical-changes rule: no other edits.
   </action>
@@ -126,9 +132,11 @@ Established patterns to preserve verbatim:
   </verify>
   <acceptance_criteria>
     - `grep -c "import torch\|torch\." src/main/python/riscv/gtx/unit/ins/ops/spr.py` returns 0.
+    - **H-3 explicit**: `grep -c "from ....config_params import xp" src/main/python/riscv/gtx/unit/ins/ops/spr.py` returns 0 (spr.py uses Python ints; xp not needed).
+    - `grep -c "import xp\|from .*config_params import" src/main/python/riscv/gtx/unit/ins/ops/spr.py` returns 0.
     - `uv run pytest tests/gtx/test_spr.py -x --no-cov` exits 0.
   </acceptance_criteria>
-  <done>spr.py torch-free; SPR routing tests still pass.</done>
+  <done>spr.py torch-free AND xp-free (uses Python ints only); SPR routing tests still pass.</done>
 </task>
 
 <task type="auto" tdd="true">
@@ -289,23 +297,21 @@ Established patterns to preserve verbatim:
 </task>
 
 <task type="auto" tdd="true">
-  <name>Task 4: Port unit/ins/ops/act.py — activations + FP8 LUT path (strategy per 09-SCOPE-DECISION.md)</name>
+  <name>Task 4: Port unit/ins/ops/act.py — activations + FP8 LUT-only path (Option-B default locked per 09-SCOPE-DECISION.md)</name>
   <files>src/main/python/riscv/gtx/unit/ins/ops/act.py</files>
   <read_first>
     - src/main/python/riscv/gtx/unit/ins/ops/act.py (full file — torch sites at lines 24-25, 45-181 + 79 torch refs total)
     - .planning/phases/09-backend-migration-numpy-cupy/09-RESEARCH.md (Pitfall 4 — FP8 strategy options; P7 kernel inventory ACT row breakdown lines ~899-922)
-    - .planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md (locked FP8 strategy from Wave 0)
+    - .planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md (locked default = Option-B LUT-only from Wave 0)
     - .planning/phases/09-backend-migration-numpy-cupy/09-CONTEXT.md (Phase boundary — FP8 strategy gate)
   </read_first>
   <behavior>
     - Test 1 `test_op_act`: every activation (RELU, PRELU, GELU, TANH, SIGMOID, SOFTMAX, ESUM) bit-exact vs verify_ref oracle; direction asymmetry preserved (forward overwrites ADDRR; reversed overwrites ADDRA).
     - Test 2 `test_op_format`: `cvt_ih/hi/hn/sh/hs/dh/hd` bit-exact for non-FP8 paths.
-    - Test 3 (FP8 strategy-conditional):
-      - If 09-SCOPE-DECISION.md selected option B (LUT-only): `cvt_qh(arr_f16, scale, offset)` and `cvt_hq(arr_f8, scale, offset)` round-trip bit-exact through `FP16_TO_FP8_LUT` / `FP8_TO_FP16_LUT`.
-      - If option C (descope): `cvt_qh` / `cvt_hq` raise `NotImplementedError("FP8 deferred to v1.2")`.
-      - If option A (ml_dtypes): test uses `ml_dtypes.float8_e4m3fn` (pyproject change handled in 09-03).
+    - Test 3 **FP8 LUT-only (Option-B locked default per H-1)**: `cvt_qh(arr_f16, scale, offset)` and `cvt_hq(arr_f8, scale, offset)` round-trip bit-exact through `FP16_TO_FP8_LUT` / `FP8_TO_FP16_LUT`.
     - Test 4 ABS smoke + GELU/RELU/SIGMOID/TANH/SOFTMAX smoke all PASS.
     - Test 5 no torch references.
+    - Test 6 **H-1 deterministic**: NO conditional Option-A/C code path; single LUT-only implementation.
   </behavior>
   <action>
     **Lines 24-25** — Replace:
@@ -318,23 +324,20 @@ Established patterns to preserve verbatim:
     ```
     Type hints `Tensor` → `xp.ndarray` (or just `Any` / remove — the runtime dispatch doesn't care).
 
-    **Lines 45-117 area — FP8 LUT precompute (RESEARCH calls out these as already-existing):**
+    **Lines 45-117 area — FP8 LUT precompute (already-existing per RESEARCH):**
     ```python
     # FP16_TO_FP8_LUT precompute (uint8[65536]):
-    # Currently:  FP16_TO_FP8_LUT = torch.tensor([...], dtype=torch.uint8)
-    # After:      FP16_TO_FP8_LUT = xp.array([...], dtype=xp.uint8)
+    # BEFORE:  FP16_TO_FP8_LUT = torch.tensor([...], dtype=torch.uint8)
+    # AFTER:   FP16_TO_FP8_LUT = xp.array([...], dtype=xp.uint8)
 
     # FP8_TO_FP16_LUT precompute (float16[256]):
-    # Currently:  FP8_TO_FP16_LUT = torch.tensor([...], dtype=torch.float16)
-    # After:      FP8_TO_FP16_LUT = xp.array([...], dtype=xp.float16)
+    # BEFORE:  FP8_TO_FP16_LUT = torch.tensor([...], dtype=torch.float16)
+    # AFTER:   FP8_TO_FP16_LUT = xp.array([...], dtype=xp.float16)
     ```
     The LUT bit-pattern computation logic is unchanged — only the container type. If the precompute uses any `torch.from_numpy` bridge for boot, replace with `xp.asarray(np_intermediate)`.
 
-    **Lines 123-144 area — cvt_qh / cvt_hq (FP8 paths):**
+    **Lines 123-144 area — cvt_qh / cvt_hq (FP8 LUT-only path; H-1 single deterministic body):**
 
-    Branch by `09-SCOPE-DECISION.md` FP8 strategy:
-
-    **Option B (LUT-only — RECOMMENDED):**
     ```python
     def fp16_to_fp8_e4m3(t_fp16):
         # View fp16 as uint16, index into LUT.
@@ -357,21 +360,7 @@ Established patterns to preserve verbatim:
         f32 = f32 / xp.float32(scale) - xp.float32(offset)
         return f32.astype(xp.float16)
     ```
-    Replace existing `tensor.to(torch.float8_e4m3fn)` calls with the LUT-indexed pattern.
-
-    **Option C (descope):**
-    ```python
-    def fp16_to_fp8_e4m3(t_fp16):
-        raise NotImplementedError("FP8 e4m3 deferred to v1.2 (09-SCOPE-DECISION.md)")
-    # Same for fp8_e4m3_to_fp16, cvt_qh, cvt_hq.
-    ```
-
-    **Option A (ml_dtypes):**
-    ```python
-    import ml_dtypes  # NEW dep, added to pyproject.toml in 09-03
-    def fp16_to_fp8_e4m3(t_fp16):
-        return t_fp16.astype(ml_dtypes.float8_e4m3fn)
-    ```
+    Replace existing `tensor.to(torch.float8_e4m3fn)` calls with the LUT-indexed pattern. **H-1 explicit**: do NOT add conditional Option-A (`ml_dtypes`) or Option-C (`NotImplementedError`) bodies. Single deterministic LUT-only implementation only.
 
     **Lines 147-187 area — Non-FP8 cvt functions** (cvt_ih/hi/hn/sh/hs/dh/hd):
 
@@ -406,11 +395,13 @@ Established patterns to preserve verbatim:
     - `grep -c "import torch\|from torch\|torch\." src/main/python/riscv/gtx/unit/ins/ops/act.py` returns 0.
     - `grep -c "from ....config_params import xp" src/main/python/riscv/gtx/unit/ins/ops/act.py` returns 1.
     - `grep -c "FP16_TO_FP8_LUT\|FP8_TO_FP16_LUT" src/main/python/riscv/gtx/unit/ins/ops/act.py` returns at least 2 (LUTs preserved).
-    - `grep -c "float8_e4m3fn" src/main/python/riscv/gtx/unit/ins/ops/act.py` returns 0 if option B/C selected; 1+ if option A.
+    - **H-1 deterministic**: `grep -c "float8_e4m3fn" src/main/python/riscv/gtx/unit/ins/ops/act.py` returns 0 (no Option-A `ml_dtypes` code).
+    - **H-1 deterministic**: `grep -c "ml_dtypes" src/main/python/riscv/gtx/unit/ins/ops/act.py` returns 0.
+    - **H-1 deterministic**: `grep -c "NotImplementedError" src/main/python/riscv/gtx/unit/ins/ops/act.py` returns 0 (no Option-C descope code).
     - `uv run pytest tests/gtx/test_op_act.py -x --no-cov` exits 0.
-    - `uv run pytest tests/gtx/test_op_format.py -x --no-cov` exits 0 (or skip cvt_qh/cvt_hq if option C).
+    - `uv run pytest tests/gtx/test_op_format.py -x --no-cov` exits 0.
   </acceptance_criteria>
-  <done>act.py torch-free; FP8 strategy applied per 09-SCOPE-DECISION.md; all activation/cvt tests pass.</done>
+  <done>act.py torch-free; FP8 LUT-only path (Option-B) is the single deterministic implementation; all activation/cvt tests pass.</done>
 </task>
 
 <task type="auto">
@@ -418,7 +409,7 @@ Established patterns to preserve verbatim:
   <files>src/main/python/riscv/gtx/unit/csr/register.py</files>
   <read_first>
     - src/main/python/riscv/gtx/unit/csr/register.py (line 95 area — RESEARCH calls this out as "RegisterFile bit-field torch.Tensor documentation")
-    - src/main/python/riscv/gtx/unit/register_file.py (post-Task-2 — actual implementation now uses xp)
+    - src/main/python/riscv/gtx/unit/register_file.py (post-Wave-1b — actual implementation now uses xp)
   </read_first>
   <action>
     Find line 95 area docstring/comment mentioning `torch.Tensor` in context of RegisterFile bit-field storage. Replace with `xp.ndarray (numpy.ndarray by default, cupy.ndarray when GTX_USE_CUDA=1)`.
@@ -444,7 +435,7 @@ Established patterns to preserve verbatim:
     - .planning/phases/09-backend-migration-numpy-cupy/09-01-WAVE-GATE.md (Wave 1 baseline)
   </read_first>
   <action>
-    Run gate commands and record to `.planning/phases/09-backend-migration-numpy-cupy/09-02a-WAVE-GATE.md`:
+    Run gate commands and record results to `.planning/phases/09-backend-migration-numpy-cupy/09-02a-WAVE-GATE.md`:
 
     1. Smoke set:
        ```bash
@@ -480,7 +471,8 @@ Established patterns to preserve verbatim:
 
     ## Wave 2a Sign-Off
     - [x] spr.py + mm.py + vec.py + act.py + csr/register.py torch-free
-    - [x] FP8 strategy applied per 09-SCOPE-DECISION.md
+    - [x] spr.py xp-free (Python ints; H-3)
+    - [x] FP8 strategy: LUT-only (Option-B, H-1 deterministic single path)
     - [x] gemm_core BLAS-equivalent semantics preserved
     - [x] FP32-internal-accumulate discipline preserved (VSUM, DOT, gemm_*)
     - [x] Activation direction asymmetry preserved
@@ -504,12 +496,12 @@ Established patterns to preserve verbatim:
 <verification>
 - Op modules torch-free: `grep -rn "import torch\|torch\." src/main/python/riscv/gtx/unit/ins/ops/ src/main/python/riscv/gtx/unit/csr/register.py | wc -l` returns 0.
 - Bit-exact preserved: all 6 smoke ops + MM/VEC/ACT unit tests pass.
-- FP8 strategy committed and applied uniformly.
+- FP8 LUT-only path uniformly applied (no conditional code).
 </verification>
 
 <success_criteria>
-1. spr.py / mm.py / vec.py / act.py / csr/register.py all import xp and have no torch references.
-2. FP8 path follows the strategy locked in 09-SCOPE-DECISION.md (LUT-only / descope / ml_dtypes).
+1. spr.py / mm.py / vec.py / act.py / csr/register.py all import xp from config_params (except spr.py which uses Python ints only) and have no torch references.
+2. FP8 path is single LUT-only deterministic implementation (no conditional branches per H-1).
 3. gemm_core preserves BLAS dispatch (xp.matmul) and FP32-internal-accumulate.
 4. VEC unit tests pass — SASMD/DOT/VSUM/CLAMP/cumsum bit-exact.
 5. ACT unit tests pass — all 7 activations + cvt functions bit-exact (direction asymmetry preserved).
@@ -519,3 +511,5 @@ Established patterns to preserve verbatim:
 <output>
 After completion, create `.planning/phases/09-backend-migration-numpy-cupy/09-02a-SUMMARY.md`
 </output>
+</content>
+</invoke>

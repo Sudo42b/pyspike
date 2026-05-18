@@ -2,9 +2,10 @@
 phase: 09-backend-migration-numpy-cupy
 plan: 02b
 type: execute
-wave: 4
+wave: 5
+# CONTEXT D-05 Wave 2 = plans 09-02a + 09-02b (this is part b — context engines).
 depends_on:
-  - 09-backend-migration-numpy-cupy/02a-ops
+  - "02a"
 files_modified:
   - src/main/python/riscv/gtx/unit/context/dma_engine.py
   - src/main/python/riscv/gtx/unit/context/mm_engine.py
@@ -53,6 +54,8 @@ Wave 2b: Port the four compute-engine modules (`dma_engine.py`, `mm_engine.py`, 
 Purpose: Engines hold cross-instruction state (deferred queues, dispatch context) and bridge dispatch to op layer. Without engine port, the kernel is fragmented across backends and the smoke set will not pass. The `.view(N, M)` reshape gotcha (RESEARCH Pitfall 1) lives concentrated in dma_engine.
 
 Output: 4 engine modules torch-free; cross-tile DMA invariant preserved (P8 MTDMA-03 tile-2 unit test continues to PASS); 6-op smoke set GREEN.
+
+**M-5 plan-comment**: Task 1 verify command runs `tests/gtx/test_multi_tile_dma.py` which currently takes 30-60s. This gate latency is documented as acceptable (no structural fix needed per checker M-5).
 </objective>
 
 <execution_context>
@@ -98,7 +101,7 @@ Engine API (preserved):
     - src/main/python/riscv/gtx/unit/context/dma_engine.py (full file — torch sites at lines 21, 267, 438, 492, 547, 682 per RESEARCH canonical_refs + Pitfall 1 audit)
     - .planning/phases/09-backend-migration-numpy-cupy/09-RESEARCH.md (Pitfall 1 — `.view(N, M)` is reshape in torch but invalid in numpy; site list lines 426-431)
     - .planning/phases/08-multi-tile-dma-parity/08-CONTEXT.md (P8 multi-tile DMA invariant — must not regress)
-    - tests/gtx/test_multi_tile_dma.py (tile-2 unit test — MUST stay GREEN through this port)
+    - tests/gtx/test_multi_tile_dma.py (tile-2 unit test — MUST stay GREEN through this port; runs 30-60s per M-5)
   </read_first>
   <behavior>
     - Test 1 `test_dma_roundtrip`: DDR-L2-L1-L0 byte preservation (P3 invariant).
@@ -165,7 +168,7 @@ Engine API (preserved):
     - `grep -nE "\.view\([0-9A-Za-z_]+, ?[0-9A-Za-z_]+\)" src/main/python/riscv/gtx/unit/context/dma_engine.py` returns 0 (no two-arg `.view(N, M)` reshape sites).
     - `grep -c "to_host" src/main/python/riscv/gtx/unit/context/dma_engine.py` returns at least 1.
     - `uv run pytest tests/gtx/test_dma_roundtrip.py -x --no-cov` exits 0.
-    - `uv run pytest tests/gtx/test_multi_tile_dma.py -x --no-cov` exits 0 (P8 tile-2 invariant preserved).
+    - `uv run pytest tests/gtx/test_multi_tile_dma.py -x --no-cov` exits 0 (P8 tile-2 invariant preserved; 30-60s gate cost per M-5).
     - `uv run pytest tests/gtx/test_ddr_modes.py -x --no-cov` exits 0.
   </acceptance_criteria>
   <done>dma_engine.py torch-free, .view(N, M) reshape sites fixed, P3/P8 invariants preserved.</done>
@@ -321,3 +324,5 @@ Engine API (preserved):
 <output>
 After completion, create `.planning/phases/09-backend-migration-numpy-cupy/09-02b-SUMMARY.md`
 </output>
+</content>
+</invoke>

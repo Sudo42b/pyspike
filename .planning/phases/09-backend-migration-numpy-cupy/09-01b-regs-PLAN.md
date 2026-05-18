@@ -1,12 +1,13 @@
 ---
 phase: 09-backend-migration-numpy-cupy
-plan: 01
+plan: 01b
 type: execute
-wave: 2
+wave: 3
+# CONTEXT D-05 Wave 1 = plans 09-01a + 09-01b. This is part 2 of 2 (register_file + npu.py + test_csr_registry_chain + gate).
+# B-4 split: register_file + npu state arrays + Wave gate.
 depends_on:
-  - 09-backend-migration-numpy-cupy/00-scaffold
+  - "01a"
 files_modified:
-  - src/main/python/riscv/gtx/unit/memory.py
   - src/main/python/riscv/gtx/unit/register_file.py
   - src/main/python/riscv/gtx/npu.py
   - tests/gtx/test_csr_registry_chain.py
@@ -17,19 +18,13 @@ user_setup: []
 
 must_haves:
   truths:
-    - "`unit/memory.py` allocates `_L2_GLOBAL`, `_L1_GLOBAL`, `_L0_GLOBAL` via `xp.zeros(..., dtype=xp.uint8)` instead of `torch.zeros(..., device=DEVICE)`."
-    - "`DDR_MEMORY._bytes` allocation routes through `xp.zeros` (D-10: GPU when xp=cupy)."
-    - "`DDR_MEMORY.ensure()` doubling-grow uses `xp.zeros` + slice copy; data preserved across grow."
-    - "`ddr_save_to_hex` and `ddr_load_from_hex` invoke `to_host()` before file I/O (no `.cpu()` calls)."
     - "`unit/register_file.py` SPR int64 storage uses `xp.zeros(shape, dtype=xp.int64)`."
     - "`npu.py` `_mxe_accum`, `_credit_ld`, `_credit_st` allocations use xp."
+    - "`npu.py` line 354 `.cpu()` chain replaced with `to_host()`."
     - "Wave-end perf gate: ABS strict walltime within 85-105s band (D-08). If xp=cupy + SPR-on-device exceeds 105s, RegisterFile reverts to host-pinned numpy exception (documented)."
     - "Wave-end correctness gate: 6-op smoke + tile-2 unit test all PASS."
-    - "VRAM budget gate (when xp=cupy): doc note added to memory.py / README that consumer GPU <12 GB should set `GTX_DDR_SIZE=1G`."
+    - "`tests/gtx/test_csr_registry_chain.py` is torch-free with numpy-based dtype assertions."
   artifacts:
-    - path: "src/main/python/riscv/gtx/unit/memory.py"
-      provides: "Module-level scratchpad allocations + DDR_MEMORY using xp (numpy default, cupy when GTX_USE_CUDA=1)"
-      contains: "from ..config_params import xp"
     - path: "src/main/python/riscv/gtx/unit/register_file.py"
       provides: "RegisterFile int64 SPR storage on xp backend"
       contains: "from ..config_params import xp"
@@ -40,22 +35,22 @@ must_haves:
       provides: "Wave 1 gate document with smoke/tile-2/perf measurements + VRAM/SPR exception decisions"
       contains: "## ABS Strict Walltime"
   key_links:
-    - from: "src/main/python/riscv/gtx/unit/memory.py"
-      to: "src/main/python/riscv/gtx/config_params.py"
-      via: "`from ..config_params import xp, to_host, to_device`"
-      pattern: "from ..config_params import xp"
     - from: "src/main/python/riscv/gtx/unit/register_file.py"
       to: "src/main/python/riscv/gtx/config_params.py"
       via: "`xp.zeros(..., dtype=xp.int64)` for SPR storage"
       pattern: "xp\\.zeros"
+    - from: "src/main/python/riscv/gtx/npu.py"
+      to: "src/main/python/riscv/gtx/unit/register_file.py"
+      via: "RegisterFile instantiation without `device=` kwarg (post-Wave-1a interface)"
+      pattern: "RegisterFile\\("
 ---
 
 <objective>
-Wave 1: Port the storage layer — `unit/memory.py` (L0/L1/L2 scratchpads + DDR), `unit/register_file.py` (SPR int64), and the `npu.py` allocation sites for `_mxe_accum`, `_credit_ld`, `_credit_st`, RegisterFile instantiation. Apply D-10 (DDR-on-GPU when xp=cupy) and D-11 (RegisterFile follows scratchpad device). Add VRAM-budget documentation + SPR-perf exception path per CONTEXT verification requirements.
+Wave 1 (part b): Port `unit/register_file.py` (SPR int64) and `npu.py` allocation sites (`_mxe_accum`, `_credit_ld`, `_credit_st`, RegisterFile instantiation) to xp. Port `tests/gtx/test_csr_registry_chain.py` off torch.int64 dtype assertions. Apply D-11 (RegisterFile follows scratchpad device) and add SPR-perf exception path per CONTEXT verification requirements. Final task = Wave 1 gate document.
 
-Purpose: All compute ops in Wave 2 will allocate temporaries via `xp` AND read/write to these scratchpads. The storage layer MUST be xp-resident first; otherwise Wave 2's `xp.matmul(L1_view_f16, L1_view_f16)` would mix backends (no-op on numpy, error on cupy). This is the highest-VRAM-risk wave — DDR-on-GPU verification + SPR-perf measurement both gate Wave 2 entry.
+Purpose: Completes Wave 1 storage-layer port started in 09-01a. Engines + ops (Wave 2) need RegisterFile + GtxNpu state arrays on xp before they can dispatch.
 
-Output: 3 source files ported to xp; conformance assertions via `test_csr_registry_chain.py` updates (D-16 starter); a Wave-end gate document recording the ABS perf number and the VRAM-budget decision for cupy.
+Output: 2 source files + 1 test file ported to xp; Wave 1 gate doc with ABS perf number + VRAM/SPR exception decisions for cupy.
 </objective>
 
 <execution_context>
@@ -68,13 +63,14 @@ Output: 3 source files ported to xp; conformance assertions via `test_csr_regist
 @.planning/phases/09-backend-migration-numpy-cupy/09-CONTEXT.md
 @.planning/phases/09-backend-migration-numpy-cupy/09-RESEARCH.md
 @.planning/phases/09-backend-migration-numpy-cupy/09-00-SUMMARY.md
-@src/main/python/riscv/gtx/unit/memory.py
+@.planning/phases/09-backend-migration-numpy-cupy/09-01a-SUMMARY.md
 @src/main/python/riscv/gtx/unit/register_file.py
 @src/main/python/riscv/gtx/npu.py
+@tests/gtx/test_csr_registry_chain.py
 @CLAUDE.md
 
 <interfaces>
-<!-- xp/helpers interface (established by Wave 0). -->
+<!-- xp/helpers + memory.py interface (established by Wave 0 + 1a). -->
 
 From src/main/python/riscv/gtx/config_params.py:
 ```python
@@ -83,127 +79,17 @@ to_host      # callable: cupy→numpy bridge (identity on numpy path)
 to_device    # callable: numpy→cupy bridge (identity on numpy path)
 ```
 
-Wave 1 invariants for downstream waves:
-- `mem.l0_byte(nest, spu)` returns an `xp.ndarray[uint8]` of shape `(GTX_L0_SIZE_BYTES,)`
-- `mem.l1_byte(nest, spu)` returns an `xp.ndarray[uint8]` of shape `(GTX_L1_SIZE_BYTES,)`
-- `mem.l2_byte(nest)` returns an `xp.ndarray[uint8]` of shape `(GTX_L2_SIZE_BYTES,)`
-- `DDR_MEMORY.raw()` returns an `xp.ndarray[uint8]` (resident on xp's default device)
+Wave 1b establishes for downstream waves:
 - `RegisterFile.read(addr)` returns a Python `int` (xp scalar `.item()` boundary)
 - `RegisterFile.write(addr, value)` accepts Python `int` and stores via `xp.int64` cast
+- `RegisterFile.__init__(shape)` — NO `device=` kwarg
 </interfaces>
 </context>
 
 <tasks>
 
 <task type="auto" tdd="true">
-  <name>Task 1: Port unit/memory.py — scratchpads + DDR_MEMORY to xp; to_host at file-I/O boundary</name>
-  <files>src/main/python/riscv/gtx/unit/memory.py</files>
-  <read_first>
-    - src/main/python/riscv/gtx/unit/memory.py (full file — torch sites at lines 6, 16, 22, 48-56, 79, 145, 172, 294, 318 per RESEARCH canonical_refs)
-    - .planning/phases/09-backend-migration-numpy-cupy/09-CONTEXT.md (D-09, D-10, D-12; D-10 verification checklist)
-    - .planning/phases/09-backend-migration-numpy-cupy/09-RESEARCH.md (Code Example 2; Pitfall 5 — DDR VRAM budget; Pitfall 7 — torch.frombuffer)
-    - src/main/python/riscv/gtx/config_params.py (post-Wave-0 — `xp`, `to_host`, `to_device`)
-  </read_first>
-  <behavior>
-    - Test 1 `test_memory_layout`: writing `0x3C00` to `mem.l1_byte(0,0)[off]` produces bytes `[0x00, 0x3C]` (LE); `mem.l1_f16(0,0)[off//2]` reads back as `xp.float16(1.0)`.
-    - Test 2 `test_ddr_grow`: `DDR_MEMORY.ensure(end_offset)` doubling-grow preserves prior bytes after growing past initial floor.
-    - Test 3 `test_ddr_save_to_hex_xp_aware`: `ddr_save_to_hex` produces identical bytes whether xp=numpy or xp=cupy (to_host bridge at file boundary).
-    - Test 4 `test_module_level_no_torch`: `grep -c "torch" src/main/python/riscv/gtx/unit/memory.py` returns 0.
-    - Smoke: ABS strict still PASS (correctness invariant preserved).
-  </behavior>
-  <action>
-    Mechanical 1:1 port. Concrete edits at each known site:
-
-    **Line 6** — Replace `import torch` with:
-    ```python
-    from ..config_params import xp, to_host, to_device
-    ```
-
-    **Line 16 area** — If there's a `_DEVICE = DEVICE` import-time alias, delete it. The xp is the new device implicit.
-
-    **Line 22 / 48-56 area** — module-level scratchpad allocations. Replace each:
-    ```python
-    # BEFORE:
-    _L2_GLOBAL = torch.zeros((GTX_NEST_NUM, GTX_L2_SIZE_BYTES), dtype=torch.uint8, device=DEVICE)
-    _L1_GLOBAL = torch.zeros((GTX_NEST_NUM, GTX_SPU_NUM, GTX_L1_SIZE_BYTES), dtype=torch.uint8, device=DEVICE)
-    _L0_GLOBAL = torch.zeros((GTX_NEST_NUM, GTX_SPU_NUM, GTX_L0_SIZE_BYTES), dtype=torch.uint8, device=DEVICE)
-    # AFTER:
-    _L2_GLOBAL = xp.zeros((GTX_NEST_NUM, GTX_L2_SIZE_BYTES), dtype=xp.uint8)
-    _L1_GLOBAL = xp.zeros((GTX_NEST_NUM, GTX_SPU_NUM, GTX_L1_SIZE_BYTES), dtype=xp.uint8)
-    _L0_GLOBAL = xp.zeros((GTX_NEST_NUM, GTX_SPU_NUM, GTX_L0_SIZE_BYTES), dtype=xp.uint8)
-    ```
-
-    **Line 79 area** — `class DDR_MEMORY` init / `_DDR_DEVICE = torch.device("cpu")` constant:
-
-    Delete the `_DDR_DEVICE` constant. In `DDR_MEMORY.__init__`, replace:
-    ```python
-    # BEFORE:
-    self._bytes = torch.zeros(size, dtype=torch.uint8, device=_DDR_DEVICE)
-    # AFTER (D-10: DDR follows xp; comment notes VRAM-budget warning):
-    # D-10: DDR follows xp. On consumer GPUs (<12 GB VRAM), set `GTX_DDR_SIZE=1G`
-    # via env var to leave headroom for scratchpads (~25 MB) + CUDA context overhead.
-    # See README "GPU memory budget" section.
-    self._bytes = xp.zeros(size, dtype=xp.uint8)
-    ```
-
-    **Line 145 area** — `ensure()` doubling-grow:
-    ```python
-    # BEFORE:
-    new_arr = torch.zeros(new_size, dtype=torch.uint8, device=_DDR_DEVICE)
-    if self._bytes is not None:
-        new_arr[:current_size] = self._bytes
-    # AFTER:
-    new_arr = xp.zeros(new_size, dtype=xp.uint8)
-    if self._bytes is not None:
-        new_arr[:current_size] = self._bytes  # xp slice-assign works on both numpy and cupy
-    ```
-
-    **Line 172 area** — `.view(torch.float16)` byte-reinterpret site:
-    ```python
-    # BEFORE: self._l1_f16_views = self.l1.view(torch.float16)
-    # AFTER:  self._l1_f16_views = self.l1.view(xp.float16)
-    ```
-    Repeat for any `.view(torch.uint8)` / `.view(torch.uint16)` sites — replace with `xp.uint8` / `xp.uint16`. **DO NOT change `.view(N, M)` reshape sites in this file** (audit list says memory.py only has dtype views).
-
-    **Line 294 area** — `torch.frombuffer(bytearray(...), dtype=torch.uint8)`:
-    ```python
-    import numpy as _np  # local at top of method, NOT module
-    # frombuffer is a numpy-only path (works on cupy too — wraps host bytes).
-    # File I/O is host-only by contract; use numpy then to_device if needed.
-    arr_host = _np.frombuffer(bytearray(b), dtype=_np.uint8)
-    return to_device(arr_host)  # numpy→cupy if xp=cupy, identity if xp=numpy
-    ```
-    Note: `_np` is needed because `xp.frombuffer` on cupy doesn't accept host bytes directly — the host stage must go through numpy.
-
-    **Line 318 area** — `ddr_save_to_hex` `.detach().cpu().contiguous().numpy()` chain:
-    ```python
-    # BEFORE: arr_host = self._bytes[start:end].detach().cpu().contiguous().numpy()
-    # AFTER:  arr_host = to_host(self._bytes[start:end])  # no-op on numpy, cp.asnumpy on cupy
-    # Then: bytes(arr_host) or similar formatting path stays the same.
-    ```
-
-    Repeat for any other `.cpu()`/`.numpy()`/`.detach()` chains in this file (audit by grep).
-
-    **DO NOT touch:** function signatures, public API names, `MEMORY` base-class structure, the GTX_L*_SIZE constants, the LE byte-order assumptions.
-  </action>
-  <verify>
-    <automated>cd /mnt/e/14_NIGHTLY/pyspike && grep -c "torch" src/main/python/riscv/gtx/unit/memory.py && uv run pytest tests/gtx/test_memory_layout.py tests/gtx/test_dma_roundtrip.py -x --no-cov -v</automated>
-  </verify>
-  <acceptance_criteria>
-    - `grep -c "import torch\|torch\." src/main/python/riscv/gtx/unit/memory.py` returns 0.
-    - `grep -c "from ..config_params import xp" src/main/python/riscv/gtx/unit/memory.py` returns at least 1.
-    - `grep -c "_DDR_DEVICE" src/main/python/riscv/gtx/unit/memory.py` returns 0.
-    - `grep -c "xp.zeros" src/main/python/riscv/gtx/unit/memory.py` returns at least 4 (3 scratchpads + DDR_MEMORY init + ensure grow).
-    - `grep -c "to_host" src/main/python/riscv/gtx/unit/memory.py` returns at least 1 (ddr_save_to_hex boundary).
-    - `grep -c "D-10" src/main/python/riscv/gtx/unit/memory.py` returns at least 1 (the VRAM-budget comment).
-    - `uv run pytest tests/gtx/test_memory_layout.py -x --no-cov` exits 0.
-    - `uv run pytest tests/gtx/test_dma_roundtrip.py -x --no-cov` exits 0.
-  </acceptance_criteria>
-  <done>memory.py is torch-free, uses xp for all allocations and views, calls to_host at file I/O boundaries; existing memory/dma_roundtrip tests still pass.</done>
-</task>
-
-<task type="auto" tdd="true">
-  <name>Task 2: Port unit/register_file.py — SPR int64 storage to xp; update RegisterFile interface</name>
+  <name>Task 1: Port unit/register_file.py — SPR int64 storage to xp; update RegisterFile interface</name>
   <files>src/main/python/riscv/gtx/unit/register_file.py</files>
   <read_first>
     - src/main/python/riscv/gtx/unit/register_file.py (full file — torch sites at line 19 + ~line 80 per RESEARCH canonical_refs)
@@ -216,7 +102,7 @@ Wave 1 invariants for downstream waves:
     - Test 2 `test_register_file_write_read_roundtrip`: `rf.write(addr, 0xCAFE); assert rf.read(addr) == 0xCAFE`.
     - Test 3 `test_register_file_int64_max`: Writing `0x7FFFFFFFFFFFFFFF` (max int64) preserves the value (no overflow / sign issues).
     - Test 4 `test_no_torch_in_register_file`: `grep -c "torch" src/main/python/riscv/gtx/unit/register_file.py` returns 0.
-    - Existing `tests/gtx/test_csr_registry_chain.py` still passes (Task 4 will update it for dtype assertion changes).
+    - Existing `tests/gtx/test_csr_registry_chain.py` still passes (Task 3 will update it for dtype assertion changes).
   </behavior>
   <action>
     **Line 19** — Replace `import torch` with `from ..config_params import xp`.
@@ -237,7 +123,7 @@ Wave 1 invariants for downstream waves:
 
     **All `.cpu()` / `.numpy()` chains in register_file.py** — Replace with `to_host(...)` if present.
 
-    **Constructor signature** — If `__init__(self, shape, ..., device=DEVICE)` exists, remove the `device=` param. Update any internal callers; downstream Wave 1 Task 3 fixes the npu.py call site.
+    **Constructor signature** — If `__init__(self, shape, ..., device=DEVICE)` exists, remove the `device=` param. Update any internal callers; downstream Task 2 fixes the npu.py call site.
 
     **DO NOT touch:** Public method names (`read`, `write`, `read_field`, `write_field`, bit-field accessor names). Keep bit-field semantics identical — only the storage backend changes.
 
@@ -251,21 +137,21 @@ Wave 1 invariants for downstream waves:
     - `grep -c "from ..config_params import xp" src/main/python/riscv/gtx/unit/register_file.py` returns at least 1.
     - `grep -c "xp.zeros.*xp.int64" src/main/python/riscv/gtx/unit/register_file.py` returns at least 1.
     - `grep -c "device=" src/main/python/riscv/gtx/unit/register_file.py` returns 0 (no `device=` kwarg anywhere).
-    - `uv run pytest tests/gtx/test_csr_registry_chain.py -x --no-cov` exits 0 (note: may need Task 4 dtype-assertion updates).
+    - `uv run pytest tests/gtx/test_csr_registry_chain.py -x --no-cov` exits 0 (note: may need Task 3 dtype-assertion updates).
     - `uv run python -c "from riscv.gtx.unit.register_file import RegisterFile; rf = RegisterFile((16,)); rf.write(5, 0xCAFE); assert rf.read(5) == 0xCAFE"` exits 0.
   </acceptance_criteria>
   <done>register_file.py allocates SPR storage on xp, no torch references, basic round-trip + bit-field operations preserved.</done>
 </task>
 
 <task type="auto" tdd="true">
-  <name>Task 3: Port npu.py — _mxe_accum / _credit_ld / _credit_st / RegisterFile instantiation to xp; replace .cpu() at line 354 with to_host()</name>
+  <name>Task 2: Port npu.py — _mxe_accum / _credit_ld / _credit_st / RegisterFile instantiation to xp; replace .cpu() at line 354 with to_host()</name>
   <files>src/main/python/riscv/gtx/npu.py</files>
   <read_first>
     - src/main/python/riscv/gtx/npu.py (full file — torch sites at lines 12, 19, 94-106, 354 per RESEARCH canonical_refs)
     - .planning/phases/09-backend-migration-numpy-cupy/09-CONTEXT.md (Wave 1 mapping for npu.py)
     - .planning/phases/09-backend-migration-numpy-cupy/09-RESEARCH.md (Pattern 4 — FP32-accumulate; Pitfall 3 — atexit ordering)
-    - src/main/python/riscv/gtx/unit/register_file.py (post-Task-2 — note constructor signature change: no `device=` kwarg)
-    - src/main/python/riscv/gtx/unit/memory.py (post-Task-1 state)
+    - src/main/python/riscv/gtx/unit/register_file.py (post-Task-1 — note constructor signature change: no `device=` kwarg)
+    - src/main/python/riscv/gtx/unit/memory.py (post-Wave-1a state)
   </read_first>
   <behavior>
     - Test 1 `test_npu_construct`: `GtxNpu()` constructs without error in a torch-uninstalled venv.
@@ -284,7 +170,7 @@ Wave 1 invariants for downstream waves:
     self.lspr = RegisterFile((GTX_NEST_NUM, GTX_LSPR_COUNT), device=DEVICE)
     self.nspr = RegisterFile((GTX_NEST_NUM, GTX_NSPR_COUNT), device=DEVICE)
     self.gspr = RegisterFile((GTX_GSPR_COUNT,), device=DEVICE)
-    # AFTER (post-Task-2 RegisterFile has no device kwarg):
+    # AFTER (post-Task-1 RegisterFile has no device kwarg):
     self.lspr = RegisterFile((GTX_NEST_NUM, GTX_LSPR_COUNT))
     self.nspr = RegisterFile((GTX_NEST_NUM, GTX_NSPR_COUNT))
     self.gspr = RegisterFile((GTX_GSPR_COUNT,))
@@ -329,11 +215,11 @@ Wave 1 invariants for downstream waves:
 </task>
 
 <task type="auto" tdd="true">
-  <name>Task 4: Port tests/gtx/test_csr_registry_chain.py off torch.int64 dtype assertions</name>
+  <name>Task 3: Port tests/gtx/test_csr_registry_chain.py off torch.int64 dtype assertions</name>
   <files>tests/gtx/test_csr_registry_chain.py</files>
   <read_first>
     - tests/gtx/test_csr_registry_chain.py (full file — torch references per CONTEXT D-16)
-    - src/main/python/riscv/gtx/unit/register_file.py (post-Task-2 state)
+    - src/main/python/riscv/gtx/unit/register_file.py (post-Task-1 state)
     - .planning/phases/09-backend-migration-numpy-cupy/09-CONTEXT.md (D-16 — tests/gtx port scope)
   </read_first>
   <behavior>
@@ -371,7 +257,7 @@ Wave 1 invariants for downstream waves:
 </task>
 
 <task type="auto">
-  <name>Task 5: Wave 1 gate — 6-op smoke + tile-2 + ABS perf measurement + VRAM/SPR exception decision</name>
+  <name>Task 4: Wave 1 gate — 6-op smoke + tile-2 + ABS perf measurement + VRAM/SPR exception decision</name>
   <files>.planning/phases/09-backend-migration-numpy-cupy/09-01-WAVE-GATE.md</files>
   <read_first>
     - .planning/phases/09-backend-migration-numpy-cupy/09-CONTEXT.md (D-07, D-08, D-10 verification, D-11 verification)
@@ -400,7 +286,7 @@ Wave 1 invariants for downstream waves:
     # Wave 1 Gate Results
 
     Date: <YYYY-MM-DD>
-    Commit: <sha after Task 4>
+    Commit: <sha after Task 3>
 
     ## Smoke Set (6 ops)
     Result: <PASS | FAIL>
@@ -430,7 +316,7 @@ Wave 1 invariants for downstream waves:
       If host-pinned: note exit criterion (e.g., "revert to xp when numba cuda.jit lands in P10").
 
     ## Wave 1 Sign-Off
-    - [x] memory.py torch-free, xp.zeros for scratchpads + DDR
+    - [x] memory.py torch-free, xp.zeros for scratchpads + DDR (Plan 09-01a)
     - [x] register_file.py torch-free, SPR int64 via xp
     - [x] npu.py constructor uses xp; .cpu() → to_host()
     - [x] test_csr_registry_chain.py torch-free
@@ -465,14 +351,15 @@ Wave 1 invariants for downstream waves:
 </verification>
 
 <success_criteria>
-1. memory.py + register_file.py + npu.py all import xp from config_params and have zero `import torch` references.
-2. DDR_MEMORY uses xp.zeros for init and ensure() doubling-grow; file I/O routes through to_host.
-3. RegisterFile SPR storage uses xp.zeros(..., dtype=xp.int64); no device= kwargs.
-4. GtxNpu constructor instantiates _mxe_accum / _credit_ld / _credit_st via xp.
-5. test_csr_registry_chain.py is torch-free with numpy-equivalent assertions.
-6. Wave 1 gate doc shows: 6-op smoke PASS + tile-2 PASS + ABS walltime in 85-105s + D-10/D-11 verification recorded.
+1. register_file.py + npu.py all import xp from config_params and have zero `import torch` references.
+2. RegisterFile SPR storage uses xp.zeros(..., dtype=xp.int64); no device= kwargs.
+3. GtxNpu constructor instantiates _mxe_accum / _credit_ld / _credit_st via xp.
+4. test_csr_registry_chain.py is torch-free with numpy-equivalent assertions.
+5. Wave 1 gate doc shows: 6-op smoke PASS + tile-2 PASS + ABS walltime in 85-105s + D-10/D-11 verification recorded.
 </success_criteria>
 
 <output>
-After completion, create `.planning/phases/09-backend-migration-numpy-cupy/09-01-SUMMARY.md`
+After completion, create `.planning/phases/09-backend-migration-numpy-cupy/09-01b-SUMMARY.md`
 </output>
+</content>
+</invoke>

@@ -3,6 +3,8 @@ phase: 09-backend-migration-numpy-cupy
 plan: 00
 type: execute
 wave: 1
+# CONTEXT D-05 Wave 0 = this plan (wave: 1). Subsequent waves (Wave 1/2/3 in D-05)
+# correspond to wave: 2/3+ here. See README at top of each plan.
 depends_on: []
 files_modified:
   - src/main/python/riscv/gtx/config_params.py
@@ -10,6 +12,7 @@ files_modified:
   - tests/gtx/conftest.py
   - tests/gtx/test_xp_alias.py
   - .planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md
+  - .planning/phases/09-backend-migration-numpy-cupy/09-pre-wheel-size.txt
 autonomous: false
 requirements:
   - BM-01
@@ -22,8 +25,10 @@ must_haves:
     - "`tests/gtx/conftest.py` no longer hard-requires CUDA; collection succeeds on no-GPU box."
     - "`from riscv.gtx.config_params import to_host, to_device` returns no-op identity functions when xp=numpy."
     - "`DEVICE` symbol removed — `from riscv.gtx import DEVICE` raises `ImportError` (D-04 clean cut)."
-    - "FP8 strategy locked to LUT-only path; no `ml_dtypes` dep, no `torch.float8_e4m3fn`."
-    - "28-kernel scope option A/B/C documented + user sign-off captured in 09-SCOPE-DECISION.md."
+    - "FP8 strategy DEFAULT-locked to LUT-only path (Option-B); no `ml_dtypes` dep, no `torch.float8_e4m3fn`. Selecting A/C requires separate `--revise` pass."
+    - "28-kernel scope DEFAULT-locked to Option-A (P9 numpy-only, cuda.jit deferred to P10). Selecting B/C requires separate `--revise` pass."
+    - "User sign-off captured in 09-SCOPE-DECISION.md (confirming defaults OR signaling revision pass needed)."
+    - "Pre-migration wheel size baseline pinned at `.planning/phases/09-backend-migration-numpy-cupy/09-pre-wheel-size.txt` for BM-06 delta measurement (M-1)."
     - "Wave-end gate: ABS + GELU + RELU + SIGMOID + TANH + SOFTMAX + tile-2 unit test all GREEN (baseline preserved — no source ports yet, just scaffold + DEVICE removal traceability)."
   artifacts:
     - path: "src/main/python/riscv/gtx/config_params.py"
@@ -36,8 +41,11 @@ must_haves:
       provides: "Unit tests for BM-01: default numpy, fail-loud cupy-missing, identity helpers"
       contains: "def test_xp_default_is_numpy"
     - path: ".planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md"
-      provides: "User-signed scope decision document (FP8 strategy + 28-kernel option A/B/C)"
+      provides: "User-signed scope confirmation (DEFAULT Option-A scope + Option-B FP8, OR revision-pass signal)"
       contains: "## FP8 Strategy\n## 28-Kernel Scope Decision"
+    - path: ".planning/phases/09-backend-migration-numpy-cupy/09-pre-wheel-size.txt"
+      provides: "Pre-migration wheel size baseline for BM-06 delta calculation"
+      contains: "dist/spike-"
   key_links:
     - from: "src/main/python/riscv/gtx/config_params.py"
       to: "src/main/python/riscv/gtx/__init__.py"
@@ -50,11 +58,11 @@ must_haves:
 ---
 
 <objective>
-Wave 0 scaffold for Phase 9 backend migration. Establish the `xp` alias single-source-of-truth in `config_params.py`, port the test infrastructure off `torch.cuda.is_available()`, lock FP8 strategy to LUT-only (per RESEARCH Pitfall 4 option b), capture user sign-off on the 28-kernel scope (option A/B/C), and remove the `import torch` ImportError surface from package init. No source ports yet — that is Wave 1+. Wave-end gate verifies the 6-op smoke + tile-2 baseline still passes after these scaffolding changes (dual-import allowed per D-06 between waves).
+Wave 0 scaffold for Phase 9 backend migration (= CONTEXT D-05 "Wave 0"; this PLAN file has `wave: 1` for execute-phase wave ordering). Establish the `xp` alias single-source-of-truth in `config_params.py`, port the test infrastructure off `torch.cuda.is_available()`, **confirm DEFAULT** FP8 strategy = LUT-only AND **DEFAULT** 28-kernel scope = Option-A (P10-split), pin a pre-migration wheel size baseline, and remove the `import torch` ImportError surface from package init. No source ports yet — that is Wave 1+. Wave-end gate verifies the 6-op smoke + tile-2 baseline still passes after these scaffolding changes (dual-import allowed per D-06 between waves).
 
-Purpose: All subsequent waves import `xp` and call `to_host()`/`to_device()` — those primitives MUST exist before Wave 1 starts. Without the conftest port, no-GPU CI/dev boxes break test collection (RESEARCH critical finding #2). Without the FP8 + scope decisions, Wave 2 (ops) is unanchored.
+Purpose: All subsequent waves import `xp` and call `to_host()`/`to_device()` — those primitives MUST exist before Wave 1 starts. Without the conftest port, no-GPU CI/dev boxes break test collection (RESEARCH critical finding #2). The FP8 + scope defaults unblock Wave 2 unconditionally; if the user wants alternative options, they must request a separate revision pass before Wave 2 begins.
 
-Output: `config_params.py` carries the new xp/helper exports; `__init__.py` is purged of torch ImportError surface; `tests/gtx/conftest.py` is xp-aware; `tests/gtx/test_xp_alias.py` exists with 3 RED→GREEN tests for BM-01; `09-SCOPE-DECISION.md` captures FP8 + scope decisions with user signature.
+Output: `config_params.py` carries the new xp/helper exports; `__init__.py` is purged of torch ImportError surface; `tests/gtx/conftest.py` is xp-aware; `tests/gtx/test_xp_alias.py` exists with 3 RED→GREEN tests for BM-01; `09-SCOPE-DECISION.md` confirms defaults (or signals revision-pass); `09-pre-wheel-size.txt` records baseline for BM-06.
 </objective>
 
 <execution_context>
@@ -299,7 +307,7 @@ From tests/gtx/conftest.py (after Wave 0):
     - Test B: `grep -rn "import torch" tests/gtx/conftest.py` returns 0 after edit.
     - Test C: `grep -n "from .config_params import DEVICE" src/main/python/riscv/gtx/__init__.py` returns 0 after edit.
     - Test D: `grep -n "^    import torch" src/main/python/riscv/gtx/__init__.py` returns 0 after edit (line 80 surface removed).
-    - Test E: Wave-end gate (Task 4) verifies the 6-op smoke set + tile-2 still GREEN with the conftest port (no regression introduced).
+    - Test E: Wave-end gate (Task 5) verifies the 6-op smoke set + tile-2 still GREEN with the conftest port (no regression introduced).
   </behavior>
   <action>
     **Edit A — `tests/gtx/conftest.py`:**
@@ -364,56 +372,36 @@ From tests/gtx/conftest.py (after Wave 0):
 </task>
 
 <task type="checkpoint:decision" gate="blocking">
-  <name>Task 4: USER CHECKPOINT — Lock FP8 strategy + 28-kernel scope (option A/B/C); record decisions in 09-SCOPE-DECISION.md</name>
-  <decision>Two coupled decisions Wave 0 cannot autonomously resolve.</decision>
+  <name>Task 4: USER CHECKPOINT — Confirm FP8 LUT-only + Scope Option-A defaults (or signal need for revision pass)</name>
+  <decision>Confirm DEFAULT choices (FP8 = Option-B LUT-only; Scope = Option-A P10-split) OR signal need for separate `--revise` pass for alternatives.</decision>
   <context>
-    **Why this checkpoint:** Two decisions block Wave 2 (ops port). Both are CONTEXT-deferred-to-plan-stage. Both have user-impact tradeoffs Claude cannot decide unilaterally.
+    **Why this checkpoint:** Phase 9 must commit to two scope choices before Wave 2. To keep this plan small and contained:
+    - **DEFAULT FP8 strategy** is **Option-B (LUT-only)** — uses existing precomputed `FP16_TO_FP8_LUT` (uint8[65536]) + `FP8_TO_FP16_LUT` (float16[256]) at `act.py:67-117`. Zero new deps. No pyproject.toml changes.
+    - **DEFAULT 28-kernel scope** is **Option-A** — P9 = numpy-only (numpy + cupy native vectorized ops). cuda.jit kernels deferred to a future **P10 phase** (not created in this run; orchestrator surfaces in v1.2 milestone planning). BM-04 success criterion does NOT include CUDA path.
 
-    **Decision A — FP8 strategy** (RESEARCH Pitfall 4):
-    `torch.float8_e4m3fn` is used at `src/main/python/riscv/gtx/unit/ins/ops/act.py:128,136`. NumPy 2.x has NO native fp8.
+    Both defaults preserve CLAUDE.md "No new runtime deps" and keep this revision pass surgical. Selecting alternatives (FP8 Option-A `ml_dtypes` dep, FP8 Option-C `NotImplementedError` descope, Scope Option-B all-in-P9, Scope Option-C hot-path-only) requires edits to other plans (09-02a/09-02b/09-03) — that work is out-of-band and requires the user to re-run `/gsd:plan-phase 9 --revise 02a 02b 03` after this plan resolves.
 
-    **Decision B — 28-kernel JIT scope** (CONTEXT D-13):
-    P7's 28 njit kernels DO NOT EXIST in source (RESEARCH critical finding #1 — they were merged as torch ops). Phase 9 must port to numpy AND re-apply numba layer. Scope is 28 kernels; implementation cost is unknown without trial.
+    **B-2 simplification (per checker)**: Task 4's scope is now NARROW. It only confirms defaults OR signals "need revision pass". No alternate-option code paths are authored here.
+
+    **D-13 P10 implication (H-6)**: Default Option-A means cuda.jit kernels are deferred to a future **Phase 10** phase. The orchestrator must surface P10 in v1.2 milestone planning. BM-04 success criterion in this run measures the numpy path only.
   </context>
   <options>
-    <option id="fp8-a">
-      <name>FP8 Option A — `ml_dtypes` runtime dep</name>
-      <pros>One-line port: `arr_fp16.astype(ml_dtypes.float8_e4m3fn)`. Future-proof if numpy adopts fp8.</pros>
-      <cons>Violates CLAUDE.md "No new runtime deps beyond extras". Adds ~2 MB wheel. Conflicts with BM-06 wheel-size delta ≤ 0 MB.</cons>
+    <option id="confirm-defaults">
+      <name>Confirm Defaults (RECOMMENDED — single-plan-completable)</name>
+      <pros>Phase 9 ships narrow + fast. No new deps. No edits to other plans needed. P10 split is the standing decision for cuda.jit (deferred to v1.2 milestone planning). FP8 LUT path uses existing precomputed tables.</pros>
+      <cons>cuda.jit acceleration of 28 kernels deferred to P10. ml_dtypes FP8 native support not used.</cons>
     </option>
-    <option id="fp8-b">
-      <name>FP8 Option B — LUT-only path (RECOMMENDED in RESEARCH)</name>
-      <pros>Uses existing `FP16_TO_FP8_LUT` (uint8[65536]) + `FP8_TO_FP16_LUT` (float16[256]) precomputed at import in `act.py:67-117`. Zero new deps. Numpy/cupy both index uint8 arrays.</pros>
-      <cons>cvt_qh/cvt_hq become `LUT[u16]` instead of `tensor.to(dtype)` — minor refactor in 4 sites.</cons>
-    </option>
-    <option id="fp8-c">
-      <name>FP8 Option C — descope to v1.2</name>
-      <pros>Zero implementation cost in Phase 9. cvt_qh/cvt_hq raise `NotImplementedError`.</pros>
-      <cons>If any vendor regression OR hand-built test uses FP8 conversions, regression breaks. Manual audit required.</cons>
-    </option>
-    <option id="scope-A">
-      <name>Scope Option A — P9 numpy-only + P10 for cuda.jit kernels</name>
-      <pros>Phase 9 ships fast (numpy + cupy native). cuda.jit dual-impl pushed to dedicated P10 phase. Lower v1.1 milestone risk.</pros>
-      <cons>BM-05 (GPU smoke) still works via cupy's native vectorized ops (cp.matmul, cp.where, cp.cumsum). Numba CUDA acceleration deferred.</cons>
-    </option>
-    <option id="scope-B">
-      <name>Scope Option B — All 28 in P9</name>
-      <pros>Single phase covers full migration end-to-end.</pros>
-      <cons>~1 week additional scope (28 dual-impl + guvectorize audit + cuda kernel unit tests). Milestone risk: v1.1 elongates.</cons>
-    </option>
-    <option id="scope-C">
-      <name>Scope Option C — Hot-path-only (5-7 kernels with @cuda.jit)</name>
-      <pros>Concentrates effort on observably hot kernels (gemm_core + 5 transcendentals from NJIT-03 set). Other 21 use `xp.*` native bulk ops. Manageable scope.</pros>
-      <cons>Requires perf measurement to identify "hot" set — adds Wave 2 audit task.</cons>
-    </option>
-    <option id="recommended">
-      <name>Claude's Recommendation</name>
-      <pros>FP8-B + Scope-A: minimal new code, preserves CLAUDE.md "no new deps", defers numba layer to P10 where it has full attention. Ship Phase 9 narrow (numpy + cupy native xp.* ops only), then add @cuda.jit / guvectorize in P10 where dual-source kernels get proper benchmarking.</pros>
-      <cons>P10 has to be planned + executed; cuda.jit benefits delayed by one phase.</cons>
+    <option id="need-revision-pass">
+      <name>Need Revision Pass (FP8 = A or C, OR Scope = B or C)</name>
+      <pros>User retains flexibility to pick alternatives.</pros>
+      <cons>Requires user to run `/gsd:plan-phase 9 --revise 02a 02b 03` separately. Phase 9 entry delayed by one revision iteration. Out-of-band scope edits to downstream plans.</cons>
     </option>
   </options>
   <resume-signal>
-    Reply with two selections (one per decision) AND author the 09-SCOPE-DECISION.md file at `.planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md` with the chosen options + rationale. Format:
+    Reply with ONE of the following:
+
+    **OPTION 1 — Confirm defaults (FP8 LUT-only + Scope Option-A P10-split):**
+    Reply `"confirm defaults"` (or `"approved"`). Executor authors `09-SCOPE-DECISION.md` with format below:
 
     ```markdown
     # Phase 9 Scope Decision (User Sign-Off)
@@ -422,53 +410,82 @@ From tests/gtx/conftest.py (after Wave 0):
     Decided by: <user>
 
     ## FP8 Strategy
-    Selected: <option-a | option-b | option-c>
-    Rationale: <one paragraph>
+    Selected: option-b (LUT-only) — DEFAULT
+    Rationale: Zero new runtime deps. Uses existing FP16_TO_FP8_LUT / FP8_TO_FP16_LUT
+    precomputed at import in act.py:67-117. Bit-exact via uint8 indexing on numpy and cupy.
 
     ## 28-Kernel JIT Scope
-    Selected: <option-A | option-B | option-C>
-    Rationale: <one paragraph>
-    Estimated additional time vs Scope-A baseline: <none | +N days>
+    Selected: option-A (P9 numpy-only, cuda.jit deferred to P10) — DEFAULT
+    Rationale: Phase 9 ships narrow with numpy + cupy native vectorized ops only.
+    cuda.jit / guvectorize dual-impl deferred to dedicated P10 phase for v1.2 milestone.
+    BM-04 success criterion measures numpy path; cuda.jit out-of-scope for P9.
+    Estimated time vs Option-A baseline: 0 days (this IS the baseline).
 
     ## Impact on Plans
-    - Wave 2 act.py port follows: <FP8 strategy choice>
-    - Wave 3 numba layer: <included | deferred to P10>
+    - Wave 2 act.py port follows: FP8 Option-B (LUT-only). Single deterministic code path.
+    - Wave 3 numba layer: deferred to P10. No pyproject changes for cuda-jit.
     ```
 
-    Then signal "approved" or specify two selection IDs (e.g., "FP8: option-b; Scope: option-A").
+    Verify checkpoint exits when file exists with `Selected: option-b` AND `Selected: option-A` lines present.
 
-    After this checkpoint resolves, the executor MUST update plans 09-02b and 09-03 if scope-B or scope-C is selected (add @cuda.jit/guvectorize tasks). If FP8-A selected, add `ml_dtypes>=0.4` to pyproject.toml in plan 09-03. If FP8-C selected, add `NotImplementedError` test in plan 09-02a covering cvt_qh/cvt_hq.
+    **OPTION 2 — Need revision pass:**
+    Reply `"revise scope: <details>"` (e.g., `"revise scope: FP8 option-A ml_dtypes; Scope option-B all-in"`). Executor authors `09-SCOPE-DECISION.md` capturing the request:
+    ```markdown
+    ## Revision Pass Needed
+    User requested non-default options. Halt Wave 2 entry until separate revision
+    pass is executed via: /gsd:plan-phase 9 --revise 00 02a 02b 03
+    ```
+    Then the executor must NOT proceed with Wave 2. User runs the revision pass to edit downstream plans.
   </resume-signal>
   <files>.planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md</files>
   <action>
-    Pause for user decision. After user provides selections, the EXECUTOR authors `.planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md` per the format in `<resume-signal>` below.
+    Pause for user decision. After user replies, the EXECUTOR (NOT the user) authors `.planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md` per the format in `<resume-signal>` based on user's reply text:
+    - If reply contains "confirm" or "approved" → author Option 1 markdown.
+    - If reply starts with "revise scope:" → author Option 2 markdown + halt Wave 2.
+
+    Single owner: the executor authors the file based on the user's selection signal. No dual ownership.
   </action>
   <verify>
-    <automated>test -f .planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md && grep -c "Selected:" .planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md</automated>
+    <automated>test -f .planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md && grep -cE "Selected: option-(b|A)|Revision Pass Needed" .planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md</automated>
   </verify>
-  <done>09-SCOPE-DECISION.md exists with user's FP8 + Scope selections recorded. Both decisions block Wave 2; without sign-off the executor must NOT proceed.</done>
+  <acceptance_criteria>
+    - `.planning/phases/09-backend-migration-numpy-cupy/09-SCOPE-DECISION.md` exists.
+    - File contains EITHER `Selected: option-b` AND `Selected: option-A` (default-confirm path), OR `Revision Pass Needed` (revision-request path).
+    - File contains `Date:` field with current date.
+    - If default-confirm path: file does NOT contain `ml_dtypes` or `option-c` or `option-B` or `option-C` selections (only Option-B FP8 + Option-A Scope).
+  </acceptance_criteria>
+  <done>09-SCOPE-DECISION.md exists with user confirmation. Either defaults locked (Wave 2 unblocks) or revision-pass signaled (Wave 2 halts until revise run).</done>
 </task>
 
 <task type="auto">
-  <name>Task 5: Wave-end gate — run 6-op smoke + tile-2 unit test; record walltime</name>
-  <files>.planning/phases/09-backend-migration-numpy-cupy/09-00-WAVE-GATE.md</files>
+  <name>Task 5: Wave-end gate — pin pre-migration wheel size baseline + 6-op smoke + tile-2 unit test + record walltime</name>
+  <files>.planning/phases/09-backend-migration-numpy-cupy/09-00-WAVE-GATE.md, .planning/phases/09-backend-migration-numpy-cupy/09-pre-wheel-size.txt</files>
   <read_first>
     - .planning/phases/09-backend-migration-numpy-cupy/09-CONTEXT.md (D-07 gate + D-08 perf budget 85-105s)
     - tests/gtx/test_regression_fw_full_sweep.py (smoke set test name + invocation)
     - tests/gtx/test_multi_tile_dma.py (tile-2 unit test entry)
   </read_first>
   <action>
-    Run the wave-end gate commands and capture results to `09-00-WAVE-GATE.md`:
+    Run the wave-end gate commands and capture results to `09-00-WAVE-GATE.md`. Also pin the pre-migration wheel size baseline for BM-06 (M-1 checker fix).
 
-    1. Smoke set:
+    1. **Pre-migration wheel size baseline (M-1)**:
+       ```bash
+       uv build --wheel
+       du -h dist/spike-*.whl > .planning/phases/09-backend-migration-numpy-cupy/09-pre-wheel-size.txt
+       ```
+       This file is the baseline against which BM-06 (Plan 09-03 Task 7) measures the post-migration delta.
+
+    2. Smoke set:
        ```bash
        uv run pytest tests/gtx/test_regression_fw_full_sweep.py -k 'ABS or GELU or RELU or SIGMOID or TANH or SOFTMAX' --no-cov -v
        ```
-    2. Tile-2 unit test (P8 MTDMA-03):
+
+    3. Tile-2 unit test (P8 MTDMA-03):
        ```bash
        uv run pytest tests/gtx/test_multi_tile_dma.py --no-cov -v
        ```
-    3. ABS strict walltime measurement:
+
+    4. ABS strict walltime measurement:
        ```bash
        /usr/bin/time -f "%e" uv run pytest tests/gtx/test_regression_fw_full_sweep.py -k 'ABS' --no-cov 2>&1 | tail -3
        ```
@@ -480,6 +497,11 @@ From tests/gtx/conftest.py (after Wave 0):
 
     Date: <YYYY-MM-DD>
     Commit: <sha after Task 3>
+
+    ## Pre-Migration Wheel Size Baseline (BM-06 baseline)
+    Command: `uv build --wheel && du -h dist/spike-*.whl > 09-pre-wheel-size.txt`
+    Baseline: <X MB or human-readable>
+    Stored at: `.planning/phases/09-backend-migration-numpy-cupy/09-pre-wheel-size.txt`
 
     ## Smoke Set (D-07, 6 ops)
     Command: `uv run pytest tests/gtx/test_regression_fw_full_sweep.py -k 'ABS or GELU or RELU or SIGMOID or TANH or SOFTMAX' --no-cov -v`
@@ -501,8 +523,8 @@ From tests/gtx/conftest.py (after Wave 0):
     - [x] DEVICE symbol removed
     - [x] tests/gtx/conftest.py CUDA gate refactored to GTX_USE_CUDA
     - [x] __init__.py torch ImportError surface line removed
-    - [x] FP8 strategy decision documented (09-SCOPE-DECISION.md)
-    - [x] 28-kernel scope decision documented (09-SCOPE-DECISION.md)
+    - [x] FP8 strategy + 28-kernel scope DEFAULTS confirmed (09-SCOPE-DECISION.md)
+    - [x] Pre-migration wheel size baseline pinned (09-pre-wheel-size.txt)
     - [x] Wave-end gate GREEN: 6-op smoke + tile-2 + perf in 85-105s window
     ```
 
@@ -513,21 +535,22 @@ From tests/gtx/conftest.py (after Wave 0):
   </verify>
   <acceptance_criteria>
     - `.planning/phases/09-backend-migration-numpy-cupy/09-00-WAVE-GATE.md` exists.
+    - `.planning/phases/09-backend-migration-numpy-cupy/09-pre-wheel-size.txt` exists and contains at least one line referencing `dist/spike-` (M-1).
     - File contains lines matching `Result: PASS` for both smoke and tile-2 sections.
     - File contains `In-budget: YES` for the ABS walltime section (or documented justification if marginal).
     - `grep -c "Wall: " 09-00-WAVE-GATE.md` returns 1 (the walltime measurement was recorded).
     - `uv run pytest tests/gtx/test_multi_tile_dma.py --no-cov -v` exits 0.
     - `uv run pytest tests/gtx/test_regression_fw_full_sweep.py -k 'ABS or GELU or RELU or SIGMOID or TANH or SOFTMAX' --no-cov` exits 0.
   </acceptance_criteria>
-  <done>Wave 0 gate document exists with PASS results for smoke + tile-2 + perf in 85-105s window. Wave 1 unblocked.</done>
+  <done>Wave 0 gate document exists with PASS results for smoke + tile-2 + perf in 85-105s window. Pre-migration wheel baseline pinned. Wave 1 unblocked.</done>
 </task>
 
 </tasks>
 
 <verification>
-- Wave 0 success = all 5 tasks complete; 09-SCOPE-DECISION.md signed; 09-00-WAVE-GATE.md GREEN.
+- Wave 0 success = all 5 tasks complete; 09-SCOPE-DECISION.md signed; 09-pre-wheel-size.txt pinned; 09-00-WAVE-GATE.md GREEN.
 - Sanity grep: `grep -rn "DEVICE" src/main/python/riscv/gtx/ | grep -vE "^.*#" | wc -l` should show only legitimate post-Wave-0 references (no torch-DEVICE).
-- Wave 1 entry condition: smoke set + tile-2 + ABS walltime gate all GREEN.
+- Wave 1 entry condition: smoke set + tile-2 + ABS walltime gate all GREEN + defaults confirmed (not revision-pass requested).
 </verification>
 
 <success_criteria>
@@ -536,10 +559,13 @@ From tests/gtx/conftest.py (after Wave 0):
 3. `GTX_USE_CUDA=1` without cupy → RuntimeError with `pip install 'spike[cuda]'` hint.
 4. `uv run pytest tests/gtx/test_xp_alias.py` passes 4 (or 3 passed + 1 skipped if cupy installed).
 5. `uv run pytest --collect-only tests/gtx/` succeeds on no-GPU box (no torch.cuda assertion).
-6. FP8 strategy + 28-kernel scope decisions captured in `09-SCOPE-DECISION.md` with user sign-off.
-7. Wave-end gate document `09-00-WAVE-GATE.md` shows 6-op smoke PASS + tile-2 PASS + ABS walltime in 85-105s band.
+6. FP8 strategy + 28-kernel scope DEFAULTS captured in `09-SCOPE-DECISION.md` with user sign-off (OR revision-pass signaled).
+7. Pre-migration wheel size baseline pinned at `09-pre-wheel-size.txt` (BM-06 baseline).
+8. Wave-end gate document `09-00-WAVE-GATE.md` shows 6-op smoke PASS + tile-2 PASS + ABS walltime in 85-105s band.
 </success_criteria>
 
 <output>
 After completion, create `.planning/phases/09-backend-migration-numpy-cupy/09-00-SUMMARY.md`
 </output>
+</content>
+</invoke>
