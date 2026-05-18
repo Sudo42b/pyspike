@@ -437,3 +437,261 @@ def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
     src_2d = l1[src_addr:src_end].view(height, length).clone()
     l1[dst_addr:dst_end].view(height, length).copy_(src_2d)
     return 0
+
+
+# ============================================================================
+# firmware_mcast_s2l -- direct port of
+# vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:230-273
+# ============================================================================
+def firmware_mcast_s2l(mem: 'GtxMemory', *, nest: int,
+                        l2_addr: int, l1_addr: int,
+                        height: int, length: int,
+                        rd_stride: int, target_spu_mask: int) -> int:
+    """L2 → L1 multicast to selected SPUs (funct7=0x42).
+
+    Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:230-273.
+
+    HW conventions (vendor :248-249): height==0 → 1, length==0 → 0x10000.
+    Source L2 row span is snapshotted ONCE (single 2D view), then `copy_()`
+    into each selected SPU L1 (vendor row-loop collapses to one CUDA launch).
+    """
+    if height == 0:
+        height = 1
+    if length == 0:
+        length = 0x10000
+    assert nest < GTX_NEST_NUM, f"nest {nest} >= GTX_NEST_NUM {GTX_NEST_NUM}"
+    assert height > 0 and length > 0, f"height={height} length={length}"
+    # Vendor row-loop uses `(l2_addr + row * rd_stride) % GTX_L2_SIZE` for wrap
+    # safety. Functional model asserts no-wrap (firmware bug if it would).
+    # When rd_stride == 0, vendor re-reads the same row each iter — match
+    # literally (the 2D view below collapses to a single-row repeat via
+    # broadcast-style copy when rd_stride == length).
+    effective_stride = rd_stride if rd_stride > 0 else length
+    assert effective_stride >= length, (
+        f"rd_stride {rd_stride} < length {length} (firmware bug)"
+    )
+
+    l2 = mem.l2_byte(nest)
+    src_end = l2_addr + (height - 1) * effective_stride + length
+    assert src_end <= GTX_L2_SIZE_BYTES, (
+        f"L2 src region [{l2_addr}, {src_end}) wraps GTX_L2_SIZE_BYTES "
+        f"{GTX_L2_SIZE_BYTES} — firmware bug"
+    )
+    src_2d = l2[l2_addr:l2_addr + height * effective_stride] \
+        .view(height, effective_stride)[:, :length]
+
+    l1_end = l1_addr + height * length
+    assert l1_end <= GTX_L1_SIZE_BYTES, (
+        f"L1 dst region [{l1_addr}, {l1_end}) wraps GTX_L1_SIZE_BYTES "
+        f"{GTX_L1_SIZE_BYTES} — firmware bug"
+    )
+    for s in range(GTX_SPU_NUM):
+        if not ((target_spu_mask >> s) & 1):
+            continue
+        l1 = mem.l1_byte(nest, s)
+        l1[l1_addr:l1_end].view(height, length).copy_(src_2d)
+    return 0
+
+
+# ============================================================================
+# firmware_mcast_g2s -- direct port of
+# vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:545-583
+# ============================================================================
+def firmware_mcast_g2s(mem: 'GtxMemory', *, ddr_addr: int, l2_addr: int,
+                        height: int, length: int,
+                        rd_stride: int, target_nest_mask: int) -> int:
+    """DDR → L2 multicast to selected NESTs (funct7=0x44, funct3=0).
+
+    Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:545-583.
+
+    HW conventions (vendor :561): height==0 → 1, length==0 → 0x10000.
+    Source DDR row span snapshotted ONCE (CPU→target device), then `copy_()`
+    into each selected NEST L2.
+
+    NO zero-fill special case: vendor has none (RESEARCH Pitfall 1 — earlier
+    Python docstring fiction).
+    """
+    if height == 0:
+        height = 1
+    if length == 0:
+        length = 0x10000
+    assert height > 0 and length > 0, f"height={height} length={length}"
+    effective_stride = rd_stride if rd_stride > 0 else length
+    assert effective_stride >= length, (
+        f"rd_stride {rd_stride} < length {length} (firmware bug)"
+    )
+
+    ddr_off_base = (ddr_addr - GTX_DDR_BASE) if ddr_addr >= GTX_DDR_BASE else ddr_addr
+    max_off = ddr_off_base + (height - 1) * effective_stride + length
+    ensure_ddr(mem, max_off)
+    ddr_cap = mem.ddr.capacity()
+    assert max_off <= ddr_cap, (
+        f"DDR window [{ddr_off_base}, {max_off}) exceeds capacity "
+        f"{ddr_cap} — firmware bug"
+    )
+
+    # Snapshot the full row span once (one H→D copy if device != CPU).
+    ddr_span = mem.ddr.read(ddr_off_base, max_off - ddr_off_base)
+    src_2d_cpu = ddr_span[:height * effective_stride] \
+        .view(height, effective_stride)[:, :length]
+
+    l2_end = l2_addr + height * length
+    assert l2_end <= GTX_L2_SIZE_BYTES, (
+        f"L2 dst region [{l2_addr}, {l2_end}) wraps GTX_L2_SIZE_BYTES "
+        f"{GTX_L2_SIZE_BYTES} — firmware bug"
+    )
+    for k in range(GTX_NEST_NUM):
+        if not ((target_nest_mask >> k) & 1):
+            continue
+        l2 = mem.l2_byte(k)
+        l2[l2_addr:l2_end].view(height, length).copy_(src_2d_cpu.to(l2.device))
+    return 0
+
+
+# ============================================================================
+# firmware_mcast_s2s -- direct port of
+# vendor/gtx_cpp_reference/gtx/gtx_npu_dispatch.cc:732-762
+# ============================================================================
+def firmware_mcast_s2s(mem: 'GtxMemory', *, src_tmu: int,
+                        src_addr: int, dst_addr: int,
+                        src_stride: int, dst_stride: int,
+                        length: int, height: int,
+                        target_nest_mask: int) -> int:
+    """L2 → L2 multicast across NESTs (funct7=0x44, funct3=2 / sub_op=0x22).
+
+    Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_dispatch.cc:732-762.
+
+    HW conventions (vendor :741-742): height==0 → 1, NO length normalisation.
+    Per-row temp-buffer read-then-write (distinct src/dst strides — unified
+    2D view is not safe).
+
+    NO self-broadcast guard (RESEARCH Pitfall 3): vendor iterates all 4 NESTs
+    and writes wherever ``target_nest_mask`` says, even if ``src_tmu == k``.
+    ``src_tmu >= GTX_NEST_NUM`` clamps to 0 per vendor :740.
+    """
+    if height == 0:
+        height = 1
+    assert height > 0 and length > 0, f"height={height} length={length}"
+    if src_tmu >= GTX_NEST_NUM:
+        src_tmu = 0
+
+    src_l2 = mem.l2_byte(src_tmu)
+    for row in range(height):
+        s_off = (src_addr + row * src_stride) % GTX_L2_SIZE_BYTES
+        d_off = (dst_addr + row * dst_stride) % GTX_L2_SIZE_BYTES
+        # Vendor :749-750 — copy_len = min(length, GTX_L2_SIZE - max(s_off, d_off))
+        copy_len = min(length, GTX_L2_SIZE_BYTES - max(s_off, d_off))
+        if copy_len <= 0:
+            continue
+        # Temp buffer for the row (clone keeps overlap safety if src==dst NEST).
+        tmp = src_l2[s_off:s_off + copy_len].clone()
+        for k in range(GTX_NEST_NUM):
+            if not ((target_nest_mask >> k) & 1):
+                continue
+            dst_l2 = mem.l2_byte(k)
+            dst_l2[d_off:d_off + copy_len].copy_(tmp.to(dst_l2.device))
+    return 0
+
+
+# ============================================================================
+# firmware_copy_mem -- direct port of
+# vendor/gtx_cpp_reference/gtx/gtx_npu_dispatch.cc:763-846
+# ============================================================================
+def firmware_copy_mem(npu: Any, *, nest_id: int,
+                       src_addr_raw: int, dst_addr_raw: int,
+                       src_stride: int, dst_stride: int,
+                       length: int, height: int) -> int:
+    """DDR↔DDR (and L2↔DDR, L2↔L2) memory copy (funct7=0x44, f3=3, sub_op=0x23).
+
+    Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_dispatch.cc:763-846.
+
+    HW conventions (vendor :777): height==0 → 1, NO length normalisation.
+
+    DDR-vs-L2 decision (vendor :779-780): addr >= GTX_L2_SIZE_BYTES → DDR.
+    DDR-touching path FIRST LINE calls npu.flush_deferred_ddr_stores()
+    (vendor :784 — mandatory). L2↔L2 same-NEST branch does NOT flush
+    (asymmetry preserved per RESEARCH Pitfall 2).
+    """
+    if height == 0:
+        height = 1
+    assert height > 0 and length > 0, f"height={height} length={length}"
+
+    mem = npu.mem
+    src_is_ddr = src_addr_raw >= GTX_L2_SIZE_BYTES
+    dst_is_ddr = dst_addr_raw >= GTX_L2_SIZE_BYTES
+
+    if src_is_ddr or dst_is_ddr:
+        # ── DDR-touching path: mandatory flush first (vendor dispatch.cc:784) ──
+        npu.flush_deferred_ddr_stores()
+
+        # Convert raw addresses → DDR buffer offsets (vendor ddr_offset() helper).
+        src_off = (src_addr_raw - GTX_DDR_BASE) if src_addr_raw >= GTX_DDR_BASE else src_addr_raw
+        dst_off = (dst_addr_raw - GTX_DDR_BASE) if dst_addr_raw >= GTX_DDR_BASE else dst_addr_raw
+
+        if src_is_ddr and dst_is_ddr:
+            # DDR-to-DDR (vendor :800-810)
+            max_src = src_off + (height - 1) * src_stride + length
+            max_dst = dst_off + (height - 1) * dst_stride + length
+            ensure_ddr(mem, max(max_src, max_dst))
+            for row in range(height):
+                s_base = src_off + row * src_stride
+                d_base = dst_off + row * dst_stride
+                # Vendor :806-807 — per-row capacity clip
+                copy_len = length
+                ddr_cap = mem.ddr.capacity()
+                if s_base + copy_len > ddr_cap:
+                    copy_len = max(0, ddr_cap - s_base)
+                if d_base + copy_len > ddr_cap:
+                    copy_len = max(0, ddr_cap - d_base)
+                if copy_len > 0:
+                    mem.ddr.write(d_base, mem.ddr.read(s_base, copy_len))
+        elif src_is_ddr and not dst_is_ddr:
+            # DDR-to-L2 (vendor :812-822)
+            n = nest_id if nest_id < GTX_NEST_NUM else 0
+            l2 = mem.l2_byte(n)
+            max_src = src_off + (height - 1) * src_stride + length
+            ensure_ddr(mem, max_src)
+            for row in range(height):
+                s = src_off + row * src_stride
+                d = (dst_addr_raw + row * dst_stride) % GTX_L2_SIZE_BYTES
+                copy_len = length
+                ddr_cap = mem.ddr.capacity()
+                if s + copy_len > ddr_cap:
+                    copy_len = max(0, ddr_cap - s)
+                if d + copy_len > GTX_L2_SIZE_BYTES:
+                    copy_len = max(0, GTX_L2_SIZE_BYTES - d)
+                if copy_len > 0:
+                    src_bytes = mem.ddr.read(s, copy_len).to(l2.device)
+                    l2[d:d + copy_len].copy_(src_bytes)
+        else:
+            # L2-to-DDR (vendor :824-834)
+            n = nest_id if nest_id < GTX_NEST_NUM else 0
+            l2 = mem.l2_byte(n)
+            max_dst = dst_off + (height - 1) * dst_stride + length
+            ensure_ddr(mem, max_dst)
+            for row in range(height):
+                s = (src_addr_raw + row * src_stride) % GTX_L2_SIZE_BYTES
+                d = dst_off + row * dst_stride
+                copy_len = length
+                ddr_cap = mem.ddr.capacity()
+                if s + copy_len > GTX_L2_SIZE_BYTES:
+                    copy_len = max(0, GTX_L2_SIZE_BYTES - s)
+                if d + copy_len > ddr_cap:
+                    copy_len = max(0, ddr_cap - d)
+                if copy_len > 0:
+                    mem.ddr.write(d, l2[s:s + copy_len].cpu())
+    else:
+        # ── L2-to-L2 same-NEST (vendor :836-844) ──
+        # NO flush (asymmetry preserved per RESEARCH Pitfall 2).
+        n = nest_id if nest_id < GTX_NEST_NUM else 0
+        l2 = mem.l2_byte(n)
+        for row in range(height):
+            s_off = (src_addr_raw + row * src_stride) % GTX_L2_SIZE_BYTES
+            d_off = (dst_addr_raw + row * dst_stride) % GTX_L2_SIZE_BYTES
+            copy_len = min(length, GTX_L2_SIZE_BYTES - max(s_off, d_off))
+            if copy_len <= 0:
+                continue
+            # Temp buffer (clone) for overlap safety per vendor :841.
+            tmp = l2[s_off:s_off + copy_len].clone()
+            l2[d_off:d_off + copy_len].copy_(tmp)
+    return 0

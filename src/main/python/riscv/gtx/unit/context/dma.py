@@ -222,54 +222,120 @@ def _fill(npu, proc, insn, xs1, xs2):
 # ============================================================================
 @handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_S2L, funct3=0,
          mnemonic='mcast.s2l')
-def _mcast_s2l_stub(npu, proc, insn, xs1, xs2):
-    """#!TODO: 구현
-    broadcast L2SPM data to selected L1SPM 
-    operand1: dst_addr[23:0], src_addr[58:32]
-    operand2: read_stride[31:0], length[47:32], height[63:48]
-    operand3: target_spu[63:0]
-    
+def _mcast_s2l(npu, proc, insn, xs1, xs2):
+    """firmware mcast.s2l (funct7=0x42): L2 → L1 broadcast to selected SPUs.
+
+    Vendor: vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:230-273.
+    rs1 = (L2_src << 32) | L1_dst  (high=src/low=dst — NOT OPSET layout).
+    rs2 = (height<<48) | (length<<32) | read_stride.
+    rs3 = target_spu_bitmask (from GSPR_GTX_OPERAND3).
     """
-    return 0
+    state = proc.state
+    rs1 = state.XPR[insn.rs1]
+    rs2 = state.XPR[insn.rs2]
+    rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
+    nest = _select_nest(npu)
+    # Vendor: gtx_npu_custom0.cc:241-249 (decode), :253-269 (body).
+    return dma_engine.firmware_mcast_s2l(
+        npu.mem, nest=nest,
+        l2_addr=(rs1 >> 32) & 0xFFFFFFFF,
+        l1_addr=rs1 & 0xFFFFFFFF,
+        height=(rs2 >> 48) & 0xFFFF,
+        length=(rs2 >> 32) & 0xFFFF,
+        rd_stride=rs2 & 0xFFFFFFFF,
+        target_spu_mask=rs3 & 0xFFFF,
+    )
 
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_G2S, funct3=0,
          mnemonic='mcast.g2s', mask_funct3=True)
-def _mcast_g2s_stub(npu, proc, insn, xs1, xs2):
-    """#!TODO: 구현
-    broadcast DDR data to selected L2SPM(zero fill if src address is all 1)
-    operand1: dst_addr[26:0], src_addr[63:27]
-    operand2: read_stride[31:0], length[47:32], height[63:48]
-    operand3: target_nest[63:0]
+def _mcast_g2s(npu, proc, insn, xs1, xs2):
+    """firmware mcast.g2s (funct7=0x44, f3=0): DDR → L2 broadcast to selected NESTs.
+
+    Vendor: vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:545-583.
+    rs1 = (DDR_src << 27) | L2_dst  (37-bit DDR / 27-bit L2).
+    rs2 = (height<<48) | (length<<32) | read_stride.
+    rs3 = target_nest_bitmask (from GSPR_GTX_OPERAND3).
+    NOTE: NO zero-fill special case (vendor has none — earlier docstring was fiction).
     """
-    return 0
+    state = proc.state
+    rs1 = state.XPR[insn.rs1]
+    rs2 = state.XPR[insn.rs2]
+    rs3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
+    # Vendor: gtx_npu_custom0.cc:552-562 (decode), :565-580 (body).
+    return dma_engine.firmware_mcast_g2s(
+        npu.mem,
+        ddr_addr=(rs1 >> 27) & 0x1FFFFFFFFF,
+        l2_addr=rs1 & 0x7FFFFFF,
+        height=(rs2 >> 48) & 0xFFFF,
+        length=(rs2 >> 32) & 0xFFFF,
+        rd_stride=rs2 & 0xFFFFFFFF,
+        target_nest_mask=rs3 & 0xFFFF,
+    )
 
 
-@handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_G2S, 
+@handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_G2S,
          funct3=2,
          mnemonic='mcast.s2s', mask_funct3=True)
-def _mcast_s2s_stub(npu, proc, insn, xs1, xs2):
-    """#!TODO: 구현
-    broadcast L2SPM data to selected L2SPM
-        - self broadcast is not supported(use copy instead), if target_nest_sel == 0, target_nest[31:0] else target_nest[63:32]
-    operand1: src_addr[26:0], dst_addr[54:27],src_nest_id[61:56], target_nest_sel[63]
-    operand2: read_stride[31:0], length[47:32], height[63:48]
-    operand3: write_stride[31:0], target_nest[63:32]
+def _mcast_s2s(npu, proc, insn, xs1, xs2):
+    """firmware mcast.s2s (funct7=0x44, f3=2; reachable via OPSET sub_op=0x22):
+    L2 → L2 across NESTs.
+
+    Vendor: vendor/gtx_cpp_reference/gtx/gtx_npu_dispatch.cc:732-762.
+    op1[26:0]=src_addr, op1[53:27]=dst_addr, op1[61:56]=src_tmu.
+    op2[31:0]=src_stride, op2[47:32]=length, op2[63:48]=height.
+    op3[31:0]=dst_stride, op3[63:32]=target_nest_bitmask (FLAT — no self-broadcast
+    guard, no select bit; earlier docstring was fiction per RESEARCH Pitfall 3).
+    NOTE: funct3=2 firmware reachability uncertain — see RESEARCH Pitfall 4.
     """
-    return 0
+    state = proc.state
+    op1 = state.XPR[insn.rs1]
+    op2 = state.XPR[insn.rs2]
+    op3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
+    # Vendor: gtx_npu_dispatch.cc:740-748 (decode), :751-760 (body).
+    return dma_engine.firmware_mcast_s2s(
+        npu.mem,
+        src_tmu=(op1 >> 56) & 0x3F,
+        src_addr=op1 & 0x7FFFFFF,
+        dst_addr=(op1 >> 27) & 0x7FFFFFF,
+        src_stride=op2 & 0xFFFFFFFF,
+        dst_stride=op3 & 0xFFFFFFFF,
+        length=(op2 >> 32) & 0xFFFF,
+        height=(op2 >> 48) & 0xFFFF,
+        target_nest_mask=(op3 >> 32) & 0xFFFFFFFF,
+    )
 
 
 @handler(kind='custom0', funct7=GTX_ISS_F7_MCAST_G2S, funct3=3,
          mnemonic='copy.mem', mask_funct3=True)
-def _copy_mem_stub(npu, proc, insn, xs1, xs2):
-    """#!TODO: 구현
-    DMA from DDR to DDR (gspr: read_stride_H, write_stride_H, ddr_addr_H)
-    operand1: src_addr_DDR[36:0], write_stride_L[63:48]
-    operand2: read_stride[31:0], length[47:32], height[63:48]
-    operand3: dst_addr_DDR[36:0], write_stride_H[63:48]
+def _copy_mem(npu, proc, insn, xs1, xs2):
+    """firmware copy.mem (funct7=0x44, f3=3; OPSET sub_op=0x23):
+    DDR↔DDR (and L2↔DDR, L2↔L2).
+
+    Vendor: vendor/gtx_cpp_reference/gtx/gtx_npu_custom0.cc:509-543 (decode)
+            + vendor/gtx_cpp_reference/gtx/gtx_npu_dispatch.cc:763-846 (body).
+    op1[36:0]=src_addr_raw, op3[36:0]=dst_addr_raw (37-bit; ≥ GTX_L2_SIZE_BYTES → DDR).
+    op2[31:0]=src_stride, op2[47:32]=length, op2[63:48]=height.
+    dst_stride = (op1[63:48] low 16) | (op3[63:48] << 16) — split layout.
+    DDR-path MUST call npu.flush_deferred_ddr_stores() first (vendor dispatch.cc:784).
     """
-    
-    return 0
+    state = proc.state
+    op1 = state.XPR[insn.rs1]
+    op2 = state.XPR[insn.rs2]
+    op3 = npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)
+    src_stride = op2 & 0xFFFFFFFF
+    dst_stride = ((op1 >> 48) & 0xFFFF) | (((op3 >> 48) & 0xFFFF) << 16)
+    nest = _select_nest(npu)
+    # Vendor: gtx_npu_custom0.cc:518-528 (decode), gtx_npu_dispatch.cc:768-845 (body).
+    return dma_engine.firmware_copy_mem(
+        npu, nest_id=nest,
+        src_addr_raw=op1 & 0x1FFFFFFFFF,
+        dst_addr_raw=op3 & 0x1FFFFFFFFF,
+        src_stride=src_stride,
+        dst_stride=dst_stride,
+        length=(op2 >> 32) & 0xFFFF,
+        height=(op2 >> 48) & 0xFFFF,
+    )
 
 
 # ============================================================================
