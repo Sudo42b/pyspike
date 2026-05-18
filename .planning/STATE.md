@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Post-Ship Polish
-status: executing
-last_updated: "2026-05-18T15:19:12.290Z"
+status: verifying
+last_updated: "2026-05-18T17:36:38.244Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 7
@@ -36,7 +36,7 @@ M ≥ 12 PASS = milestone success criterion.
 Phase: 09 (backend-migration-numpy-cupy) — EXECUTING
 Plan: 6 of 6
 Total Plans in Phase: 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-18
 
 Last activity: 2026-05-18 — Debug session **todo-marked-functions-causing-regressions** RESOLVED. 5-defect refactor casualty cascade (D1-D5) silently broke ALL gtx extension registration → rc=255 "couldn't find extension 'gtx'" for every regression test (ABS, GELU, RELU, SIGMOID, ADD, NEG, EXP). D1: encoding.py GTX_F7_WRSPR/RDSPR 0x49/0x48 ↔ 0x00/0x01 value swap (vendor gtx_npu.h:266-267 authority). D2: missing GTX_ISS_F7_RDSPR_ISS/WRSPR_ISS constants → ImportError swallowed by `riscv/gtx/__init__.py:62-68`. D3: missing ACT_OPS_REVERSED frozenset (vendor gtx_npu_act.cc:37-42). D4: spr.py wrong relative import depths (unit/ package layer insertion casualty). D5: `_verify.py` torch.uint16(int) — dtype-as-constructor TypeError. Surgical refactor: spr_router.py DELETED (rd_spr/wr_spr inlined into spr.py), control.py 6 P2-skeleton stubs DELETED, dma.py mnemonics → vendor-canonical dot form (load.svr/store.svr/mcast.g2s/mcast.s2l/mcast.s2s/copy.mem), `_load_svr_l1`/`_store_svr_l1` alias handlers DELETED. ABS strict byte-exact PASS confirmed user env 458.84s (96 tiles × 196609 lines). 2 source commits: 2f4c514 (D1-D5 + spr_router migration), e782b35 (DMA mnemonic refactor + dead file deletion). New memory: `project_gtx_extension_silent_import_failure` (debug pattern: ImportError swallowed by `__init__.py` try/except → universal rc=255). Knowledge-base.md initialized.
@@ -163,6 +163,7 @@ Last activity: 2026-05-18 — Debug session **todo-marked-functions-causing-regr
 | Phase 09-backend-migration-numpy-cupy P01b | 78min | 4 tasks | 11 files |
 | Phase 09 P02a | 33min | 6 tasks | 9 files |
 | Phase 09-backend-migration-numpy-cupy P02b | 72min | 3 tasks | 6 files |
+| Phase 09-backend-migration-numpy-cupy P03 | 128min | 8 tasks | 17 files |
 
 ## Accumulated Context
 
