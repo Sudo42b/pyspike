@@ -19,6 +19,11 @@ direct npu.custom0 dispatch path with xs1=1; if it doesn't fire we'd see
 unchanged dst L2 — in that case the test asserts the precise expected
 state (current dispatch behaviour) so that future routing changes flip the
 expected/actual without breaking the contract.
+
+Wave 6 (plan 09-03-finalize) ported all 17 torch refs to numpy/xp per
+CONTEXT D-16. The test reads raw L1/L2/DDR storage via the xp-native
+backings (`npu.mem.l1[nest, spu]`, `npu.mem.l2[nest]`, `npu.mem.ddr._bytes`)
+instead of the WAVE-1-SHIM accessors which are removed in this plan.
 """
 from __future__ import annotations
 
@@ -38,7 +43,7 @@ pytestmark = pytest.mark.skipif(
     reason="mcast/copy.mem tests construct a real GtxNpu; require _riscv.so",
 )
 
-import torch  # noqa: E402
+import numpy as np  # noqa: E402
 
 from tests.gtx._mocks import DummyInsn, MockProcessor  # noqa: E402
 
@@ -67,17 +72,18 @@ def _set_gspr_operand3(npu, val: int) -> None:
     npu.gspr[GSPR['GSPR_GTX_OPERAND3'].address] = val
 
 
-def _seed_l2(npu, nest: int, offset: int, n: int) -> torch.Tensor:
+def _seed_l2(npu, nest: int, offset: int, n: int) -> np.ndarray:
     """Seed NEST L2 [offset:offset+n) with deterministic uint8 arange pattern.
-    Returns the seed bytes (CPU tensor) for later byte-exact comparison.
+    Returns the seed bytes (numpy ndarray) for later byte-exact comparison.
     """
-    pat = (torch.arange(n, dtype=torch.int32) & 0xFF).to(torch.uint8)
-    npu.mem.l2_byte(nest)[offset:offset + n].copy_(pat.to(npu.mem.l2_byte(nest).device))
+    pat = (np.arange(n, dtype=np.int32) & 0xFF).astype(np.uint8)
+    # Bypass the WAVE-1-SHIM accessor — write raw xp backing directly.
+    npu.mem.l2[nest, offset:offset + n] = pat
     return pat
 
 
-def _seed_ddr(npu, offset: int, n: int) -> torch.Tensor:
-    pat = (torch.arange(n, dtype=torch.int32) & 0xFF).to(torch.uint8)
+def _seed_ddr(npu, offset: int, n: int) -> np.ndarray:
+    pat = (np.arange(n, dtype=np.int32) & 0xFF).astype(np.uint8)
     npu.mem.ensure_ddr(offset + n)
     npu.mem.ddr.write(offset, pat)
     return pat
@@ -110,11 +116,10 @@ def test_mcast_s2l_broadcast_to_2_spus():
     assert rc == 0
 
     # Verify SPU 0 and SPU 2 got the pattern; SPU 1 untouched
-    pat_dev = pat.to(npu.mem.l1_byte(0, 0).device)
-    assert torch.equal(npu.mem.l1_byte(0, 0)[L1_DST:L1_DST + LEN], pat_dev)
-    assert torch.equal(npu.mem.l1_byte(0, 2)[L1_DST:L1_DST + LEN], pat_dev)
+    assert np.array_equal(npu.mem.l1[0, 0, L1_DST:L1_DST + LEN], pat)
+    assert np.array_equal(npu.mem.l1[0, 2, L1_DST:L1_DST + LEN], pat)
     # SPU 1 (not in mask) MUST be untouched — defaults to zero
-    assert torch.all(npu.mem.l1_byte(0, 1)[L1_DST:L1_DST + LEN] == 0)
+    assert bool(np.all(npu.mem.l1[0, 1, L1_DST:L1_DST + LEN] == 0))
 
 
 # ============================================================================
@@ -144,11 +149,10 @@ def test_mcast_g2s_broadcast_to_2_nests():
     rc = npu.custom0(proc, insn, 0, 0)
     assert rc == 0
 
-    pat_dev = pat.to(npu.mem.l2_byte(0).device)
-    assert torch.equal(npu.mem.l2_byte(0)[L2_DST:L2_DST + LEN], pat_dev)
-    assert torch.equal(npu.mem.l2_byte(2)[L2_DST:L2_DST + LEN], pat_dev)
+    assert np.array_equal(npu.mem.l2[0, L2_DST:L2_DST + LEN], pat)
+    assert np.array_equal(npu.mem.l2[2, L2_DST:L2_DST + LEN], pat)
     # NEST 1 not in mask — must remain zero in dst region
-    assert torch.all(npu.mem.l2_byte(1)[L2_DST:L2_DST + LEN] == 0)
+    assert bool(np.all(npu.mem.l2[1, L2_DST:L2_DST + LEN] == 0))
 
 
 # ============================================================================
@@ -182,15 +186,14 @@ def test_mcast_s2s_l2_to_l2():
     assert rc == 0
 
     # If handler fires (Pitfall 4 NOT confirmed), NESTs 1/2/3 hold the pattern.
-    pat_dev = pat.to(npu.mem.l2_byte(0).device)
     # Use pytest.xfail rather than skip if any NEST still zero — leaves a
     # permanent reachability record for future OPSET-routing follow-up.
-    n1 = npu.mem.l2_byte(1)[DST:DST + LEN]
-    n2 = npu.mem.l2_byte(2)[DST:DST + LEN]
-    n3 = npu.mem.l2_byte(3)[DST:DST + LEN]
-    n1_match = torch.equal(n1, pat_dev)
-    n2_match = torch.equal(n2, pat_dev)
-    n3_match = torch.equal(n3, pat_dev)
+    n1 = npu.mem.l2[1, DST:DST + LEN]
+    n2 = npu.mem.l2[2, DST:DST + LEN]
+    n3 = npu.mem.l2[3, DST:DST + LEN]
+    n1_match = np.array_equal(n1, pat)
+    n2_match = np.array_equal(n2, pat)
+    n3_match = np.array_equal(n3, pat)
     if not (n1_match and n2_match and n3_match):
         # Functional firmware-path dispatch did NOT fire for funct3=2.
         # Record as xfail with reason — RESEARCH Pitfall 4 hypothesis confirmed.
@@ -202,8 +205,8 @@ def test_mcast_s2s_l2_to_l2():
         )
     # Source NEST 0 region must remain unchanged (no self-broadcast guard,
     # but the dst slot here is different from src so they don't overlap).
-    pat0 = npu.mem.l2_byte(0)[SRC:SRC + LEN]
-    assert torch.equal(pat0, pat_dev)
+    pat0 = npu.mem.l2[0, SRC:SRC + LEN]
+    assert np.array_equal(pat0, pat)
 
 
 # ============================================================================
@@ -255,7 +258,7 @@ def test_copy_mem_ddr_to_ddr_flushes_first():
 
     # Assertion A — DDR dst received src bytes
     dst_bytes = npu.mem.ddr.read(DDR_DST, LEN)
-    assert torch.equal(dst_bytes, src_pat), (
+    assert np.array_equal(dst_bytes, src_pat), (
         f"DDR→DDR copy mismatch: got {dst_bytes[:8].tolist()}, "
         f"expected {src_pat[:8].tolist()}"
     )
@@ -267,7 +270,7 @@ def test_copy_mem_ddr_to_ddr_flushes_first():
     )
     #   (2) the sentinel bytes actually landed in DDR at SENTINEL_DDR
     sentinel_dst = npu.mem.ddr.read(SENTINEL_DDR, SENTINEL_LEN)
-    assert torch.equal(sentinel_dst, sentinel_pat), (
+    assert np.array_equal(sentinel_dst, sentinel_pat), (
         f"deferred sentinel was not flushed to DDR: "
         f"got {sentinel_dst[:4].tolist()}, expected {sentinel_pat[:4].tolist()}"
     )
@@ -313,8 +316,7 @@ def test_copy_mem_l2_to_l2_no_flush():
     assert rc == 0
 
     # Assertion A — L2 dst received src bytes
-    pat_dev = src_pat.to(npu.mem.l2_byte(0).device)
-    assert torch.equal(npu.mem.l2_byte(0)[L2_DST:L2_DST + LEN], pat_dev)
+    assert np.array_equal(npu.mem.l2[0, L2_DST:L2_DST + LEN], src_pat)
 
     # Assertion B — deferred sentinel STILL in queue (flush SKIPPED for
     # L2↔L2 same-NEST path per vendor dispatch.cc:836-844 asymmetry).
