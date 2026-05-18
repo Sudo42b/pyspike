@@ -100,6 +100,16 @@ ULP 허용오차 내로 일치한다 — 이게 안 되면 다른 어떤 기능�
   reasons: scipy ban for GELU_ERF, composites, unsupported HW); 21 parametrized parity
   tests with delta_ulp=0 across 1344 element comparisons — bit-exact, ULP-1 tolerance
   not consumed)
+- ✓ **GTX-BACKEND-01** (BM-01..06): `torch.Tensor` → `numpy.ndarray` 기본 백엔드 전환 + `xp`
+  alias dual-backend (`xp = numpy` default; `xp = cupy` opt-in via `GTX_USE_CUDA=1` +
+  `pip install spike[cuda]` extras). All hot-path `riscv.gtx.*` modules torch-free
+  (0 live imports; 2 docstring/comment mentions only). ABS strict byte-exact PASS
+  preserved at 78.69s (well inside 105s D-08 budget; 36% headroom). Install footprint
+  reduced ~5-7GB (torch + 16 cu12 transitive deps removed). — **Validated in Phase 9:
+  Backend Migration** (BM-01..06 closed; 6 plans / 6 waves; Option-A DEVICE deferral +
+  Option-B `_torch_view` strangler-fig shim both sunset in Wave 6; 73/73 unit tests
+  GREEN; 4 PASS smoke ops preserved; D-04 `from riscv.gtx import DEVICE` clean cut
+  raises ImportError)
 
 ### Active
 
@@ -248,7 +258,20 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-09 after Phase 7 complete (Numba Dynamic Optimization: 28
+*Last updated: 2026-05-19 after Phase 9 complete (Backend Migration: torch →
+numpy default + cupy opt-in via `xp` alias single-source-of-truth in
+`config_params.py`; 6 plans / 6 waves; Option-A DEVICE deferral + Option-B
+`_torch_view` strangler-fig shim landed Wave 1, both sunset Wave 6; D-04 clean
+cut `from riscv.gtx import DEVICE` → ImportError; pyproject torch removed +
+`cuda = ["cupy-cuda12x>=13,<15"]` extras added (NO `[cuda-jit]` per Option-A
+P10-split locked default); ABS strict byte-exact PASS preserved at 78.69s
+(well inside 105s D-08 budget); 73/73 unit tests GREEN + 4 PASS smoke ops
+(ABS, GELU, RELU, SIGMOID) + 1 SKIP (TANH vendor `.elf` absent); 3 pre-existing
+P9-backlog FAILs in vec.py:339 (GELU_QUICK, HARDSIGMOID, LEAKY_RELU) inherited
+from Wave 0 and deferred; 64/64 requirements coverage; install footprint
+delta ~5-7GB removed via torch + 16 cu12 transitive deps elimination)*
+
+*Previously: 2026-05-09 after Phase 7 complete (Numba Dynamic Optimization: 28
 stateless GTX kernels — gemm_core 3 + vec_core 7 + act_core 18 — promoted to
 FP32-only `_impl` + `@njit(cache=True)` boundary with auto NumPy fallback via
 `from riscv.gtx._jit import HAS_NUMBA, njit` shim; 5 transcendentals
