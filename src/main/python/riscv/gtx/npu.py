@@ -344,16 +344,24 @@ class GtxNpu(isa.ROCC):
     # Deferred-store flush — wired from end_p / credit_st_chk handlers.
     # ------------------------------------------------------------------
     def flush_deferred_ddr_stores(self) -> None:
-        """Drain the S-loop deferred L2→DDR store queue."""
+        """Drain the S-loop deferred L2→DDR store queue.
+
+        Bypasses ``mem.l2_byte()`` (which is Wave-1-SHIM-wrapped to return a
+        torch.Tensor for un-ported Wave 2/3 callers) and reads the L2
+        storage directly through ``self.mem.l2[nest]``. This is xp-native
+        on both numpy and cupy paths and keeps the flush hot path free of
+        the throwaway shim. The shim's purpose is purely to bridge
+        accessor returns for un-ported torch consumers — internal Wave 1b
+        code should use the underlying xp storage directly.
+        """
         if not self.deferred_ddr_stores:
             return
         from .config_params import GTX_L2_SIZE_BYTES
         for req in self.deferred_ddr_stores:
-            # D-12: explicit H/D bridge at DMA boundary. Identity under
-            # xp=numpy (no copy); under xp=cupy this is the documented
-            # contract point — Wave 3 will revisit whether L2→DDR should
-            # bridge or stay device-resident (D-10 GPU-uniform DDR).
-            l2_src = to_host(self.mem.l2_byte(req.nest))
+            # D-12: identity under xp=numpy (no copy); xp=cupy contract
+            # documented at the DMA boundary. Read through xp storage
+            # directly to bypass the WAVE-1-SHIM (torch-view) on l2_byte.
+            l2_src = to_host(self.mem.l2[req.nest])
             max_off = req.ddr_off + (req.height - 1) * req.ddr_stride + req.length
             self.mem.ensure_ddr(max_off)
             cap = self.mem.ddr.capacity()

@@ -36,7 +36,82 @@ cross-SPU operations to plain ndarray slicing
 ``DDR_MEMORY`` keeps its own grow-on-demand path. Under xp=numpy DDR
 is host RAM; under xp=cupy (D-10) DDR is GPU VRAM and file I/O
 crosses the H/D boundary via ``to_host()`` at the formatting edge.
+
+WAVE-1-SHIM — Wave 1 → Wave 2/3 bridge (strangler-fig pattern):
+
+    Storage layer is xp-internal (numpy default, cupy under
+    GTX_USE_CUDA=1). Accessor methods that are STILL CONSUMED BY
+    un-ported torch-API callers (dma_engine.py / tloop_buffer.py /
+    ops/*.py) wrap their returns in ``torch.from_numpy(...)`` via the
+    private ``_torch_view(arr)`` helper.
+
+    Properties of the bridge:
+      * Zero-copy on the numpy path (`torch.from_numpy` shares the
+        underlying buffer with the source ndarray — writes through
+        the torch tensor land in xp storage and vice versa).
+      * Fail-loud on the cupy path: `torch.from_numpy` does not accept
+        cupy buffers and Wave 2/3 cupy ports must already have removed
+        the consuming torch calls by the time xp=cupy is used. The
+        helper raises ``RuntimeError("Wave 2/3 cupy ports incomplete:
+        ...")`` to surface the incomplete-port bug instantly instead
+        of decoding a confusing torch internal AttributeError.
+
+    Sunset condition: shim removed when ALL torch consumers are ported
+    off torch (Wave 3 end). The exact removal-wave assignment per
+    accessor is documented in ``09-01b-SUMMARY.md`` "Deviations from
+    plan: Option-B Wave 1 bridge shim" table; each call site below also
+    carries a ``# WAVE-1-SHIM: remove in Wave <N>`` marker naming the
+    plan that owns its removal.
 """
+
+
+# ---------------------------------------------------------------------------
+# WAVE-1-SHIM helper — bridges xp.ndarray -> torch.Tensor at the accessor
+# boundary so un-ported Wave 2/3 torch consumers keep working until they're
+# ported. THROWAWAY. Removed in Wave 3 (plan 09-03-finalize) once every call
+# site below has been ported off torch.
+#
+# This is the ONLY place memory.py imports torch (a deliberate local import
+# inside the helper so the module-import path stays clean and the cupy
+# path never touches torch).
+# ---------------------------------------------------------------------------
+
+def _torch_view(arr):
+    """Zero-copy bridge from an xp ndarray to a torch.Tensor (numpy path).
+
+    WAVE-1-SHIM (Option B, plan 09-01b Task 4). Sunset: Wave 3 end.
+
+    Used by ``GtxMemory.{l0,l1,l2}_byte``, ``GtxMemory.{l0,l1,l2}_f16``, and
+    ``DDR_MEMORY.read`` so that Wave 2/3 callers still expecting torch
+    tensors (``.to(device)``, ``.view(torch.float16)``, ``.copy_(...)``,
+    ``.numel()``, etc.) keep working unchanged until their files are ported
+    off torch.
+
+    On the numpy path: ``torch.from_numpy(arr)`` shares the same underlying
+    buffer — no allocation, no ``.copy()``. Wave 1a's in-place DMA / vec /
+    op semantics survive because the torch tensor and the xp ndarray
+    reference the same memory.
+
+    On the cupy path: torch.from_numpy does not accept cupy buffers, and
+    by the time xp=cupy is in use the Wave 2/3 cupy ports must already
+    have removed every torch-API call site. If we reach this branch it
+    means a torch consumer was missed — raise loudly with a hint instead
+    of letting torch decode a confusing AttributeError.
+    """
+    if xp is _np:
+        # Local import — keep this isolated to the shim path so the cupy
+        # branch never imports torch and so the helper is easy to grep +
+        # delete when the shim sunsets.
+        import torch  # noqa: PLC0415 (intentional local; shim sunset)
+        return torch.from_numpy(arr)
+    # cupy path: incomplete-port bug — surface explicitly.
+    raise RuntimeError(
+        "Wave 2/3 cupy ports incomplete: memory.py shim was hit on the "
+        "xp=cupy path. Every torch-API caller (dma_engine.py / "
+        "tloop_buffer.py / ops/*.py / _verify.py) must be ported to xp "
+        "before GTX_USE_CUDA=1 is exercised. See 09-01b-SUMMARY.md "
+        "'Deviations from plan' for the per-shim removal-wave table."
+    )
 
 
 # =============================================================================
@@ -153,10 +228,13 @@ class DDR_MEMORY(MEMORY):
     # accepts an ndarray on the same backend (caller is responsible for any
     # ``to_device``/``to_host`` conversion at DMA / file boundaries).
 
-    def read(self, addr: int, n: int) -> xp.ndarray:
+    def read(self, addr: int, n: int) -> "xp.ndarray | object":
         if self._bytes is None:
             raise RuntimeError("DDR not allocated — call ensure() first")
-        return self._bytes[addr : addr + n]
+        # WAVE-1-SHIM: remove in Wave 2 (port dma_engine.py — only torch
+        # consumer of DDR_MEMORY.read; lines 266 / 345-348 do .view(torch.
+        # float16) / .to(l2_buf.device) / .numel() / .copy_).
+        return _torch_view(self._bytes[addr : addr + n])
 
     def write(self, addr: int, data) -> None:
         if self._bytes is None:
@@ -243,25 +321,45 @@ class GtxMemory(MEMORY):
 
     # ----- Raw byte views (D-10 low-level, kept for in-place strided ops) ---
 
-    def l0_byte(self, nest: int, spu: int) -> xp.ndarray:
-        return self._l0_views[nest, spu]
+    def l0_byte(self, nest: int, spu: int) -> "xp.ndarray | object":
+        # WAVE-1-SHIM: remove in Wave 2 (port ops/act.py + ops/mm.py +
+        # ops/spr.py + ops/vec.py — all consume l0_byte and call torch
+        # APIs on the return).
+        return _torch_view(self._l0_views[nest, spu])
 
-    def l1_byte(self, nest: int, spu: int) -> xp.ndarray:
-        return self._l1_views[nest, spu]
+    def l1_byte(self, nest: int, spu: int) -> "xp.ndarray | object":
+        # WAVE-1-SHIM: remove in Wave 3 (port ops/act.py + ops/mm.py +
+        # dma_engine.py:206/289 + tloop_buffer.py:483 — last torch consumer
+        # is in tloop_buffer.py which is owned by Wave 3 plan 09-03-finalize).
+        return _torch_view(self._l1_views[nest, spu])
 
-    def l2_byte(self, nest: int) -> xp.ndarray:
-        return self._l2_views[nest]
+    def l2_byte(self, nest: int) -> "xp.ndarray | object":
+        # WAVE-1-SHIM: remove in Wave 3 (port tloop_buffer.py:459/467/477/485
+        # — the only torch consumer of l2_byte; Wave 3 plan 09-03-finalize).
+        return _torch_view(self._l2_views[nest])
 
     # ----- Halfword fp16 views (D-10 named, D-12 view guarantee) -----
 
-    def l0_f16(self, nest: int, spu: int) -> xp.ndarray:
-        return self._l0_f16_views[nest, spu]
+    def l0_f16(self, nest: int, spu: int) -> "xp.ndarray | object":
+        # WAVE-1-SHIM: remove in Wave 2 — no Wave-2/3 callers actually
+        # invoke l0_f16 (the audit shows act/mm/vec hit l0_byte then
+        # .view(torch.float16) themselves). Shim kept defensively to keep
+        # the accessor return-type invariant uniform across all f16 views;
+        # delete in plan 09-02a together with l1_f16.
+        return _torch_view(self._l0_f16_views[nest, spu])
 
-    def l1_f16(self, nest: int, spu: int) -> xp.ndarray:
-        return self._l1_f16_views[nest, spu]
+    def l1_f16(self, nest: int, spu: int) -> "xp.ndarray | object":
+        # WAVE-1-SHIM: remove in Wave 2 (port ops/act.py:312/433 + ops/
+        # vec.py:124 — only torch consumers of l1_f16, owned by Wave 2
+        # plan 09-02a-ops).
+        return _torch_view(self._l1_f16_views[nest, spu])
 
-    def l2_f16(self, nest: int) -> xp.ndarray:
-        return self._l2_f16_views[nest]
+    def l2_f16(self, nest: int) -> "xp.ndarray | object":
+        # WAVE-1-SHIM: remove in Wave 2 — no Wave-2/3 callers actually
+        # invoke l2_f16 in the smoke path (audit shows zero direct uses).
+        # Shim kept defensively for the FP16-view return-type contract;
+        # delete in plan 09-02a alongside the other f16 shims.
+        return _torch_view(self._l2_f16_views[nest])
 
     def ensure_ddr(self, end_offset: int) -> Optional[xp.ndarray]:
         return self.ddr.ensure(end_offset)

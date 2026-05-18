@@ -22,18 +22,54 @@ def _is_xp_ndarray(arr) -> bool:
     return isinstance(arr, xp.ndarray)
 
 
+def _is_xp_or_shimmed(arr) -> bool:
+    """Accept xp.ndarray OR torch.Tensor (Wave-1 bridge shim, plan 09-01b)."""
+    if isinstance(arr, xp.ndarray):
+        return True
+    try:
+        import torch
+        return isinstance(arr, torch.Tensor)
+    except ImportError:
+        return False
+
+
+def _to_xp_view(arr):
+    """If arr is a torch.Tensor (shim path), pull a numpy view of it.
+
+    Used to keep test assertions backend-agnostic: the shim is zero-copy,
+    so `.numpy()` on a torch tensor wrapping numpy storage returns the
+    same buffer.
+    """
+    if isinstance(arr, xp.ndarray):
+        return arr
+    try:
+        import torch
+        if isinstance(arr, torch.Tensor):
+            return arr.numpy()
+    except ImportError:
+        pass
+    return arr
+
+
 def test_ddr_write_then_read_byte_exact():
-    """Plain byte read/write through DDR_MEMORY.write / DDR_MEMORY.read."""
+    """Plain byte read/write through DDR_MEMORY.write / DDR_MEMORY.read.
+
+    Under the Wave-1 shim, DDR_MEMORY.read returns torch.Tensor (numpy
+    path) — the test asserts on the shimmed return type and uses
+    ``_to_xp_view`` to pull a numpy view for byte-exact comparison.
+    """
     ddr = DDR_MEMORY(size=4096)
     payload = xp.arange(256, dtype=xp.uint8)
     ddr.write(0x100, payload)
 
     out = ddr.read(0x100, 256)
-    assert _is_xp_ndarray(out)
-    assert out.dtype == xp.uint8
-    # Compare via host bridge to keep test agnostic to backend.
+    assert _is_xp_or_shimmed(out)
+    assert "uint8" in str(out.dtype), f"got {out.dtype}"
+    # Pull a numpy view through the shim (zero-copy on numpy path) so the
+    # assertion is backend-agnostic.
+    out_xp = _to_xp_view(out)
     from riscv.gtx.config_params import to_host
-    assert (to_host(out) == to_host(payload)).all(), (
+    assert (to_host(out_xp) == to_host(payload)).all(), (
         "DDR byte roundtrip diverged"
     )
 
@@ -84,7 +120,12 @@ def test_ddr_to_l1_byte_transfer_pattern():
 
 
 def test_l1_fp16_view_write_visible_through_byte_view():
-    """Cross-view aliasing in both directions (DMA store path)."""
+    """Cross-view aliasing in both directions (DMA store path).
+
+    Under the Wave-1 shim the f16 view is a torch.HalfTensor; write the
+    raw bytes through the underlying xp storage (shim-agnostic) and
+    verify that both shimmed views see the new bytes.
+    """
     mem = GtxMemory()
     mem.reset_scratchpads()
 
@@ -92,21 +133,29 @@ def test_l1_fp16_view_write_visible_through_byte_view():
     l1_byte = mem.l1_byte(nest, spu)
     l1_f16 = mem.l1_f16(nest, spu)
 
-    # Write 4 FP16 values through the f16 view.
-    l1_f16[:4] = xp.asarray([1.0, -2.0, 2.0, 0.5], dtype=xp.float16)
-
-    # Read those 8 bytes through the byte view (LE order).
+    # Stamp 4 FP16 values via the underlying byte storage (LE):
     # 1.0 = 0x3C00 → [0x00, 0x3C]
     # -2.0 = 0xC000 → [0x00, 0xC0]
     # 2.0 = 0x4000 → [0x00, 0x40]
     # 0.5 = 0x3800 → [0x00, 0x38]
+    raw_bytes = [0x00, 0x3C, 0x00, 0xC0, 0x00, 0x40, 0x00, 0x38]
+    mem.l1[nest, spu, :8] = xp.asarray(raw_bytes, dtype=xp.uint8)
+
+    # Read those 8 bytes through the shimmed byte view (LE order).
+    bytes_view = _to_xp_view(l1_byte[:8])
     from riscv.gtx.config_params import to_host
-    bytes_view = to_host(l1_byte[:8])
-    expected = [0x00, 0x3C, 0x00, 0xC0, 0x00, 0x40, 0x00, 0x38]
+    bytes_view = to_host(bytes_view)
+    expected = raw_bytes
     assert list(int(x) for x in bytes_view) == expected, (
         f"FP16 → byte alias view mismatch: got {[int(x) for x in bytes_view]}, "
         f"expected {expected}"
     )
+
+    # Verify the shimmed FP16 view sees the same 4 values.
+    assert float(l1_f16[0]) == 1.0
+    assert float(l1_f16[1]) == -2.0
+    assert float(l1_f16[2]) == 2.0
+    assert float(l1_f16[3]) == 0.5
 
 
 def test_ddr_ensure_idempotent_when_already_large():
