@@ -83,17 +83,17 @@ def test_shim_sites_carry_removal_wave_markers():
     plan inherits the obligation to delete that shim.
 
     Wave 1b landed 7 shims (3 byte + 3 f16 + ddr.read). Wave 2a (plan
-    09-02a-ops) removed the 3 f16 shims after porting ops/*.py off
-    torch — those accessors no longer have any torch consumers. The 4
-    remaining shims (l0_byte, l1_byte, l2_byte, ddr.read) are inherited
-    by Wave 5 (09-02b-engines) and Wave 6 (09-03-finalize) per the
-    09-01b-SUMMARY removal-wave inheritance table.
+    09-02a-ops) removed the 3 f16 shims after porting ops/*.py off torch.
+    Wave 5 (plan 09-02b-engines) removed l0_byte + ddr.read shims after
+    porting dma_engine.py off torch — those accessors no longer have any
+    torch consumers. The 2 remaining shims (l1_byte, l2_byte) are
+    inherited by Wave 6 (09-03-finalize) for tloop_buffer.py.
     """
     src = MEMORY_PY.read_text()
     markers = re.findall(r"WAVE-1-SHIM:\s*remove in Wave \w+", src)
-    assert len(markers) >= 4, (
-        f"Expected >= 4 WAVE-1-SHIM removal markers (post-Wave-2a: l0_byte, "
-        f"l1_byte, l2_byte, ddr.read); found {len(markers)}: {markers}"
+    assert len(markers) >= 2, (
+        f"Expected >= 2 WAVE-1-SHIM removal markers (post-Wave-5: l1_byte, "
+        f"l2_byte); found {len(markers)}: {markers}"
     )
 
 
@@ -174,13 +174,19 @@ def test_l2_byte_returns_torch_tensor_on_numpy_path():
     assert buf.dtype == torch.uint8
 
 
-def test_l0_byte_returns_torch_tensor_on_numpy_path():
+def test_l0_byte_returns_xp_ndarray_post_wave5():
+    """Wave 5 (plan 09-02b) removed the l0_byte shim — accessor returns
+    bare xp.ndarray. dma_engine.py was the only torch consumer of l0_byte
+    (lines 155/179); with dma_engine ported the accessor surfaces raw xp
+    storage. ops/{act,mm,spr,vec}.py (Wave 2a) already bypass via
+    `npu.mem.l0[nest, spu]`.
+    """
     if xp is not np:
         pytest.skip("Numpy-path test (default xp=numpy)")
     mem = GtxMemory()
     buf = mem.l0_byte(0, 0)
-    assert isinstance(buf, torch.Tensor)
-    assert buf.dtype == torch.uint8
+    assert isinstance(buf, np.ndarray)
+    assert buf.dtype == np.uint8
 
 
 def test_l1_f16_returns_xp_ndarray_post_wave2a():
@@ -213,17 +219,22 @@ def test_l2_f16_returns_xp_ndarray_post_wave2a():
     assert buf.dtype == np.float16
 
 
-def test_ddr_read_returns_torch_tensor_on_numpy_path():
-    """`mem.ddr.read(...)` shim — dma_engine.py:345-348 consumer."""
+def test_ddr_read_returns_xp_ndarray_post_wave5():
+    """Wave 5 (plan 09-02b) removed the ddr.read shim — accessor returns
+    bare xp.ndarray. dma_engine.py was the only torch consumer of
+    DDR_MEMORY.read (lines 266 / 345-348 / 534 / 647 / 664); with
+    dma_engine ported and using raw `mem.ddr._bytes[start:end]` slicing,
+    the accessor surfaces raw xp storage.
+    """
     if xp is not np:
         pytest.skip("Numpy-path test (default xp=numpy)")
     ddr = DDR_MEMORY()
     ddr.ensure(64)
     buf = ddr.read(0, 32)
-    assert isinstance(buf, torch.Tensor), (
-        f"DDR_MEMORY.read must return torch.Tensor under shim, got {type(buf)}"
+    assert isinstance(buf, np.ndarray), (
+        f"DDR_MEMORY.read must return xp.ndarray post-Wave-5, got {type(buf)}"
     )
-    assert buf.dtype == torch.uint8
+    assert buf.dtype == np.uint8
 
 
 # ------------------------------------------------------------------------
@@ -250,7 +261,11 @@ def test_l1_byte_torch_write_visible_in_underlying_storage():
     )
 
 
-def test_ddr_read_torch_write_visible_in_underlying_storage():
+def test_ddr_read_xp_write_visible_in_underlying_storage_post_wave5():
+    """Wave 5 (plan 09-02b) — DDR_MEMORY.read shim removed; the returned
+    xp.ndarray view still aliases _bytes so writes through the view land
+    in underlying storage.
+    """
     if xp is not np:
         pytest.skip("Numpy-path test (default xp=numpy)")
     ddr = DDR_MEMORY()
@@ -258,7 +273,7 @@ def test_ddr_read_torch_write_visible_in_underlying_storage():
     # zero out first
     ddr._bytes[:] = 0
     buf = ddr.read(0, 32)
-    assert isinstance(buf, torch.Tensor)
+    assert isinstance(buf, np.ndarray)
     buf[7] = 0x9C
     assert int(ddr._bytes[7]) == 0x9C
 

@@ -41,27 +41,36 @@ WAVE-1-SHIM — Wave 1 → Wave 2/3 bridge (strangler-fig pattern):
 
     Storage layer is xp-internal (numpy default, cupy under
     GTX_USE_CUDA=1). Accessor methods that are STILL CONSUMED BY
-    un-ported torch-API callers (dma_engine.py / tloop_buffer.py /
-    ops/*.py) wrap their returns in ``torch.from_numpy(...)`` via the
-    private ``_torch_view(arr)`` helper.
+    un-ported torch-API callers (tloop_buffer.py) wrap their returns
+    in ``torch.from_numpy(...)`` via the private ``_torch_view(arr)``
+    helper.
 
     Properties of the bridge:
       * Zero-copy on the numpy path (`torch.from_numpy` shares the
         underlying buffer with the source ndarray — writes through
         the torch tensor land in xp storage and vice versa).
       * Fail-loud on the cupy path: `torch.from_numpy` does not accept
-        cupy buffers and Wave 2/3 cupy ports must already have removed
+        cupy buffers and Wave 6 cupy ports must already have removed
         the consuming torch calls by the time xp=cupy is used. The
         helper raises ``RuntimeError("Wave 2/3 cupy ports incomplete:
         ...")`` to surface the incomplete-port bug instantly instead
         of decoding a confusing torch internal AttributeError.
 
     Sunset condition: shim removed when ALL torch consumers are ported
-    off torch (Wave 3 end). The exact removal-wave assignment per
-    accessor is documented in ``09-01b-SUMMARY.md`` "Deviations from
-    plan: Option-B Wave 1 bridge shim" table; each call site below also
-    carries a ``# WAVE-1-SHIM: remove in Wave <N>`` marker naming the
-    plan that owns its removal.
+    off torch (Wave 6 / plan 09-03-finalize end). The exact
+    removal-wave assignment per accessor is documented in
+    ``09-01b-SUMMARY.md`` "Deviations from plan: Option-B Wave 1
+    bridge shim" table; each surviving call site below also carries
+    a ``# WAVE-1-SHIM: remove in Wave <N>`` marker naming the plan
+    that owns its removal.
+
+    Removal log:
+      * Wave 2a (plan 09-02a): l0_f16 / l1_f16 / l2_f16 shims removed
+        (ops/*.py ported).
+      * Wave 5 (plan 09-02b): l0_byte + ddr.read shims removed
+        (dma_engine.py ported).
+      * Wave 6 (plan 09-03-finalize) — pending: l1_byte + l2_byte
+        shims + _torch_view helper + module-level torch import.
 """
 
 
@@ -228,13 +237,13 @@ class DDR_MEMORY(MEMORY):
     # accepts an ndarray on the same backend (caller is responsible for any
     # ``to_device``/``to_host`` conversion at DMA / file boundaries).
 
-    def read(self, addr: int, n: int) -> "xp.ndarray | object":
+    def read(self, addr: int, n: int) -> xp.ndarray:
         if self._bytes is None:
             raise RuntimeError("DDR not allocated — call ensure() first")
-        # WAVE-1-SHIM: remove in Wave 2 (port dma_engine.py — only torch
-        # consumer of DDR_MEMORY.read; lines 266 / 345-348 do .view(torch.
-        # float16) / .to(l2_buf.device) / .numel() / .copy_).
-        return _torch_view(self._bytes[addr : addr + n])
+        # Wave 5 (plan 09-02b) removed the WAVE-1-SHIM at this accessor.
+        # dma_engine.py was the only torch consumer of DDR_MEMORY.read; with
+        # dma_engine ported, the accessor returns bare xp.ndarray.
+        return self._bytes[addr : addr + n]
 
     def write(self, addr: int, data) -> None:
         if self._bytes is None:
@@ -321,11 +330,12 @@ class GtxMemory(MEMORY):
 
     # ----- Raw byte views (D-10 low-level, kept for in-place strided ops) ---
 
-    def l0_byte(self, nest: int, spu: int) -> "xp.ndarray | object":
-        # WAVE-1-SHIM: remove in Wave 2 (port ops/act.py + ops/mm.py +
-        # ops/spr.py + ops/vec.py — all consume l0_byte and call torch
-        # APIs on the return).
-        return _torch_view(self._l0_views[nest, spu])
+    def l0_byte(self, nest: int, spu: int) -> xp.ndarray:
+        # Wave 5 (plan 09-02b) removed the WAVE-1-SHIM at this accessor.
+        # Wave 2a ported ops/{act,mm,spr,vec}.py to bypass via raw
+        # `npu.mem.l0[nest, spu]`; dma_engine.py:155/179 (Wave 5) likewise
+        # uses raw `mem.l0[nest, spu]`. No torch consumers remain.
+        return self._l0_views[nest, spu]
 
     def l1_byte(self, nest: int, spu: int) -> "xp.ndarray | object":
         # WAVE-1-SHIM: remove in Wave 3 (port ops/act.py + ops/mm.py +

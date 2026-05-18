@@ -104,10 +104,13 @@ def test_ddr_to_l1_byte_transfer_pattern():
     mem.ddr.write(0x200, payload)
 
     # DMA "load" — copy 64 bytes from DDR(0x200) to L1(nest=0, spu=0, off=128).
+    # Wave 5 (plan 09-02b): ddr.read returns bare xp.ndarray. l1_byte is
+    # still WAVE-1-SHIM-wrapped (Wave 6 removal). Use raw mem.l1[nest, spu]
+    # bypass to keep both sides xp-native — same pattern dma_engine adopted.
     src = mem.ddr.read(0x200, 64)
     nest, spu = 0, 0
     off = 128
-    l1 = mem.l1_byte(nest, spu)
+    l1 = mem.l1[nest, spu]
     l1[off:off + 64] = src
 
     # Verify L1 contents byte-exact.
