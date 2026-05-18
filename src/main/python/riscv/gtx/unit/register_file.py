@@ -1,7 +1,8 @@
-"""RegisterFile — Tensor-backed SPR state with broadcasting.
+"""RegisterFile — xp-backed SPR state with broadcasting.
 
 GtxNpu stores SPR state in `RegisterFile` instances. Each `RegisterFile`
-owns a `torch.Tensor` storage.
+owns an `xp.ndarray` storage (numpy.ndarray by default; cupy.ndarray
+under GTX_USE_CUDA=1 per Phase 9 D-11).
 
 Shapes:
     GSPR:  (1024,)
@@ -11,28 +12,33 @@ Shapes:
 The last dimension is always the 10-bit address offset (0-1023).
 Broadcasting is supported: setting a value on a multi-dimensional
 RegisterFile propagates to all instances.
+
+D-11 (Phase 9 CONTEXT): RegisterFile's backing array follows the
+scratchpad device — numpy=host, cupy=GPU. Per-call scalar reads/writes
+during dispatch are the only known perf concern; if the cupy path
+ever exceeds the 105s ABS budget, fall back to a host-pinned numpy
+exception (deferred — see plan 09-01b Wave gate doc).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Mapping, Optional, Union, Tuple
+from typing import Any, Iterator, Mapping, Optional, Union, Tuple
 
-import torch
-from .csr import BusType, Register, Field
+from ..config_params import xp
+from .csr import BusType, Register
 
 
 class RegisterFile:
-    """Live SPR state storage using torch.Tensor.
+    """Live SPR state storage using xp.ndarray.
 
     Supports indexing to narrow down dimensions (e.g. lspr[nest][spu]).
     Attributes provide access to registers by name, returning a View
     that supports bit-field manipulation and broadcasting.
     """
 
-    def __init__(self, 
-                 defs: Mapping[str, Register], 
+    def __init__(self,
+                 defs: Mapping[str, Register],
                  shape: Tuple[int, ...] = (1024,),
-                 device: str = "cpu",
-                 tensor: Optional[torch.Tensor] = None) -> None:
+                 tensor: Optional[Any] = None) -> None:
         self._defs = defs
         # last dim must be 1024 for address space
         if shape[-1] != 1024:
@@ -41,7 +47,7 @@ class RegisterFile:
         if tensor is not None:
             self._tensor = tensor
         else:
-            self._tensor = torch.zeros(shape, dtype=torch.int64, device=device)
+            self._tensor = xp.zeros(shape, dtype=xp.int64)
 
         # Mapping for fast address lookup
         self._addr_by_name = {
@@ -51,8 +57,8 @@ class RegisterFile:
         }
 
     @property
-    def tensor(self) -> torch.Tensor:
-        """The underlying storage tensor."""
+    def tensor(self) -> Any:
+        """The underlying storage array (xp.ndarray)."""
         return self._tensor
 
     @property
@@ -61,12 +67,12 @@ class RegisterFile:
 
     # ----- Slicing / Indexing ----------------------------------------------
 
-    def __getitem__(self, key: Union[int, str, slice]) -> Union[int, RegisterFile]:
+    def __getitem__(self, key: Union[int, str, slice]) -> Union[int, "RegisterFile"]:
         """Index into dimensions (if any) or access raw address (if key is int)."""
         if isinstance(key, int) and self._tensor.ndim == 1:
             # Raw address access for 1D (GSPR)
             return int(self._tensor[key & 0x3FF])
-        
+
         if isinstance(key, str):
             # Name-based register access
             return getattr(self, key)
@@ -75,14 +81,14 @@ class RegisterFile:
         sub_tensor = self._tensor[key]
         if sub_tensor.ndim == 0:
             return int(sub_tensor)
-        
+
         return RegisterFile(self._defs, sub_tensor.shape, tensor=sub_tensor)
 
     def __setitem__(self, key: Union[int, str], value: Any) -> None:
         if isinstance(key, str):
             setattr(self, key, value)
             return
-        
+
         # Raw address write (modulo 1024 for scope)
         addr = int(key) & 0x3FF
         self._tensor[..., addr] = value
@@ -107,7 +113,7 @@ class RegisterFile:
         if name in self._addr_by_name:
             reg = self._defs[name]
             addr = self._addr_by_name[name]
-            # Decompose if value is int, or broadcast if value is tensor
+            # Decompose if value is int, or broadcast if value is array
             self._tensor[..., addr] = value
             return
         super().__setattr__(name, value)
@@ -115,12 +121,13 @@ class RegisterFile:
     # ----- Utility ---------------------------------------------------------
     def reset(self, defaults: Optional[Mapping[int, int]] = None) -> None:
         """Clear all values and optionally seed vendor defaults."""
-        self._tensor.zero_()
+        # xp-uniform in-place zero (numpy & cupy both support broadcast assign).
+        self._tensor[...] = 0
         if defaults:
             for addr, val in defaults.items():
                 self._tensor[..., addr & 0x3FF] = val
 
-    def __iter__(self) -> Iterator[Union[RegisterFile, int]]:
+    def __iter__(self) -> Iterator[Union["RegisterFile", int]]:
         """Iterate over the first dimension, yielding sub-views or values."""
         if self._tensor.ndim <= 1:
             # For 1D (GSPR or narrowed view), iterate over raw values
@@ -154,27 +161,28 @@ class RegisterView:
     """
     __slots__ = ("_reg", "_tensor")
 
-    def __init__(self, reg: Register, tensor: torch.Tensor):
+    def __init__(self, reg: Register, tensor: Any):
         self._reg = reg
         self._tensor = tensor  # Shape matches rf.dimensions (e.g. (), (N,), (N, S))
 
-    def __getattr__(self, name: str) -> Union[int, torch.Tensor]:
+    def __getattr__(self, name: str) -> Any:
         if name == "value":
             return self._tensor if self._tensor.ndim > 0 else int(self._tensor)
         if name in self._reg.fields:
             field = self._reg.fields[name]
             val = (self._tensor >> field.shift) & field.mask
             return val if self._tensor.ndim > 0 else int(val)
-        
+
         raise AttributeError(f"Register {self._reg.name} has no field {name!r}")
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name.startswith("_"):
             super().__setattr__(name, value)
             return
-        
+
         if name == "value":
-            self._tensor.copy_(torch.as_tensor(value, dtype=torch.int64))
+            # xp-uniform broadcast-assign with int64 cast at the boundary.
+            self._tensor[...] = xp.asarray(value, dtype=xp.int64)
             return
 
         if name in self._reg.fields:
@@ -184,22 +192,31 @@ class RegisterView:
 
             # Reinterpret the shifted mask as a signed int64 to avoid
             # Python's arbitrary-precision negative result from
-            # `~(mask << shift)` — torch cannot cast that back into
-            # int64 (OverflowError). See CONTEXT.md root_cause.
+            # `~(mask << shift)` — int64 storage cannot represent that
+            # (OverflowError on cast). Pre-existing fix; see
+            # test_register_view_64bit_field_broadcast_no_overflow.
             u64 = (mask << shift) & ((1 << 64) - 1)
             shifted_mask = u64 - (1 << 64) if u64 >> 63 else u64
 
+            # Same signed-int64 wrap for the raw `mask` when it covers a
+            # full 64-bit field (e.g. SGPR0.gpr mask=0xFFFFFFFFFFFFFFFF) —
+            # numpy bitwise-AND with an unsigned 0xFFFF... mask overflows
+            # int64. With torch this was implicit; for xp we wrap here.
+            mask_signed = mask & ((1 << 64) - 1)
+            if mask_signed >> 63:
+                mask_signed = mask_signed - (1 << 64)
+
             # Same signed-int64 wrap for `value` when it is a Python int
-            # with the top bit set (e.g. 0xCAFEBABEDEADBEEF) — torch
-            # rejects unsigned ≥ 2^63 in int64 dtype.
+            # with the top bit set (e.g. 0xCAFEBABEDEADBEEF) — int64 cast
+            # rejects unsigned ≥ 2^63.
             if isinstance(value, int):
                 v64 = value & ((1 << 64) - 1)
                 value = v64 - (1 << 64) if v64 >> 63 else v64
 
-            new_val = torch.as_tensor(value, dtype=torch.int64) & mask
-            self._tensor.copy_((self._tensor & ~shifted_mask) | (new_val << shift))
+            new_val = xp.asarray(value, dtype=xp.int64) & mask_signed
+            self._tensor[...] = (self._tensor & ~shifted_mask) | (new_val << shift)
             return
-        
+
         super().__setattr__(name, value)
 
     def __repr__(self) -> str:
@@ -217,7 +234,7 @@ class RegisterView:
         if isinstance(key, int):
             return int((self._tensor >> key) & 1)
         return getattr(self, key)
-    
+
     def __setitem__(self, key: Any, value: Any) -> None:
         if isinstance(key, int):
             bit = 1 << key
