@@ -76,13 +76,8 @@ __all__ = [
     "GtxNpu",
 ]
 
-try:
-    import torch  # noqa: F401 -- imported for early ImportError surface
-except ImportError:
-    raise ImportError(
-        "PyTorch is required for riscv.gtx. Please install PyTorch to use "
-        "this module.")
-
-# Re-export the single source of truth for the compute device so callers can
-# write `from riscv.gtx import DEVICE` if they prefer the package root path.
+# Phase 9 Wave 0: torch ImportError surface removed (D-04). xp/to_host/to_device
+# defined in config_params.py are the new SSOT. DEVICE clean-cut deferred to
+# Wave 3 (CONTEXT.md line 232) — the re-export below keeps downstream callers
+# working until plan 09-03-finalize ports them.
 from .config_params import DEVICE  # noqa: E402,F401

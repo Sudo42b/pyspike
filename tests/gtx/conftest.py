@@ -1,10 +1,10 @@
 """Pytest fixtures for tests/gtx/* -- ORDER.md FSM smoke set.
 
 Invariants enforced here:
-  - CUDA is REQUIRED (ORDER.md: "DDR은 CPU, 나머지 메모리 계층은 반드시 cuda").
-    Collection fails fast with pytest.exit(returncode=1) if torch.cuda is
-    unavailable -- never a skip, because skipping would mask design-rule
-    violations.
+  - GTX_USE_CUDA env var gates cupy presence. Collection fails fast only if
+    GTX_USE_CUDA=1 is set without cupy installed; the numpy default needs no
+    GPU, so test collection succeeds on no-GPU boxes (D-01/D-04 — Phase 9
+    backend migration replaced torch.cuda.is_available with this gate).
   - GTX_DDR_LOAD / GTX_DDR_DUMP env vars are cleared so vendor binary I/O
     never fires during tests.
 """
@@ -12,13 +12,18 @@ from __future__ import annotations
 import os
 
 import pytest
-import torch
 
-# CUDA gate -- collection-time, per CONTEXT.md decision D-CUDA-REQUIRED.
-if not torch.cuda.is_available():
-    pytest.exit(
-        "GTX tests require CUDA -- ORDER.md constraint", returncode=1
-    )
+# GTX_USE_CUDA gate (was torch.cuda.is_available() — D-01/D-04 removed torch).
+# Default path = numpy. Only assert cupy presence when user explicitly opts in.
+if os.environ.get("GTX_USE_CUDA", "").strip() in ("1", "true", "TRUE"):
+    try:
+        import cupy  # noqa: F401
+    except ImportError:
+        pytest.exit(
+            "GTX_USE_CUDA=1 set but cupy is not installed. "
+            "Install with: pip install 'spike[cuda]'",
+            returncode=1,
+        )
 
 # Strip vendor DDR I/O env vars before any fixture builds a GtxNpu.
 for _var in ("GTX_DDR_LOAD", "GTX_DDR_DUMP"):
@@ -46,8 +51,8 @@ def gtx_npu(mock_proc):
     Triggers @isa.register('gtx') side effect on first import, so
     construction here also validates the C++ -> Python registration path.
     """
-    # Import inside fixture so CUDA gate above runs FIRST (before any
-    # torch tensor allocation in riscv.gtx package init).
+    # Import inside fixture so backend gate above runs FIRST (before any
+    # xp.zeros allocation in riscv.gtx package init).
     from riscv.gtx.npu import GtxNpu
 
     npu = GtxNpu()
