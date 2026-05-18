@@ -56,9 +56,9 @@ classifiers = [
 requires-python = ">=3.10"
 
 dependencies = [
-  "numpy",
-  "torch",
-  "torchvision",
+  "numpy>=2.0,<3",
+  # Phase 9 (BM-01..06): torch + torchvision removed. NumPy is the default
+  # array backend; CuPy is opt-in via `pip install spike[cuda]` + `GTX_USE_CUDA=1`.
 ]
 
 [project.urls]
@@ -89,6 +89,16 @@ dev = [
 ]
 fast = [
   "numba>=0.61.2,<0.66",
+]
+# Phase 9 BM-05 (D-17): cupy opt-in for the cuda backend (xp=cupy when
+# GTX_USE_CUDA=1). Wheel default `pip install spike` stays NumPy-only —
+# no cupy in the base resolution. NOTE per M-2 (Option-A scope locked in
+# 09-SCOPE-DECISION.md): a separate JIT extras alias is NOT added in P9.
+# Numba/cupy JIT guvectorize dual-impl kernels are deferred to a future
+# P10 phase. Users who want both numba and cupy concurrently:
+# `pip install spike[fast,cuda]`.
+cuda = [
+  "cupy-cuda12x>=13,<15",
 ]
 
 # Note: legacy `pyspike-verify` entry point was retired together with
@@ -187,19 +197,9 @@ good-names = [
 # ignore-docstrings = "yes"
 # ignore-imports = "yes"
 
-# uv resolves torch / torchvision from the official PyTorch CUDA 12.6 wheel
-# index. Equivalent CLI: `pip install torch torchvision --index-url
-# https://download.pytorch.org/whl/cu126`. `explicit = true` keeps PyPI as
-# the default index for every other package; only the names listed under
-# [tool.uv.sources] reach into pytorch-cu126.
-[[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
-explicit = true
-
-[tool.uv.sources]
-torch = [{ index = "pytorch-cu126" }]
-torchvision = [{ index = "pytorch-cu126" }]
+# Phase 9 BM-02: removed the PyTorch CUDA-12.6 wheel index + `[tool.uv.sources]`
+# torch/torchvision entries. PyTorch is no longer a runtime dependency; cupy
+# resolves from PyPI under the standard `cuda` opt-in extras.
 
 [tool.coverage.run]
 source = [
