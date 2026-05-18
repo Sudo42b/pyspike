@@ -17,10 +17,8 @@ Per RESEARCH Pitfall 7: ``vec_size = (rs1 & 0xFFFF) or 0x10000``
 """
 from __future__ import annotations
 
-import torch
-
 from ...._registry import handler
-from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM
+from ....config_params import GTX_L0_SIZE_BYTES, GTX_NEST_NUM, GTX_SPU_NUM, xp
 from ..encoding import (
     GTX_F7_VEC_ARITH, GTX_F7_VEC_CLAMP, GTX_F7_VEC_DOT_SUM,
     GTX_F7_VEC_MATH, GTX_F7_VEC_ROUND, GTX_F7_VEC_SASMD, GTX_F7_VEC_SIGN,
@@ -32,21 +30,21 @@ from ...csr import GSPR, LSPR
 # =============================================================================
 # 1. Vector kernels (FP32 internal, FP16 output)
 # =============================================================================
-def _as_fp32(a) -> torch.Tensor:
-    if isinstance(a, torch.Tensor):
-        return a.to(torch.float32)
-    return torch.as_tensor(a, dtype=torch.float32)
+def _as_fp32(a):
+    if hasattr(a, 'dtype') and hasattr(a, 'astype'):
+        return a.astype(xp.float32)
+    return xp.asarray(a, dtype=xp.float32)
 
 
-def sasmd_kernel(a, b, op: int) -> torch.Tensor:
+def sasmd_kernel(a, b, op: int):
     """SASMD element-wise FP32 internal, FP16 output. ``b`` scalar or array."""
     a_f32 = _as_fp32(a)
-    if isinstance(b, torch.Tensor) and b.dim() > 0:
-        b_f32 = b.to(torch.float32)
-    elif hasattr(b, 'shape') and getattr(b, 'shape', ()):
-        b_f32 = torch.as_tensor(b, dtype=torch.float32)
+    # Treat 0-d / scalar inputs as broadcast scalar; array inputs go through
+    # _as_fp32. xp broadcasting handles either shape.
+    if hasattr(b, 'shape') and getattr(b, 'shape', ()):
+        b_f32 = _as_fp32(b)
     else:
-        b_f32 = torch.full_like(a_f32, float(b))
+        b_f32 = xp.full_like(a_f32, float(b))
     if op == GTX_VEC_ADD:
         out = a_f32 + b_f32
     elif op == GTX_VEC_SUB:
@@ -55,88 +53,92 @@ def sasmd_kernel(a, b, op: int) -> torch.Tensor:
         out = a_f32 * b_f32
     elif op == GTX_VEC_DIV:
         # Vendor convention (gtx_npu_vec.cc:333): div-by-zero -> 0.0.
-        safe_b = torch.where(b_f32 == 0.0, torch.ones_like(b_f32), b_f32)
+        safe_b = xp.where(b_f32 == 0.0, xp.ones_like(b_f32), b_f32)
         raw = a_f32 / safe_b
-        out = torch.where(b_f32 == 0.0, torch.zeros_like(raw), raw)
+        out = xp.where(b_f32 == 0.0, xp.zeros_like(raw), raw)
     else:
         raise ValueError(f"unknown SASMD op {op}")
-    return out.to(torch.float16)
+    return out.astype(xp.float16)
 
 
-def dot_kernel(a, b) -> torch.Tensor:
-    """FP16 dot product — FP32 reduce on DEVICE, FP16 output."""
+def dot_kernel(a, b):
+    """FP16 dot product — FP32 reduce on xp backend, FP16 output."""
     a_f32 = _as_fp32(a).reshape(-1)
     b_f32 = _as_fp32(b).reshape(-1)
     if a_f32.shape != b_f32.shape:
         raise ValueError(f"shape mismatch: {a_f32.shape} vs {b_f32.shape}")
-    return torch.dot(a_f32, b_f32).to(torch.float16)
+    return xp.dot(a_f32, b_f32).astype(xp.float16)
 
 
-def vsum_kernel(view) -> torch.Tensor:
-    """FP16 vector sum — FP32 reduce on DEVICE, FP16 output."""
-    return torch.sum(_as_fp32(view).reshape(-1)).to(torch.float16)
+def vsum_kernel(view):
+    """FP16 vector sum — FP32 reduce on xp backend, FP16 output."""
+    return xp.sum(_as_fp32(view).reshape(-1)).astype(xp.float16)
 
 
-def clamp_min_kernel(a, scalar) -> torch.Tensor:
+def clamp_min_kernel(a, scalar):
     """``out[i] = max(a[i], scalar)``."""
-    return torch.clamp(_as_fp32(a), min=float(scalar)).to(torch.float16)
+    # xp.clip's lower bound; upper=None lets the array pass through.
+    return xp.clip(_as_fp32(a), float(scalar), None).astype(xp.float16)
 
 
-def clamp_max_kernel(a, scalar) -> torch.Tensor:
+def clamp_max_kernel(a, scalar):
     """``out[i] = min(a[i], scalar)``."""
-    return torch.clamp(_as_fp32(a), max=float(scalar)).to(torch.float16)
+    return xp.clip(_as_fp32(a), None, float(scalar)).astype(xp.float16)
 
 
-def accum_kernel(a) -> torch.Tensor:
+def accum_kernel(a):
     """Prefix sum: FP32 accumulator across whole vec, per-element FP16 cast.
 
-    ``torch.cumsum`` is the left-to-right vectorised form of the Python
+    ``xp.cumsum`` is the left-to-right vectorised form of the Python
     accumulator loop — same numerical order, no per-element kernel launch.
     """
-    return torch.cumsum(_as_fp32(a).reshape(-1), dim=0).to(torch.float16)
+    return xp.cumsum(_as_fp32(a).reshape(-1), axis=0).astype(xp.float16)
 
 
-def arange_kernel(n: int, start, step) -> torch.Tensor:
+def arange_kernel(n: int, start, step):
     """``out[i] = start + i*step`` (FP32 internal)."""
-    from ....config_params import DEVICE
-    idx = torch.arange(int(n), dtype=torch.float32, device=DEVICE)
-    return (float(start) + idx * float(step)).to(torch.float16)
+    idx = xp.arange(int(n), dtype=xp.float32)
+    return (float(start) + idx * float(step)).astype(xp.float16)
 
 
 # =============================================================================
 # 2. Helpers
 # =============================================================================
-def _fp16_low16(packed: int) -> torch.Tensor:
-    """Decode bits[15:0] of an int as FP16 (LE bit-pattern), 0-d tensor."""
-    u16 = torch.tensor([packed & 0xFFFF], dtype=torch.uint16)
-    return u16.view(torch.float16)[0]
+def _fp16_low16(packed: int):
+    """Decode bits[15:0] of an int as FP16 (LE bit-pattern), 0-d xp.float16."""
+    u16 = xp.array([packed & 0xFFFF], dtype=xp.uint16)
+    return u16.view(xp.float16)[0]
 
 
-def _fp16_high16(packed: int) -> torch.Tensor:
-    """Decode bits[31:16] of an int as FP16 (LE bit-pattern), 0-d tensor."""
-    u16 = torch.tensor([(packed >> 16) & 0xFFFF], dtype=torch.uint16)
-    return u16.view(torch.float16)[0]
+def _fp16_high16(packed: int):
+    """Decode bits[31:16] of an int as FP16 (LE bit-pattern), 0-d xp.float16."""
+    u16 = xp.array([(packed >> 16) & 0xFFFF], dtype=xp.uint16)
+    return u16.view(xp.float16)[0]
 
 
-def _l1_view_addr(npu, nest: int, spu: int, addr_byte: int,
-                   length: int) -> torch.Tensor:
-    """Return an FP16 view of ``L1[addr:addr + length*2]`` (no copy)."""
-    l1_f16 = npu.mem.l1_f16(nest, spu)
+def _l1_view_addr(npu, nest: int, spu: int, addr_byte: int, length: int):
+    """Return an FP16 view of ``L1[addr:addr + length*2]`` (no copy).
+
+    Bypasses the WAVE-1-SHIM by accessing the raw L1 byte storage directly
+    (npu.mem.l1) and taking the .view(xp.float16) ourselves — same pattern
+    npu.py's flush_deferred_ddr_stores uses for internal Wave 1b code.
+    """
     off = addr_byte // 2
+    l1_f16 = npu.mem.l1[nest, spu].view(xp.float16)
     return l1_f16[off:off + length]
 
 
-def _l0_block_view(npu, nest: int, spu: int, reg: int) -> torch.Tensor:
+def _l0_block_view(npu, nest: int, spu: int, reg: int):
     """Return an FP16 view of ``L0[(reg & 0x1F)*32 .. +32]``; 16 FP16."""
-    l0 = npu.mem.l0_byte(nest, spu)
+    l0 = npu.mem.l0[nest, spu]
     off = ((reg & 0x1F) * 32) % GTX_L0_SIZE_BYTES
-    return l0.view(torch.float16)[off // 2:off // 2 + 16]
+    return l0.view(xp.float16)[off // 2:off // 2 + 16]
 
 
 # =============================================================================
 # 3. Unary apply (MATH / SIGN / ROUND family bodies)
 # =============================================================================
-def _apply_unary(funct7: int, sub_op: int, view: torch.Tensor) -> torch.Tensor:
+def _apply_unary(funct7: int, sub_op: int, view):
     """Element-wise unary kernels for funct7 0x1C/0x1D/0x1E.
 
     SIGN / ROUND families operate on the FP16 view directly — sign bit
@@ -147,34 +149,34 @@ def _apply_unary(funct7: int, sub_op: int, view: torch.Tensor) -> torch.Tensor:
     """
     if funct7 == 0x1D:   # SIGN: abs / neg / sign / step
         if sub_op == 0:
-            return torch.abs(view)
+            return xp.abs(view)
         if sub_op == 1:
-            return -view
+            return xp.negative(view)
         if sub_op == 2:
-            return torch.sign(view)
+            return xp.sign(view)
         if sub_op == 3:
-            return (view > 0.0).to(torch.float16)
+            return (view > 0.0).astype(xp.float16)
     if funct7 == 0x1E:   # ROUND
         if sub_op == 0:
-            return torch.ceil(view)
+            return xp.ceil(view)
         if sub_op == 1:
-            return torch.trunc(view)
+            return xp.trunc(view)
         if sub_op == 2:
-            return torch.floor(view)
+            return xp.floor(view)
         if sub_op == 3:
-            return torch.round(view)
+            return xp.round(view)
     if funct7 == 0x1C:   # MATH: sqrt / exp / log (FP32 accumulator)
-        f32 = view.to(torch.float32)
+        f32 = view.astype(xp.float32)
         if sub_op == 0:
-            return torch.sqrt(f32).to(torch.float16)
+            return xp.sqrt(f32).astype(xp.float16)
         if sub_op == 1:
-            return torch.exp(f32).to(torch.float16)
+            return xp.exp(f32).astype(xp.float16)
         if sub_op == 2:
-            tiny = torch.finfo(torch.float32).tiny
-            return torch.where(f32 > 0.0,
-                                torch.log(f32.clamp(min=tiny)),
-                                torch.zeros_like(f32)).to(torch.float16)
-    return view.clone()
+            tiny = xp.finfo(xp.float32).tiny
+            return xp.where(f32 > 0.0,
+                            xp.log(xp.clip(f32, tiny, None)),
+                            xp.zeros_like(f32)).astype(xp.float16)
+    return view.copy()
 
 
 # =============================================================================
@@ -192,14 +194,14 @@ def _dispatch_sasmd(npu, nest: int, spu: int, funct3: int,
         addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
         view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
         result = sasmd_kernel(view_a, scalar, op=op_map[sub])
-        _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+        _l1_view_addr(npu, nest, spu, addr_r, vec_size)[:] = result
         return 0
 
     a_reg = rs1 & 0x1F
     r_reg = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, insn.rd)) & 0x1F
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     result = sasmd_kernel(view_a, scalar, op=op_map[sub])
-    _l0_block_view(npu, nest, spu, r_reg).copy_(result)
+    _l0_block_view(npu, nest, spu, r_reg)[:] = result
     return 0
 
 
@@ -214,7 +216,7 @@ def _dispatch_arith_l0_ii(npu, nest: int, spu: int, sub_op: int,
     view_a = _l0_block_view(npu, nest, spu, a_reg)
     view_b = _l0_block_view(npu, nest, spu, b_reg)
     result = sasmd_kernel(view_a, view_b, op=op_map[sub_op])
-    _l0_block_view(npu, nest, spu, r_reg).copy_(result)
+    _l0_block_view(npu, nest, spu, r_reg)[:] = result
     return 0
 
 
@@ -225,7 +227,7 @@ def _dispatch_unary_l0(npu, nest: int, spu: int, funct7: int, sub_op: int,
     result_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else input_reg
     view = _l0_block_view(npu, nest, spu, input_reg)
     result = _apply_unary(funct7, sub_op, view)
-    _l0_block_view(npu, nest, spu, result_reg).copy_(result)
+    _l0_block_view(npu, nest, spu, result_reg)[:] = result
     return 0
 
 
@@ -266,7 +268,7 @@ def exec_vec_op(npu, proc, insn) -> int:
             view_a = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
             view_b = _l1_view_addr(npu, nest, spu, addr_b, vec_size)
             result = sasmd_kernel(view_a, view_b, op=op_map[funct3 & 3])
-            _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+            _l1_view_addr(npu, nest, spu, addr_r, vec_size)[:] = result
             return 0
 
     if funct7 == GTX_F7_VEC_DOT_SUM:
@@ -279,8 +281,10 @@ def exec_vec_op(npu, proc, insn) -> int:
         _l1_view_addr(npu, nest, spu, addr_r, 1)[0] = scalar
         # Reinterpret the 0-d FP16 scalar as 2 bytes (little-endian) and
         # blit straight into L0 — no bit-masking, no Python-side raw int.
-        scalar_bytes = scalar.to(torch.float16).reshape(1).contiguous().view(torch.uint8)
-        l0 = npu.mem.l0_byte(nest, spu)
+        scalar_bytes = xp.ascontiguousarray(
+            xp.asarray(scalar, dtype=xp.float16).reshape(1)
+        ).view(xp.uint8)
+        l0 = npu.mem.l0[nest, spu]
         l0[0:2] = scalar_bytes
         return 0
 
@@ -300,13 +304,13 @@ def exec_vec_op(npu, proc, insn) -> int:
             start = _fp16_low16(rs2)
             step = _fp16_high16(rs2)
             result = arange_kernel(vec_size, start, step)
-        _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+        _l1_view_addr(npu, nest, spu, addr_r, vec_size)[:] = result
         return 0
 
     if funct7 in (0x1C, 0x1D, 0x1E):
         view = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
         result = _apply_unary(funct7, funct3 & 3, view)
-        _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
+        _l1_view_addr(npu, nest, spu, addr_r, vec_size)[:] = result
         return 0
 
     return 0
