@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
+# Wave-2a port: xp imported for byte-tile primitives (xp.tile) in CPSVR.
+# CPSVR/MVSVR operate on L0 byte arrays whose contract under Wave 1a is xp
+# (numpy default). xp.ndarray.repeat repeats PER-ELEMENT (not byte-wise tile)
+# so xp.tile is the correct vendor-equivalent primitive for byte replication.
+from ....config_params import xp
 
 from ...._registry import handler
 from ..encoding import (
@@ -197,17 +201,20 @@ def cpsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     
     l0 = npu.mem.l0_byte(nest, spu)
     # Build 8B pattern from L0[base]
+    # NB: xp.tile is the byte-stream replication primitive (matches vendor
+    # C++ memcpy fill semantics). xp.ndarray.repeat tiles per-element which
+    # would produce the wrong pattern for multi-byte SVR fills.
     if bsz == 0: # 1B -> 8x
-        p = l0[base].repeat(8)
+        p = xp.tile(l0[base:base+1], 8)
     elif bsz == 1: # 2B -> 4x
-        p = l0[base:base+2].repeat(4)
+        p = xp.tile(l0[base:base+2], 4)
     elif bsz == 2: # 4B -> 2x
-        p = l0[base:base+4].repeat(2)
+        p = xp.tile(l0[base:base+4], 2)
     else: # 8B -> 1x
         p = l0[base:base+8]
-        
+
     # Fill the 32B SVR with the 8B pattern replicated 4 times
-    l0[base:base+32] = p.repeat(4)
+    l0[base:base+32] = xp.tile(p, 4)
     return 0
 
 
@@ -253,7 +260,9 @@ def mvsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     l0 = npu.mem.l0_byte(nest, spu)
     src_off = src_idx * 32
     dst_off = dst_idx * 32
-    
-    l0[dst_off:dst_off+32] = l0[src_off:src_off+32].clone()
-    l0[src_off:src_off+32].zero_()
+
+    # xp uses .copy() instead of torch's .clone(); slice-assign [:] = 0
+    # replaces torch's in-place .zero_() — both numpy and cupy uniform.
+    l0[dst_off:dst_off+32] = l0[src_off:src_off+32].copy()
+    l0[src_off:src_off+32] = 0
     return 0
