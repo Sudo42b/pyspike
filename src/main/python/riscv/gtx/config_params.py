@@ -1,28 +1,52 @@
-import torch
+from __future__ import annotations
+import os
+import numpy as _np
 
 
-# --------------------------------------------------------------------------
-# Torch backend device — single source of truth.
-# --------------------------------------------------------------------------
-# Every GTX tensor (L0/L1/L2/DDR scratchpads, MXE accumulators, kernel
-# temporaries) lives on ``DEVICE``. Forced to CPU.
-#
-# Vendor C++ functional model is host-side CPU (SystemC TLM simulation).
-# CUDA path was sourced via opportunistic ``torch.cuda.is_available()`` but:
-#   - PyTorch CUDA dispatch overhead > CPU dispatch on a per-RoCC-insn loop
-#     (no transfer benefit since DDR semantics keep host on the critical path)
-#   - 5x ABS regression (95s → 458s, 2026-05-18) traced to cuda-bindings
-#     12.9.6 auto-install in venv flipping ``is_available()`` from False → True
-#   - WSL2/cuda atexit ordering: torch's ``Py_AtExit`` cuda teardown fires
-#     before Python ``atexit`` chains, causing ``ddr_save_to_hex`` (the dump
-#     trigger registered at ``npu.py:133``) to raise
-#     ``cudaErrorInvalidResourceHandle`` → dump skipped → strict tests SKIP
-#     rather than PASS. Quick task 260518-ffr falsified the 1-line
-#     ``_DDR_DEVICE = DEVICE`` fix on this ordering boundary.
-# Future opt-in: add a ``GTX_USE_CUDA`` env-var gate if/when a full cuda
-# backend (with HTIF-hooked dump path) is intentionally pursued in a separate
-# phase. Until then, CPU is the contract.
-DEVICE: torch.device = torch.device("cpu")
+def _identity(arr):
+    """No-op for xp=numpy path (D-12)."""
+    return arr
+
+
+def _resolve_backend():
+    """Resolve xp + to_host + to_device at import time (D-01, D-02).
+
+    Default: numpy + identity helpers (no-op).
+    GTX_USE_CUDA=1 (or "true"/"TRUE"): require cupy importable, else fail-loud
+    with `pip install 'spike[cuda]'` hint (D-03). Silent fallback FORBIDDEN
+    (260518-ffr regression precedent — torch.cuda.is_available auto-true
+    flipped 5x ABS slowdown).
+    """
+    env = os.environ.get("GTX_USE_CUDA", "").strip()
+    if env not in ("1", "true", "TRUE"):
+        return _np, _identity, _identity
+
+    try:
+        import cupy as _cp
+    except ImportError as exc:
+        raise RuntimeError(
+            "GTX_USE_CUDA=1 set but cupy is not importable. "
+            "Install with: pip install 'spike[cuda]'"
+        ) from exc
+
+    return _cp, _cp.asnumpy, _cp.asarray
+
+
+# Module-level eager resolution, frozen for process lifetime (D-02).
+# All gtx.* modules: `from .config_params import xp, to_host, to_device`.
+xp, to_host, to_device = _resolve_backend()
+
+# DEPRECATED — `DEVICE` retained as Wave 0 backwards-compat alias only.
+# Per CONTEXT.md line 232 (D-05 Wave mapping), `DEVICE` clean-cut removal is
+# owned by Wave 3 (plan 09-03-finalize) once downstream files (npu.py,
+# unit/memory.py, unit/register_file.py, unit/context/dma_engine.py,
+# unit/ins/ops/vec.py, ...) have been ported off `device=DEVICE` usage. Removing
+# it here in Wave 0 would break the wave-end smoke gate (D-07: 6-op smoke +
+# tile-2 baseline preserved). User decision 2026-05-18 (Option A deferral)
+# locks this string alias so downstream call sites continue to import without
+# ImportError until Wave 3 ports them. Value chosen so any caller treating it
+# as a placeholder string still works; do NOT rely on `torch.device` API.
+DEVICE: str = "cpu" if xp is _np else "cuda"
 
 
 # NEST x SPU topology
