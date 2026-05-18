@@ -32,6 +32,7 @@ golden)와 ULP 허용오차 내로 일치한다.
 ### Milestone v1.1 — Post-Ship Polish
 
 - [ ] **Phase 8: Multi-tile DMA Parity** — Port vendor `gtx_npu_dma.cc` multi-tile loop so vendor 84-op `n1s16` regression passes strict-mode past the first `MAX_SHARED_DMA_BYTES=65535` boundary; close P7 HUMAN-UAT items #1 (M ≥ 12 sweep PASS) and #2 (5x walltime measurement)
+- [ ] **Phase 9: Backend migration — PyTorch → NumPy + CuPy opt-in (dual-backend xp alias)** — Replace torch.Tensor with numpy.ndarray as default; introduce `xp` alias (`xp = numpy` or `xp = cupy` based on `GTX_USE_CUDA` env-var) so optional CUDA acceleration becomes a drop-in swap. Realigns with CLAUDE.md design intent ("NumPy 백엔드 가정"). Removes torch hard dependency; CuPy added as `pip install spike[cuda]` extra.
 
 ---
 
@@ -262,6 +263,28 @@ plans across these waves.
 
 ---
 
+### Phase 9: Backend migration — PyTorch → NumPy + CuPy opt-in (dual-backend `xp` alias)
+
+**Goal**: Replace `torch.Tensor` with `numpy.ndarray` as the default backend across all `riscv.gtx.*` modules. Introduce `xp` alias decided at import time (`xp = numpy` default; `xp = cupy` when `GTX_USE_CUDA=1` env-var set AND cupy importable). All hot-path operations (`mem.l0/l1/l2`, `gspr`, `_credit_ld/st`, `_mxe_accum`, `tloop_buffer` fusion path, `sloop_buffer`, `_verify.compare_hex`) use `xp.*` API. CuPy ships as opt-in extra (`pip install spike[cuda]`) — wheel base stays NumPy-only. Realigns with CLAUDE.md design intent ("NumPy 백엔드 가정"). Removes torch hard runtime dependency; pybind11 trampoline layer (spike/pyspike C++ bindings) unchanged (separate concern).
+
+**Depends on**: Phase 8 (multi-tile DMA invariants protected by ABS/GELU strict regression tests — migration MUST preserve byte-exact)
+
+**Requirements**: BM-01 (xp alias scaffold + DEVICE env contract), BM-02 (numpy port of mem layer), BM-03 (numpy port of dispatch + ops), BM-04 (numpy port of tloop/sloop fusion), BM-05 (cupy opt-in extras + GPU smoke test gated on GTX_USE_CUDA), BM-06 (CLAUDE.md dependency policy update + wheel size impact recorded)
+
+**Success Criteria** (what must be TRUE):
+  1. **`import torch` 제거 (BM-01..04):** `grep -rn "import torch\|from torch" src/main/python/riscv/gtx/` returns 0 matches. All numeric operations route through `xp` alias.
+  2. **ABS strict byte-exact PASS preserved (BM-02..04 invariant):** `uv run pytest 'tests/gtx/test_regression_fw_full_sweep.py::test_vendor_op_sweep_strict[ABS]' --no-cov -v` PASSes byte-exact (96 tiles × 196609 hex lines), walltime ≤ 120s (post-migration baseline; small regression OK if API correctness preserved).
+  3. **GELU + 5 other ACT family ops strict PASS (BM-03 act engine port):** `uv run pytest ... -k 'GELU or RELU or SIGMOID or TANH or SOFTMAX or ESUM'` reports all PASS or documented skips.
+  4. **CuPy opt-in works on GPU machine (BM-05):** with `GTX_USE_CUDA=1` env-var + cupy installed, `uv run python -c "from riscv.gtx.config_params import xp; print(xp.__name__)"` prints `cupy`. ABS smoke test (`test_vendor_op_sweep_strict[ABS]`) PASSes byte-exact identical to numpy path (no precision drift).
+  5. **Wheel base remains NumPy-only (BM-06):** `pyproject.toml` adds `[project.optional-dependencies] cuda = ["cupy-cuda12x>=13.0"]`. Default `pip install spike` does NOT pull cuda runtime. Wheel size delta vs pre-migration ≤ 0 MB (PyTorch removal should reduce wheel).
+  6. **CLAUDE.md updated (BM-06):** "Dependencies" section reflects NumPy default + CuPy opt-in. PyTorch removal recorded in dependency history.
+
+**Plans:** 0/? plans (to be planned)
+- [ ] TBD (run `/gsd:discuss-phase 9` then `/gsd:plan-phase 9` to break down)
+**UI hint**: no
+
+---
+
 ## Progress Table
 
 | Phase | Plans Complete | Status | Completed |
@@ -274,6 +297,7 @@ plans across these waves.
 | 6. Verification & Wheel | 1/5 | In Progress|  |
 | 7. Numba Dynamic Optimization | 6/6 | Complete | 2026-05-09 |
 | 8. Multi-tile DMA Parity (v1.1) | 5/6 | In Progress|  |
+| 9. Backend migration: NumPy + CuPy opt-in (v1.1) | 0/? | Not started | |
 
 ---
 
@@ -299,9 +323,10 @@ plans across these waves.
 | 6. Verification & Wheel | VRF-01, VRF-03, VRF-04, PKG-01, PKG-03, PKG-04 | 6 |
 | 7. Numba Dynamic Optimization | NJIT-01, NJIT-02, NJIT-03, NJIT-04, NJIT-05, NJIT-06, NJIT-07, NJIT-08 | 8 |
 | 8. Multi-tile DMA Parity (v1.1) | MTDMA-01, MTDMA-02, MTDMA-03, MTDMA-04, VTW-01, VTW-02, VTW-03, VTW-04 | 8 |
+| 9. Backend migration: NumPy + CuPy opt-in (v1.1) | BM-01, BM-02, BM-03, BM-04, BM-05, BM-06 | 6 |
 | **Total v1.0** | | **50 / 50** |
-| **Total v1.1** | | **8 / 8** |
-| **Combined** | | **58 / 58** |
+| **Total v1.1** | | **14 / 14** |
+| **Combined** | | **64 / 64** |
 
 ---
 

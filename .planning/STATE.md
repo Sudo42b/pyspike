@@ -6,7 +6,7 @@ status: verifying
 last_updated: "2026-05-18T17:00:00.000Z"
 last_activity: 2026-05-18
 progress:
-  total_phases: 7
+  total_phases: 9
   completed_phases: 7
   total_plans: 38
   completed_plans: 38
@@ -165,6 +165,7 @@ Last activity: 2026-05-18 — Debug session **todo-marked-functions-causing-regr
 
 - Phase 7 added: 제대로 동작을 하면, numba 등의 라이브러리를 통해 동적 최적화 기술을 이용하여 최적화 (정상 동작 확인 후 핫스팟 가속; 진입 조건 = P6 회귀 그린)
 - Phase 8 added (2026-05-10, v1.1 milestone open): Multi-tile DMA Orchestration Parity — surfaced by P7 ABS smoke test (4.8 s with numba; first DMA tile byte-exact under `GTX_DDR_REVERSED=1` but lines past `MAX_SHARED_DMA_BYTES=65535` diverge). Single-phase milestone; 8 requirements MTDMA-01..04 (port vendor `gtx_npu_dma.cc` multi-tile loop + state-machine reset verification + tile-2 guard) + VTW-01..04 (wire 79 vendor `.elf` + 70 `_ref.txt` as fixtures, close P7 HUMAN-UAT items #1 M ≥ 12 sweep PASS and #2 5x walltime under `HAS_NUMBA=False` baseline, decide vendor `.elf` git asset policy). Depends on Phase 7 (sweep harness + perf benchmark scaffold already wired).
+- Phase 9 added (2026-05-18, v1.1 milestone): Backend migration — PyTorch → NumPy + CuPy opt-in (dual-backend `xp` alias). 사용자가 명시적으로 요청: "기존 pytorch구현을 cupy로 바꿔줘. cpu모드라면, numpy가 작동할 것 같아." 결정: NumPy 단일 도입 + CuPy abstraction 동시 구축. `xp = numpy` 기본 + `GTX_USE_CUDA=1` 시 cupy 스위치. 6 requirements BM-01..06. CLAUDE.md design intent "NumPy 백엔드 가정"으로 회귀 + PyTorch 하드 의존 제거. CuPy는 `pip install spike[cuda]` opt-in extras. 직전 perf 분석(260518-ffr)에서 PyTorch CUDA dispatch overhead가 5x ABS 회귀의 진짜 원인으로 확인된 것이 동기. Depends on Phase 8 (multi-tile invariant ABS/GELU strict로 byte-exact 회귀 가드).
 
 ### Phase 2 Plan 01 Decisions (locked during execution)
 
