@@ -5,11 +5,24 @@ import torch
 # Torch backend device — single source of truth.
 # --------------------------------------------------------------------------
 # Every GTX tensor (L0/L1/L2/DDR scratchpads, MXE accumulators, kernel
-# temporaries) lives on ``DEVICE``. CUDA is the default whenever it is
-# available; otherwise CPU.
-DEVICE: torch.device = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
-)
+# temporaries) lives on ``DEVICE``. Forced to CPU.
+#
+# Vendor C++ functional model is host-side CPU (SystemC TLM simulation).
+# CUDA path was sourced via opportunistic ``torch.cuda.is_available()`` but:
+#   - PyTorch CUDA dispatch overhead > CPU dispatch on a per-RoCC-insn loop
+#     (no transfer benefit since DDR semantics keep host on the critical path)
+#   - 5x ABS regression (95s → 458s, 2026-05-18) traced to cuda-bindings
+#     12.9.6 auto-install in venv flipping ``is_available()`` from False → True
+#   - WSL2/cuda atexit ordering: torch's ``Py_AtExit`` cuda teardown fires
+#     before Python ``atexit`` chains, causing ``ddr_save_to_hex`` (the dump
+#     trigger registered at ``npu.py:133``) to raise
+#     ``cudaErrorInvalidResourceHandle`` → dump skipped → strict tests SKIP
+#     rather than PASS. Quick task 260518-ffr falsified the 1-line
+#     ``_DDR_DEVICE = DEVICE`` fix on this ordering boundary.
+# Future opt-in: add a ``GTX_USE_CUDA`` env-var gate if/when a full cuda
+# backend (with HTIF-hooked dump path) is intentionally pursued in a separate
+# phase. Until then, CPU is the contract.
+DEVICE: torch.device = torch.device("cpu")
 
 
 # NEST x SPU topology
