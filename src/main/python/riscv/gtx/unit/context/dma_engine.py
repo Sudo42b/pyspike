@@ -4,25 +4,14 @@ Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_dma.cc:25-435.
 
 Per CONTEXT D-01: This module has NO `proc`/`insn` dependencies. It operates
 on `GtxMemory` instances and pure data only -- the spike-dependent entry
-points (firmware_dma @handler) live in `ops/dma.py` (Plan 02). Plans 02/04/05
-all import from this module.
+points (firmware_dma @handler) live in `ops/dma.py`. Plans 02/04/05 all
+import from this module.
 
-Phase 3 plan 01 Task 2.
-
-Phase 9 Wave 5 (plan 09-02b): ported from torch to xp (numpy default,
-cupy under GTX_USE_CUDA=1). All copy_/view-as-reshape/permute/cpu/clone/
-fill_/to-device torch-API sites are replaced with the xp-uniform
-equivalents per 09-RESEARCH Pitfall 1.
-The xp.ndarray-returning shim sites at memory.py (``l0_byte``, ``ddr.read``)
-are bypassed here by reading raw xp storage directly (``mem.l[012][nest, spu]``,
-``mem.ddr._bytes[...]``) — same pattern Wave 2a (op-handlers) adopted; lets
-this file stay torch-free even before its shim sites in memory.py are removed.
-
-Invariant policy (user decision): every per-region access verifies its
-bounds with ``assert`` and then performs the whole transfer in a single
-``xp.copyto`` or ``.transpose`` + ``ascontiguousarray`` op. Wrap-around and
-out-of-bounds are treated as firmware bugs and surfaced via
-``AssertionError`` — no silent clipping, no fallback paths.
+Invariant policy: every per-region access verifies its bounds with
+``assert`` and then performs the whole transfer in a single ``xp.copyto``
+or ``.transpose`` + ``ascontiguousarray`` op. Wrap-around and out-of-bounds
+are treated as firmware bugs and surfaced via ``AssertionError`` — no
+silent clipping, no fallback paths.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -123,7 +112,6 @@ def exec_dma_2d(mem: 'GtxMemory', *, nest_id: int, l2_addr: int, l1_addr: int,
     assert l2_stride == 0, f"l2_stride {l2_stride} != 0 not supported yet"
     l2_stride = width
 
-    # Shim bypass — read raw xp storage directly (same pattern Wave 2a adopted).
     l1_buf = mem.l1[nest_id, spu_id]
     l2_buf = mem.l2[nest_id]
 
@@ -138,9 +126,7 @@ def exec_dma_2d(mem: 'GtxMemory', *, nest_id: int, l2_addr: int, l1_addr: int,
         f"{GTX_L1_SIZE_BYTES} — firmware bug"
     )
 
-    # RESEARCH Pitfall 1: torch view-as-reshape ported to xp .reshape.
-    # The L2 region is row-major with stride l2_stride and length width
-    # per row.
+    # L2 region is row-major with stride l2_stride and length width per row.
     l2_view = l2_buf[l2_addr:l2_end].reshape(height, l2_stride)[:, :width]
     l1_view = l1_buf[l1_addr:l1_end].reshape(height, width)
     if is_load:
@@ -164,7 +150,6 @@ def exec_load_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
     """
     assert nest_id < GTX_NEST_NUM, f"nest_id {nest_id} >= GTX_NEST_NUM {GTX_NEST_NUM}"
     assert spu_id < GTX_SPU_NUM, f"spu_id {spu_id} >= GTX_SPU_NUM {GTX_SPU_NUM}"
-    # Shim bypass — raw xp storage.
     l1_buf = mem.l1[nest_id, spu_id]
     l0_buf = mem.l0[nest_id, spu_id]
     l1_off = l1_addr % GTX_L1_SIZE_BYTES
@@ -189,7 +174,6 @@ def exec_store_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
     """
     assert nest_id < GTX_NEST_NUM, f"nest_id {nest_id} >= GTX_NEST_NUM {GTX_NEST_NUM}"
     assert spu_id < GTX_SPU_NUM, f"spu_id {spu_id} >= GTX_SPU_NUM {GTX_SPU_NUM}"
-    # Shim bypass — raw xp storage.
     l1_buf = mem.l1[nest_id, spu_id]
     l0_buf = mem.l0[nest_id, spu_id]
     l1_off = l1_addr % GTX_L1_SIZE_BYTES
@@ -218,8 +202,7 @@ def exec_transpose(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
     assert spu_id < GTX_SPU_NUM, f"spu_id {spu_id} >= GTX_SPU_NUM {GTX_SPU_NUM}"
     assert rows > 0 and cols > 0, f"rows {rows} or cols {cols} is 0"
 
-    # Shim bypass — raw xp storage, reinterpret as FP16 view (zero-copy
-    # under numpy/cupy LE byte order).
+    # FP16 view of L1 (zero-copy reinterpret; LE byte order).
     l1_f16 = mem.l1[nest_id, spu_id].view(xp.float16)
     nelem_total = l1_f16.shape[0]
     nelem = rows * cols
@@ -235,10 +218,8 @@ def exec_transpose(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
         f"{nelem_total} — firmware bug"
     )
 
-    # RESEARCH Pitfall 1: torch view-as-reshape ported to xp .reshape.
     src_view = l1_f16[a_h:a_h + nelem].reshape(rows, cols)
-    # `.t()` (torch) → `.T` (numpy/cupy). `.contiguous()` → `xp.ascontiguousarray`.
-    # The final `.view(-1)` flattens — numpy uses `.reshape(-1)`.
+    # Transpose, materialise contiguously, then flatten back into the dst window.
     l1_f16[r_h:r_h + nelem] = xp.ascontiguousarray(src_view.T).reshape(-1)
     return 0
 
@@ -283,13 +264,10 @@ def exec_transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
         f"capacity {cap} — firmware bug"
     )
 
-    # Shim bypass — read raw DDR bytes; reinterpret + permute on xp.
+    # Read raw DDR bytes; reinterpret as fp16 3D, permute, write back.
     src_span = mem.ddr._bytes[src_off:src_off + nelem * 2]
     src_3d = src_span.view(xp.float16).reshape(dim2, dim1, dim0)
-    # `.permute(axes)` → `.transpose(axes)` (same kwargs); `.contiguous()`
-    # → `xp.ascontiguousarray`.
     permuted = xp.ascontiguousarray(src_3d.transpose(2 - p2, 2 - p1, 2 - p0))
-    # `.view(uint8).reshape(-1)` rewritten with xp.uint8 (numpy/cupy dtype).
     mem.ddr.write(dst_off, permuted.view(xp.uint8).reshape(-1))
 
 
@@ -310,13 +288,11 @@ def exec_fill(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
         f"invalid nest_id {nest_id} or spu_id {spu_id}"
     )
 
-    # Shim bypass — raw xp storage reinterpret as uint16 view (zero-copy LE).
+    # Raw xp storage reinterpret as uint16 view (zero-copy LE).
     l1_u16 = mem.l1[nest_id, spu_id].view(xp.uint16)
     nelem = l1_u16.shape[0]
     r_off = (addr_r // 2) % nelem
     fill = fill_val & 0xFFFF
-    # `.fill_(val)` (torch in-place) → slice assign (numpy idiomatic) or
-    # `.fill(val)`. Use slice-assign to avoid relying on torch-style fill_.
     if r_off + length <= nelem:
         l1_u16[r_off:r_off + length] = fill
     else:
@@ -368,10 +344,9 @@ def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_l
     ensure_ddr(mem, max_off)
     ddr_cap = mem.ddr.capacity()
 
-    # Shim bypass — raw xp storage for both L2 and DDR.
+    # Raw xp storage for both L2 and DDR (D-10: DDR + scratchpads share the
+    # backend, so no cross-device copy needed).
     l2_buf = mem.l2[nest]
-    # Under xp, DDR + scratchpads share a backend (D-10 unified), so the
-    # cross-device `.to(l2_buf.device)` torch step is now a no-op — drop it.
     ddr_span = mem.ddr._bytes[
         ddr_off_base : min(max_off, ddr_cap)
     ]
@@ -379,7 +354,6 @@ def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_l
     l2_end = addr_lo + (height - 1) * wr_stride + length
     assert rd_stride >= length, f"rd_stride {rd_stride} < length {length}"
     assert wr_stride >= length, f"wr_stride {wr_stride} < length {length}"
-    # `.numel()` (torch) → `.size` (xp attribute).
     assert height * rd_stride <= ddr_span.size, (
         f"DDR span {ddr_span.size} too small for height*rd_stride "
         f"{height * rd_stride} — firmware bug"
@@ -392,9 +366,6 @@ def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_l
         f"DDR window exceeds capacity {ddr_cap} — firmware bug"
     )
 
-    # RESEARCH Pitfall 1: torch view-as-reshape ported to xp .reshape;
-    # the dtype-only view is preserved with .view(xp.<dtype>). Slicing
-    # semantics identical.
     src_2d = ddr_span[:height * rd_stride].reshape(height, rd_stride)[:, :length]
     dst_2d = l2_buf[addr_lo:addr_lo + height * wr_stride].reshape(height, wr_stride)[:, :length]
     xp.copyto(dst_2d, src_2d)
@@ -417,7 +388,6 @@ def firmware_dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
     Invariants (asserted): stride ≥ length, no L2/L1 wrap. Single
     ``xp.copyto`` over (height, length) 2D views — no row loop.
     """
-    # Shim bypass — raw xp storage.
     l1 = mem.l1[nest, spu]
     l2 = mem.l2[nest]
     hi_stride = wr_stride if is_store else rd_stride
@@ -455,7 +425,6 @@ def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
     ``.copy()`` on the source 2D view handles src/dst overlap, then a
     single ``xp.copyto`` writes back.
     """
-    # Shim bypass — raw xp storage.
     l1 = mem.l1[nest, spu]
 
     src_end = src_addr + height * length
@@ -469,7 +438,7 @@ def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
         f"{GTX_L1_SIZE_BYTES} — firmware bug"
     )
 
-    # torch view-as-reshape + clone ported to xp .reshape + .copy().
+    # Copy the src 2D window so the dst slice-assign can overlap safely.
     src_2d = l1[src_addr:src_end].reshape(height, length).copy()
     xp.copyto(l1[dst_addr:dst_end].reshape(height, length), src_2d)
     return 0
@@ -507,7 +476,6 @@ def firmware_mcast_s2l(mem: 'GtxMemory', *, nest: int,
         f"rd_stride {rd_stride} < length {length} (firmware bug)"
     )
 
-    # Shim bypass — raw xp storage.
     l2 = mem.l2[nest]
     src_end = l2_addr + (height - 1) * effective_stride + length
     assert src_end <= GTX_L2_SIZE_BYTES, (
@@ -525,7 +493,6 @@ def firmware_mcast_s2l(mem: 'GtxMemory', *, nest: int,
     for s in range(GTX_SPU_NUM):
         if not ((target_spu_mask >> s) & 1):
             continue
-        # Shim bypass — raw xp storage.
         l1 = mem.l1[nest, s]
         xp.copyto(l1[l1_addr:l1_end].reshape(height, length), src_2d)
     return 0
@@ -582,7 +549,6 @@ def firmware_mcast_g2s(mem: 'GtxMemory', *, ddr_addr: int, l2_addr: int,
     for k in range(GTX_NEST_NUM):
         if not ((target_nest_mask >> k) & 1):
             continue
-        # Shim bypass — raw xp storage.
         l2 = mem.l2[k]
         xp.copyto(l2[l2_addr:l2_end].reshape(height, length), src_2d)
     return 0
@@ -615,7 +581,6 @@ def firmware_mcast_s2s(mem: 'GtxMemory', *, src_tmu: int,
     if src_tmu >= GTX_NEST_NUM:
         src_tmu = 0
 
-    # Shim bypass — raw xp storage.
     src_l2 = mem.l2[src_tmu]
     for row in range(height):
         s_off = (src_addr + row * src_stride) % GTX_L2_SIZE_BYTES
@@ -624,14 +589,11 @@ def firmware_mcast_s2s(mem: 'GtxMemory', *, src_tmu: int,
         copy_len = min(length, GTX_L2_SIZE_BYTES - max(s_off, d_off))
         if copy_len <= 0:
             continue
-        # Temp buffer for the row (`.clone()` torch → `.copy()` xp) keeps
-        # overlap safety if src==dst NEST.
+        # Temp buffer for the row keeps overlap safety if src==dst NEST.
         tmp = src_l2[s_off:s_off + copy_len].copy()
         for k in range(GTX_NEST_NUM):
             if not ((target_nest_mask >> k) & 1):
                 continue
-            # Shim bypass — raw xp storage. Under xp same backend so the
-            # `.to(dst_l2.device)` cross-device step is dropped.
             dst_l2 = mem.l2[k]
             xp.copyto(dst_l2[d_off:d_off + copy_len], tmp)
     return 0
@@ -688,15 +650,13 @@ def firmware_copy_mem(npu: Any, *, nest_id: int,
                 if d_base + copy_len > ddr_cap:
                     copy_len = max(0, ddr_cap - d_base)
                 if copy_len > 0:
-                    # Shim bypass — raw xp DDR storage. The intermediate
-                    # buffer is a copy() to handle DDR-to-DDR overlap safely
-                    # (if src/dst windows alias the same backing bytes).
+                    # Copy the DDR src window to handle DDR-to-DDR overlap
+                    # safely (src/dst may alias the same backing bytes).
                     src_bytes = mem.ddr._bytes[s_base:s_base + copy_len].copy()
                     mem.ddr.write(d_base, src_bytes)
         elif src_is_ddr and not dst_is_ddr:
             # DDR-to-L2 (vendor :812-822)
             n = nest_id if nest_id < GTX_NEST_NUM else 0
-            # Shim bypass — raw xp L2 storage.
             l2 = mem.l2[n]
             max_src = src_off + (height - 1) * src_stride + length
             ensure_ddr(mem, max_src)
@@ -710,15 +670,12 @@ def firmware_copy_mem(npu: Any, *, nest_id: int,
                 if d + copy_len > GTX_L2_SIZE_BYTES:
                     copy_len = max(0, GTX_L2_SIZE_BYTES - d)
                 if copy_len > 0:
-                    # Shim bypass — raw xp DDR storage. Under xp (D-10)
-                    # DDR + L2 share a backend so the cross-device
-                    # `.to(l2.device)` step is dropped.
+                    # D-10: DDR + L2 share a backend; no cross-device copy needed.
                     src_bytes = mem.ddr._bytes[s:s + copy_len]
                     xp.copyto(l2[d:d + copy_len], src_bytes)
         else:
             # L2-to-DDR (vendor :824-834)
             n = nest_id if nest_id < GTX_NEST_NUM else 0
-            # Shim bypass — raw xp L2 storage.
             l2 = mem.l2[n]
             max_dst = dst_off + (height - 1) * dst_stride + length
             ensure_ddr(mem, max_dst)
@@ -732,15 +689,13 @@ def firmware_copy_mem(npu: Any, *, nest_id: int,
                 if d + copy_len > ddr_cap:
                     copy_len = max(0, ddr_cap - d)
                 if copy_len > 0:
-                    # `.cpu()` (torch) → `to_host(...)` xp helper (no-op on
-                    # numpy; cp.asnumpy on cupy). DDR file-I/O boundary
-                    # convention from Wave 1a.
+                    # `to_host` brings the L2 slice to host bytes at the
+                    # DDR file-I/O boundary (no-op on numpy; cp.asnumpy on cupy).
                     mem.ddr.write(d, to_host(l2[s:s + copy_len]))
     else:
         # ── L2-to-L2 same-NEST (vendor :836-844) ──
         # NO flush (asymmetry preserved per RESEARCH Pitfall 2).
         n = nest_id if nest_id < GTX_NEST_NUM else 0
-        # Shim bypass — raw xp L2 storage.
         l2 = mem.l2[n]
         for row in range(height):
             s_off = (src_addr_raw + row * src_stride) % GTX_L2_SIZE_BYTES
@@ -748,8 +703,7 @@ def firmware_copy_mem(npu: Any, *, nest_id: int,
             copy_len = min(length, GTX_L2_SIZE_BYTES - max(s_off, d_off))
             if copy_len <= 0:
                 continue
-            # Temp buffer (`.clone()` torch → `.copy()` xp) for overlap
-            # safety per vendor :841.
+            # Temp buffer for overlap safety per vendor :841.
             tmp = l2[s_off:s_off + copy_len].copy()
             xp.copyto(l2[d_off:d_off + copy_len], tmp)
     return 0

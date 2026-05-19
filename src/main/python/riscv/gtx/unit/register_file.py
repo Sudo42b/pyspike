@@ -2,7 +2,7 @@
 
 GtxNpu stores SPR state in `RegisterFile` instances. Each `RegisterFile`
 owns an `xp.ndarray` storage (numpy.ndarray by default; cupy.ndarray
-under GTX_USE_CUDA=1 per Phase 9 D-11).
+under GTX_USE_CUDA=1).
 
 Shapes:
     GSPR:  (1024,)
@@ -13,11 +13,9 @@ The last dimension is always the 10-bit address offset (0-1023).
 Broadcasting is supported: setting a value on a multi-dimensional
 RegisterFile propagates to all instances.
 
-D-11 (Phase 9 CONTEXT): RegisterFile's backing array follows the
-scratchpad device — numpy=host, cupy=GPU. Per-call scalar reads/writes
-during dispatch are the only known perf concern; if the cupy path
-ever exceeds the 105s ABS budget, fall back to a host-pinned numpy
-exception (deferred — see plan 09-01b Wave gate doc).
+D-11: RegisterFile's backing array follows the scratchpad device —
+numpy=host, cupy=GPU. Per-call scalar reads/writes during dispatch are
+the only known perf concern.
 """
 from __future__ import annotations
 
@@ -205,9 +203,9 @@ class RegisterView:
             shifted_mask = u64 - (1 << 64) if u64 >> 63 else u64
 
             # Same signed-int64 wrap for the raw `mask` when it covers a
-            # full 64-bit field (e.g. SGPR0.gpr mask=0xFFFFFFFFFFFFFFFF) —
+            # full 64-bit field (e.g. SGPR0.gpr mask=0xFFFFFFFFFFFFFFFF):
             # numpy bitwise-AND with an unsigned 0xFFFF... mask overflows
-            # int64. With torch this was implicit; for xp we wrap here.
+            # int64, so wrap to the signed-int64 domain here.
             mask_signed = mask & ((1 << 64) - 1)
             if mask_signed >> 63:
                 mask_signed = mask_signed - (1 << 64)

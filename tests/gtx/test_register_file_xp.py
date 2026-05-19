@@ -1,12 +1,9 @@
-"""RegisterFile xp-port invariants (Phase 9 Plan 09-01b Task 1).
+"""RegisterFile xp-port invariants.
 
-Pins the post-Wave-1b contract: RegisterFile.tensor is an `xp.ndarray`
-(numpy.ndarray by default; cupy.ndarray under GTX_USE_CUDA=1) of dtype
-`xp.int64`. Constructor no longer accepts `device=` kwarg (xp is
-device-implicit per D-11 / D-12).
-
-These tests are written RED first — they will fail against the legacy
-torch-backed register_file.py and pass after the xp port.
+Pins the contract: RegisterFile.tensor is an `xp.ndarray` (numpy.ndarray
+by default; cupy.ndarray under GTX_USE_CUDA=1) of dtype `xp.int64`.
+Constructor does not accept a `device=` kwarg (xp is device-implicit per
+D-11 / D-12).
 """
 from __future__ import annotations
 
@@ -72,9 +69,8 @@ def test_register_file_multidim_shape():
 def test_register_file_64bit_field_broadcast_no_overflow():
     """64-bit field writes (top bit set) must not OverflowError.
 
-    Pins the pre-existing 64-bit signed-wrap fix in __setattr__ — that
-    logic must survive the torch → xp port. Uses LSPR.SGPR0.gpr which is
-    a 64-bit field.
+    Pins the pre-existing 64-bit signed-wrap fix in __setattr__.
+    Uses LSPR.SGPR0.gpr which is a 64-bit field.
     """
     rf = RegisterFile(LSPR, shape=(4, 16, 1024))
     val_u64 = 0xCAFEBABEDEADBEEF
@@ -92,8 +88,6 @@ def test_no_torch_in_register_file_source():
     path = Path(__file__).resolve().parents[2] / "src/main/python/riscv/gtx/unit/register_file.py"
     src = path.read_text()
     assert "import torch" not in src, f"register_file.py still imports torch:\n{src[:500]}"
-    # tolerate the word 'torch' in source comments? Plan wants 0 — be strict.
-    # Exception: SystemC-style historic comments. Strict per acceptance criteria.
     occurrences = [line for line in src.splitlines() if "torch" in line.lower() and not line.lstrip().startswith("#")]
     assert not occurrences, f"register_file.py has non-comment torch refs:\n{occurrences}"
 

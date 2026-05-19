@@ -346,11 +346,8 @@ class GtxNpu(isa.ROCC):
     def flush_deferred_ddr_stores(self) -> None:
         """Drain the S-loop deferred L2→DDR store queue.
 
-        Reads the L2 storage directly through ``self.mem.l2[nest]``. This is
-        xp-native on both numpy and cupy paths. (Phase 9 Wave 6 removed the
-        last WAVE-1-SHIM wrappers; ``mem.l2_byte()`` now also returns bare
-        xp.ndarray, but internal flush code reads the underlying contiguous
-        backing directly for consistency with the slab-write pattern below.)
+        Reads L2 storage directly through ``self.mem.l2[nest]`` for
+        consistency with the slab-write pattern below.
         """
         if not self.deferred_ddr_stores:
             return

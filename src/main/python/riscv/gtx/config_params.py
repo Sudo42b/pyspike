@@ -13,9 +13,8 @@ def _resolve_backend():
 
     Default: numpy + identity helpers (no-op).
     GTX_USE_CUDA=1 (or "true"/"TRUE"): require cupy importable, else fail-loud
-    with `pip install 'spike[cuda]'` hint (D-03). Silent fallback FORBIDDEN
-    (260518-ffr regression precedent — torch.cuda.is_available auto-true
-    flipped 5x ABS slowdown).
+    with `pip install 'spike[cuda]'` hint (D-03). Silent fallback FORBIDDEN —
+    an auto-detected CUDA path once caused a 5x ABS slowdown regression.
     """
     env = os.environ.get("GTX_USE_CUDA", "").strip()
     if env not in ("1", "true", "TRUE"):
@@ -36,12 +35,9 @@ def _resolve_backend():
 # All gtx.* modules: `from .config_params import xp, to_host, to_device`.
 xp, to_host, to_device = _resolve_backend()
 
-# Phase 9 Wave 6 D-04 clean-cut: DEVICE symbol REMOVED. The previous Wave 0
-# deferred string alias (`DEVICE: str = "cpu" if xp is _np else "cuda"`) is
-# gone. All downstream consumers ported in Waves 1/2/5 (memory.py,
-# register_file.py, npu.py, dma_engine.py, ops/*.py). `from
-# riscv.gtx.config_params import DEVICE` now raises ImportError —
-# behavior verified by tests/gtx/test_xp_alias.py.
+# D-04: `DEVICE` symbol is intentionally absent — `from
+# riscv.gtx.config_params import DEVICE` must raise ImportError. Use `xp`
+# / `to_host` / `to_device` instead.
 
 
 # NEST x SPU topology

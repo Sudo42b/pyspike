@@ -250,8 +250,7 @@ def pool_max(arr_f16, kernel_size: int):
     """
     f32 = arr_f16.astype(xp.float32).reshape(-1)
     n = f32.shape[0]
-    # truncate to multiple of kernel_size (matches torch's stride=kernel_size
-    # contract with no padding).
+    # truncate to multiple of kernel_size — stride=kernel_size, no padding.
     nfull = (n // kernel_size) * kernel_size
     windows = f32[:nfull].reshape(-1, kernel_size)
     return xp.max(windows, axis=1).astype(xp.float16)
@@ -301,11 +300,7 @@ def _resolve_nest_spu(npu) -> tuple[int, int]:
 
 
 def _l0_block_view(npu, nest: int, spu: int, reg: int):
-    """Return an FP16 view of ``L0[(reg & 0x1F)*32 .. +32]`` (16 elements).
-
-    Bypasses the WAVE-1-SHIM by reading raw xp storage (npu.mem.l0) and
-    taking the .view(xp.float16) ourselves.
-    """
+    """Return an FP16 view of ``L0[(reg & 0x1F)*32 .. +32]`` (16 elements)."""
     l0 = npu.mem.l0[nest, spu]
     off = ((reg & 0x1F) * 32) % GTX_L0_SIZE_BYTES
     return l0.view(xp.float16)[off // 2:off // 2 + 16]
@@ -343,7 +338,6 @@ def firmware_act(npu, proc, insn, *, op_id: int, is_reversed: bool) -> int:
     if length == 0:
         length = 0x10000
 
-    # Bypass WAVE-1-SHIM: read raw xp storage and take fp16 view ourselves.
     l1_f16 = npu.mem.l1[nest, spu].view(xp.float16)
     rd_off = (rd_addr // 2) % (l1_f16.shape[0])
     view_in = l1_f16[rd_off:rd_off + length]
@@ -463,7 +457,6 @@ def firmware_pool(npu, proc, insn, *, is_max: bool) -> int:
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
-    # Bypass WAVE-1-SHIM: read raw xp storage and take fp16 view ourselves.
     l1_f16 = npu.mem.l1[nest, spu].view(xp.float16)
     in_off = (addr_a // 2) % l1_f16.shape[0]
     in_view = l1_f16[in_off:in_off + length]
@@ -497,9 +490,8 @@ def firmware_format(npu, proc, insn, *, src_kind: str, dst_kind: str) -> int:
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
-    # Bypass WAVE-1-SHIM: raw xp byte storage. .copy() (xp) replaces
-    # .clone().contiguous() (torch) — xp.copy is already a contiguous
-    # alloc + memcpy.
+    # .copy() returns a contiguous alloc + memcpy on xp, so no extra
+    # ascontiguousarray is strictly needed — keep the explicit wrap for clarity.
     l1 = npu.mem.l1[nest, spu]
     in_size = length * _BYTES_PER_ELEM[src_kind]
     in_bytes = xp.ascontiguousarray(l1[addr_a:addr_a + in_size].copy())

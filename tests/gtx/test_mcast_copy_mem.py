@@ -20,10 +20,8 @@ unchanged dst L2 — in that case the test asserts the precise expected
 state (current dispatch behaviour) so that future routing changes flip the
 expected/actual without breaking the contract.
 
-Wave 6 (plan 09-03-finalize) ported all 17 torch refs to numpy/xp per
-CONTEXT D-16. The test reads raw L1/L2/DDR storage via the xp-native
-backings (`npu.mem.l1[nest, spu]`, `npu.mem.l2[nest]`, `npu.mem.ddr._bytes`)
-instead of the WAVE-1-SHIM accessors which are removed in this plan.
+The test reads raw L1/L2/DDR storage via the xp-native backings
+(`npu.mem.l1[nest, spu]`, `npu.mem.l2[nest]`, `npu.mem.ddr._bytes`).
 """
 from __future__ import annotations
 

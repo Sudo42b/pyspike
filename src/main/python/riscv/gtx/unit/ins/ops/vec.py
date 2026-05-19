@@ -117,12 +117,7 @@ def _fp16_high16(packed: int):
 
 
 def _l1_view_addr(npu, nest: int, spu: int, addr_byte: int, length: int):
-    """Return an FP16 view of ``L1[addr:addr + length*2]`` (no copy).
-
-    Bypasses the WAVE-1-SHIM by accessing the raw L1 byte storage directly
-    (npu.mem.l1) and taking the .view(xp.float16) ourselves — same pattern
-    npu.py's flush_deferred_ddr_stores uses for internal Wave 1b code.
-    """
+    """Return an FP16 view of ``L1[addr:addr + length*2]`` (no copy)."""
     off = addr_byte // 2
     l1_f16 = npu.mem.l1[nest, spu].view(xp.float16)
     return l1_f16[off:off + length]

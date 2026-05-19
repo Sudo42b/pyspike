@@ -4,9 +4,6 @@ Locks the post-d6f73f9 invariants: @csr decorator populates module-level
 GSPR/NSPR/LSPR dicts at import time, Register schemas are stateless, and
 RegisterFile materializes them as int64 xp.ndarray storage with
 PIPE-only addr indexing (APB excluded, scope-masked to 10 bits).
-
-Ported off torch in Phase 9 Plan 09-01b Task 3 — assertions now use
-`xp.int64` (numpy default; cupy under GTX_USE_CUDA=1).
 """
 from __future__ import annotations
 

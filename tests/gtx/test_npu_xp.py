@@ -1,12 +1,9 @@
-"""GtxNpu xp-port invariants (Phase 9 Plan 09-01b Task 2).
+"""GtxNpu xp-port invariants.
 
-Pins the Wave 1b npu.py contract: GtxNpu allocates `_mxe_accum`,
-`_credit_ld`, `_credit_st` as `xp.ndarray`s (numpy default, cupy under
-GTX_USE_CUDA=1). RegisterFile instantiation no longer passes
-`device=DEVICE`. Line 354's `.cpu()` chain is replaced with `to_host()`.
-
-These tests are written RED first — they will fail against the
-torch-backed npu.py and pass after the port.
+Pins the npu.py contract: GtxNpu allocates `_mxe_accum`, `_credit_ld`,
+`_credit_st` as `xp.ndarray`s (numpy default, cupy under
+GTX_USE_CUDA=1). RegisterFile instantiation does not pass `device=`.
+The L0 host-bridge uses `to_host()`.
 """
 from __future__ import annotations
 
@@ -72,7 +69,7 @@ def test_npu_construct_state_arrays_are_xp():
     """GtxNpu constructor produces xp.ndarray state arrays."""
     from riscv.gtx.npu import GtxNpu
     npu = GtxNpu()
-    # State arrays should be xp.ndarray, not torch.Tensor.
+    # State arrays must be xp.ndarray (numpy/cupy).
     assert type(npu._mxe_accum).__module__.startswith(("numpy", "cupy")), (
         f"_mxe_accum is not xp: type={type(npu._mxe_accum)}"
     )
@@ -101,7 +98,7 @@ def test_npu_construct_shapes():
 
 
 def test_npu_register_file_storage_is_xp():
-    """GSPR/NSPR/LSPR RegisterFile storage is xp.ndarray (post-Task-1 + Task-2)."""
+    """GSPR/NSPR/LSPR RegisterFile storage is xp.ndarray."""
     from riscv.gtx.npu import GtxNpu
     npu = GtxNpu()
     assert type(npu.gspr.tensor).__module__.startswith(("numpy", "cupy"))
@@ -113,8 +110,7 @@ def test_npu_register_file_storage_is_xp():
 
 
 def test_state_arrays_in_place_zero_works():
-    """State arrays support xp-uniform in-place broadcast assignment to 0
-    (replaces the legacy torch `.fill_(0)` API used in npu.reset())."""
+    """State arrays support xp-uniform in-place broadcast assignment to 0."""
     from riscv.gtx.npu import GtxNpu
     npu = GtxNpu()
     # Seed with non-zero values
@@ -122,7 +118,7 @@ def test_state_arrays_in_place_zero_works():
     npu._credit_ld[...] = 7
     npu._credit_st[...] = 11
     assert bool(xp.all(npu._mxe_accum == 3.14))
-    # The exact in-place pattern used in npu.reset() — no torch.fill_().
+    # In-place broadcast assignment — the npu.reset() pattern.
     npu._mxe_accum[...] = 0.0
     npu._credit_ld[...] = 0
     npu._credit_st[...] = 0

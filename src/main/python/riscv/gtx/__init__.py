@@ -52,11 +52,9 @@ from .unit.ins import encoding
 # missing optional helpers (e.g. ``ddr.py`` in WIP refactor states) do
 # not block import of the FSM / CSR / topology surface.
 #
-# Diagnostic policy (Phase 9 Wave 6, plan 09-03-finalize): surface the
-# exception class in the warning so silent ImportError cascades (see
-# project_gtx_extension_silent_import_failure.md memory for the D1-D5
-# precedent where ImportErrors were swallowed and produced universal
-# rc=255 "couldn't find extension 'gtx'") are visible to users.
+# Surface the exception class in the warning so silent ImportError
+# cascades (which previously produced opaque rc=255 "couldn't find
+# extension 'gtx'") are visible to users.
 try:
     from . import npu   # noqa: F401
     from .npu import GtxNpu
@@ -83,7 +81,6 @@ __all__ = [
     "GtxNpu",
 ]
 
-# Phase 9 Wave 6 D-04 clean-cut: DEVICE re-export removed. `from
-# riscv.gtx import DEVICE` and `from riscv.gtx.config_params import DEVICE`
-# now both raise ImportError per the Wave 6 acceptance contract. xp /
-# to_host / to_device in config_params.py are the canonical SSOT.
+# D-04: `DEVICE` is intentionally NOT re-exported. `from riscv.gtx
+# import DEVICE` raises ImportError. Use `xp` / `to_host` / `to_device`
+# from `riscv.gtx.config_params` instead.

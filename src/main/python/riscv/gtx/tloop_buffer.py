@@ -404,9 +404,8 @@ def _try_fuse_unary(npu, buf, start):
         cursor = nxt.end
 
     if len(frames) < 2:
-        # Single frame — torch op overhead is identical to sequential
-        # replay, so don't bother with the bulk path. Let the caller fall
-        # through to plain replay.
+        # Single frame — bulk path has no advantage over sequential replay;
+        # let the caller fall through to plain replay.
         return 0
 
     _execute_fused(npu, frames)
@@ -456,17 +455,15 @@ def _execute_fused(npu, frames) -> None:
     nest = npu.warp.tmu_id if npu.warp.is_ploop else 0
     spu = npu.warp.curr_id
 
-    # Bypass the WAVE-1-SHIM accessors (mem.l2_byte / mem.l1_byte) and read
-    # raw xp storage directly. Same pattern Wave 2a (op-handlers) and Wave 5
-    # (dma_engine) adopted. Wave 6 removes the shims entirely.
+    # Read raw xp L2 storage directly (skip the byte/f16 accessor wrappers).
     l2 = npu.mem.l2[nest]
     src_base = src_offs[0]
     dst_base = dst_offs[0]
     total_bytes = n * l_len
 
     # Read N rows from L2 as a single (N, vec_size) fp16 ndarray — no copy,
-    # just a strided view. Per RESEARCH Pitfall 1, use `.reshape(n, vec_size)`
-    # (numpy/cupy `.view(n, m)` differs from torch's dual-purpose view-as-reshape).
+    # just a strided view. xp `.view(dtype)` reinterprets; use `.reshape`
+    # for shape changes.
     src_f16 = (
         l2[src_base:src_base + total_bytes]
         .view(xp.float16)
@@ -477,9 +474,8 @@ def _execute_fused(npu, frames) -> None:
     # across the whole tile.
     result_f16 = _apply_unary(funct7, sub_op, src_f16)
 
-    # Write N rows back to L2 dst slab. `xp.copyto` is the in-place
-    # equivalent of torch's `.copy_()`. The src needs to be reshaped to 1D
-    # uint8 view to match the dst's flat byte layout.
+    # Write N rows back to L2 dst slab. Reshape src to 1D uint8 view to
+    # match the dst's flat byte layout, then in-place copy.
     dst_view = l2[dst_base:dst_base + total_bytes]
     xp.copyto(dst_view, result_f16.reshape(-1).view(xp.uint8))
 

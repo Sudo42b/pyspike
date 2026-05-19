@@ -3,8 +3,7 @@
 Invariants enforced here:
   - GTX_USE_CUDA env var gates cupy presence. Collection fails fast only if
     GTX_USE_CUDA=1 is set without cupy installed; the numpy default needs no
-    GPU, so test collection succeeds on no-GPU boxes (D-01/D-04 — Phase 9
-    backend migration replaced torch.cuda.is_available with this gate).
+    GPU, so test collection succeeds on no-GPU boxes (D-01/D-04).
   - GTX_DDR_LOAD / GTX_DDR_DUMP env vars are cleared so vendor binary I/O
     never fires during tests.
 """
@@ -13,8 +12,8 @@ import os
 
 import pytest
 
-# GTX_USE_CUDA gate (was torch.cuda.is_available() — D-01/D-04 removed torch).
-# Default path = numpy. Only assert cupy presence when user explicitly opts in.
+# GTX_USE_CUDA gate. Default path = numpy. Only assert cupy presence when
+# user explicitly opts in.
 if os.environ.get("GTX_USE_CUDA", "").strip() in ("1", "true", "TRUE"):
     try:
         import cupy  # noqa: F401

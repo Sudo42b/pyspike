@@ -15,10 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-# Wave-2a port: xp imported for byte-tile primitives (xp.tile) in CPSVR.
-# CPSVR/MVSVR operate on L0 byte arrays whose contract under Wave 1a is xp
-# (numpy default). xp.ndarray.repeat repeats PER-ELEMENT (not byte-wise tile)
-# so xp.tile is the correct vendor-equivalent primitive for byte replication.
+# xp is needed for byte-tile primitives in CPSVR (xp.tile, not xp.repeat —
+# repeat is per-element, tile is byte-wise replication).
 from ....config_params import xp
 
 from ...._registry import handler
@@ -199,8 +197,6 @@ def cpsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     base = ((rs1_val & 0x1F) // 4) * 32
     bsz = rs2_val & 3
     
-    # Bypass WAVE-1-SHIM: raw xp storage. dma_engine.py still consumes
-    # `mem.l0_byte()` (Wave 5 obligation per 09-01b-SUMMARY removal table).
     l0 = npu.mem.l0[nest, spu]
     # Build 8B pattern from L0[base]
     # NB: xp.tile is the byte-stream replication primitive (matches vendor
@@ -259,14 +255,11 @@ def mvsvr(npu: GtxNpu, proc, insn, xs1, xs2):
     if src_idx == dst_idx:
         return 0
         
-    # Bypass WAVE-1-SHIM: raw xp storage. dma_engine.py still consumes
-    # `mem.l0_byte()` (Wave 5 obligation per 09-01b-SUMMARY removal table).
     l0 = npu.mem.l0[nest, spu]
     src_off = src_idx * 32
     dst_off = dst_idx * 32
 
-    # xp uses .copy() instead of torch's .clone(); slice-assign [:] = 0
-    # replaces torch's in-place .zero_() — both numpy and cupy uniform.
+    # Copy src bytes to dst, then zero the src slot (MVSVR move semantics).
     l0[dst_off:dst_off+32] = l0[src_off:src_off+32].copy()
     l0[src_off:src_off+32] = 0
     return 0

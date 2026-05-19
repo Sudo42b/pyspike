@@ -37,27 +37,7 @@ cross-SPU operations to plain ndarray slicing
 is host RAM; under xp=cupy (D-10) DDR is GPU VRAM and file I/O
 crosses the H/D boundary via ``to_host()`` at the formatting edge.
 
-WAVE-1-SHIM history (strangler-fig pattern — now fully sunset):
-
-    The Wave 1 (plan 09-01a/b) port introduced a temporary
-    ``_torch_view(arr)`` bridge that wrapped accessor returns in
-    ``torch.from_numpy(...)`` so un-ported Wave 2/3 consumers could
-    keep working. Each surviving consumer carried a ``# WAVE-1-SHIM:
-    remove in Wave <N>`` marker naming the plan that owned its
-    removal.
-
-    Removal log:
-      * Wave 2a (plan 09-02a): l0_f16 / l1_f16 / l2_f16 shims removed
-        (ops/*.py ported).
-      * Wave 5 (plan 09-02b): l0_byte + ddr.read shims removed
-        (dma_engine.py ported).
-      * Wave 6 (plan 09-03-finalize) — THIS PLAN — l1_byte + l2_byte
-        shims removed (tloop_buffer.py ported); ``_torch_view`` helper
-        + the local torch-API import deleted entirely. No torch
-        references remain in this module.
-
-    All accessors now return bare xp.ndarray. The strangler-fig pattern
-    is complete; the file is torch-free.
+All accessors return bare ``xp.ndarray``.
 """
 
 
@@ -106,10 +86,9 @@ class DDR_MEMORY(MEMORY):
     Diverges from C++ single-shot 4 GiB alloc as a CI ergonomic (see
     03-RESEARCH 'ensure_ddr semantics divergence').
 
-    Device contract (D-10 post-Phase-9 Wave 1a):
+    Device contract (D-10):
       - DDR lives on the same xp backend as scratchpads (numpy = host RAM,
-        cupy = GPU VRAM). The legacy explicit-CPU placement constant was
-        removed in Wave 1a; placement now follows xp.
+        cupy = GPU VRAM). Placement follows xp.
       - File I/O (`ddr_load_from_hex` / `ddr_save_to_hex`) bridges through
         ``to_host()`` once, at the formatting edge — keeps H↔D traffic at
         the file boundary, not scattered across every byte access.
@@ -178,9 +157,6 @@ class DDR_MEMORY(MEMORY):
     def read(self, addr: int, n: int) -> xp.ndarray:
         if self._bytes is None:
             raise RuntimeError("DDR not allocated — call ensure() first")
-        # Wave 5 (plan 09-02b) removed the WAVE-1-SHIM at this accessor.
-        # dma_engine.py was the only torch consumer of DDR_MEMORY.read; with
-        # dma_engine ported, the accessor returns bare xp.ndarray.
         return self._bytes[addr : addr + n]
 
     def write(self, addr: int, data) -> None:
@@ -269,31 +245,19 @@ class GtxMemory(MEMORY):
     # ----- Raw byte views (D-10 low-level, kept for in-place strided ops) ---
 
     def l0_byte(self, nest: int, spu: int) -> xp.ndarray:
-        # Wave 5 (plan 09-02b) removed the WAVE-1-SHIM at this accessor.
-        # Wave 2a ported ops/{act,mm,spr,vec}.py to bypass via raw
-        # `npu.mem.l0[nest, spu]`; dma_engine.py:155/179 (Wave 5) likewise
-        # uses raw `mem.l0[nest, spu]`. No torch consumers remain.
         return self._l0_views[nest, spu]
 
     def l1_byte(self, nest: int, spu: int) -> xp.ndarray:
-        # Wave 6 (plan 09-03-finalize) removed the WAVE-1-SHIM at this accessor.
-        # tloop_buffer.py was the last torch consumer of l1_byte (line 483);
-        # with tloop_buffer ported the accessor returns bare xp.ndarray.
         return self._l1_views[nest, spu]
 
     def l2_byte(self, nest: int) -> xp.ndarray:
-        # Wave 6 (plan 09-03-finalize) removed the WAVE-1-SHIM at this accessor.
-        # tloop_buffer.py was the only torch consumer (lines 459/467/477/485);
-        # with tloop_buffer ported the accessor returns bare xp.ndarray.
         return self._l2_views[nest]
 
     # ----- Halfword fp16 views (D-10 named, D-12 view guarantee) -----
     #
-    # Wave 2a (plan 09-02a-ops) removed the WAVE-1-SHIM at these accessors.
-    # All ops/* consumers (act.py L312/433, vec.py L124) now bypass these
-    # accessors entirely and read raw xp byte storage via
-    # `npu.mem.l[012][nest, spu].view(xp.float16)`. The accessors stay as
-    # pure xp.ndarray returns for future external consumers.
+    # Hot-path consumers read raw byte storage via
+    # `npu.mem.l[012][nest, spu].view(xp.float16)` directly; the named
+    # accessors below are kept for external consumers.
 
     def l0_f16(self, nest: int, spu: int) -> "xp.ndarray":
         return self._l0_f16_views[nest, spu]
