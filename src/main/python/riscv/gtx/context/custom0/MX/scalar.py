@@ -98,13 +98,41 @@ def _min_vs(npu, proc, insn, xs1, xs2):
 
 @inst_register.custom0(kind='custom0',
                         funct7=0b0010000,
-                        funct3=0b000,
-                        
-# add.is	4'b0010	3'b000	gpr	gpr	3'b100	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 add (A+s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+                        funct3=0b100,
+                        mnemonic='add.is')
+def _add_is(npu, proc, insn, xs1, xs2):
+    # add.is	4'b0010	3'b000	gpr	gpr	3'b100	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 add (A+s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    pass                    
 
-# sub.is	4'b0010	3'b000	gpr	gpr	3'b101	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 sub (A-s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-# mul.is	4'b0010	3'b000	gpr	gpr	3'b110	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 mult (A*s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-# div.is	4'b0010	3'b000	gpr	gpr	3'b111	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 div (A/s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+@inst_register.custom0(kind='custom0',
+                        funct7=0b0010000,
+                        funct3=0b101,
+                        mnemonic='sub.is')
+def _sub_is(npu, proc, insn, xs1, xs2):
+    # sub.is	4'b0010	3'b000	gpr	gpr	3'b101	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 sub (A-s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    pass
+
+@inst_register.custom0(kind='custom0',
+                        funct7=0b0010000,
+                        funct3=0b110,
+                        mnemonic='mul.is')
+def _mul_is(npu, proc, insn, xs1, xs2):
+    # mul.is	4'b0010	3'b000	gpr	gpr	3'b110	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 mult (A*s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    pass
+
+@inst_register.custom0(kind='custom0',
+                        funct7=0b0010000,
+                        funct3=0b111,
+                        mnemonic='div.is')
+def _div_is(npu, proc, insn, xs1, xs2):
+    # div.is	4'b0010	3'b000	gpr	gpr	3'b111	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	scalar_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 div (A/s) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    pass
+
+@inst_register.custom0(kind='custom0',
+                        funct7=0b0010001,
+                        funct3=0b100,
+                        mnemonic='fmadd.iss')
+def _fmadd_iss(npu, proc, insn, xs1, xs2):
 # fmadd.iss	4'b0010	3'b001	gpr	gpr	3'b100	rsvd	gtx op	yes	yes	spu	3	N/A	src_svr_addr_A[4:0]	scalar_value0[15:0], scalar_value1[31:16]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 fmadd (A*s0+s1) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
 # max.is	4'b0010	3'b011	gpr	gpr	3'b100	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	previous_max_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	max_value[15:0]	fp16 max(A) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
 # min.is	4'b0010	3'b011	gpr	gpr	3'b101	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	previous_min_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	min_value[15:0]	fp16 min(A) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
