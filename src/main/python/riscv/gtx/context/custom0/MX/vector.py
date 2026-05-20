@@ -492,6 +492,12 @@ def vec_op(npu, proc, inst) -> int:
     if funct7 in (0x1C, 0x1D, 0x1E):
         view = _l1_view_addr(npu, nest, spu, addr_a, vec_size)
         result = _apply_unary(funct7, funct3 & 3, view)
+        import os as _os, sys as _sys
+        if _os.environ.get("GTX_DEBUG_UNARY"):
+            print(f"[UNARY] n{nest}s{spu} f7=0x{funct7:02x} f3={funct3} "
+                  f"vs={vec_size} addr_a=0x{addr_a:x} addr_r=0x{addr_r:x} "
+                  f"in0={float(view.reshape(-1)[0]):.3f} out0={float(result.reshape(-1)[0]):.3f}",
+                  file=_sys.stderr, flush=True)
         _l1_view_addr(npu, nest, spu, addr_r, vec_size).copy_(result)
         return 0
 
