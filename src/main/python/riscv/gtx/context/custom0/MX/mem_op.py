@@ -1,16 +1,14 @@
-"""
-tpose	4'b0111	3'b000	gpr	gpr	3'b000	rsvd	gtx op	yes	yes	smu	2	N/A	src_addr[36:0], rw_dir[49:48], dtype[56]	dim0[1:0], dim1[5:4], dim2[9:8], dim0_size[31:16], dim1_size[47:32], dim2_size[63:48]	dst_addr[36:0]	N/A	N/A	N/A	transpose (maximum 3D)
-fill	4'b0111	3'b001	gpr	gpr	3'b000	rsvd	gtx op	yes	yes	smu	2	N/A	dst_addr[36:0], dir[48]	write_stride[31:0], length[47:32], height[63:48]	fill_pattern[63:0]	N/A	N/A	N/A	fill with 64-bit pattern
-"""
-from ....config_params import DDR_BASE, NEST_NUM, SPU_NUM
-from ....memory import GtxMemory
-import torch
-from ...inst_handler import inst_register
-from ....csr import GSPR, LSPR
+from __future__ import annotations
 
-# Memory Operation
-F7_TPOSE:int = 0b0111000       # Transpose, tpose
-F7_FILL:int = 0b0111001        # Memory fill, fill
+import torch
+
+from ...inst_handler import inst_register
+from ....config_params import DDR_BASE, NEST_NUM, SPU_NUM
+from ....csr import GSPR, LSPR
+from ....memory import GtxMemory
+from ..DL.dma import _select_nest, _select_spu
+from ..DL.dma_imp import ensure_ddr
+
 # ============================================================================
 # transpose -- direct port of gtx_npu_dma.cc:143-167
 # ============================================================================
@@ -94,19 +92,14 @@ def transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
     mem.ddr.write(dst_off, permuted.view(torch.uint8).reshape(-1))
 
 # ============================================================================
-# tpose / fill (funct7=0x38 / 0x39, mask_funct3=False)
+# tpose / fill (funct7=0x38 / 0x39)
 # ============================================================================
-@inst_register.custom0(kind='custom0', funct7= F7_TPOSE, mnemonic='tpose')
-def _tpose(npu, proc, insn, xs1, xs2):
-    """tpose (funct7=0x38): matrix transpose in L1 (FP16, 2 bytes per elem).
-
-    Source matrix base: LSPR['SPM_ADDRA'].address (0x900) -- gtx_params.h:64
-    Result matrix base: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67
-    AUTHORITATIVE values; no magic numbers in handler body.
-    """
+@inst_register.custom0(name='tpose', funct7=0b00111000, funct3=0)
+def _tpose(npu, proc, inst, cxt) -> int:
+    # tpose	4'b0111	3'b000	gpr	gpr	3'b000	rsvd	gtx op	yes	yes	smu	2	N/A	src_addr[36:0], rw_dir[49:48], dtype[56]	dim0[1:0], dim1[5:4], dim2[9:8], dim0_size[31:16], dim1_size[47:32], dim2_size[63:48]	dst_addr[36:0]	N/A	N/A	N/A	transpose (maximum 3D)
     state = proc.state
-    rs1 = state.XPR[insn.rs1]
-    rs2 = state.XPR[insn.rs2]
+    rs1 = state.XPR[inst.rs1]
+    rs2 = state.XPR[inst.rs2]
     rows = rs1 & 0xFFFF
     cols = rs2 & 0xFFFF
     nest = _select_nest(npu)
@@ -119,21 +112,17 @@ def _tpose(npu, proc, insn, xs1, xs2):
 
 
 
-@inst_register.custom0(kind='custom0', funct7= F7_FILL, mnemonic='fill')
-def _fill(npu, proc, insn, xs1, xs2):
-    """fill (funct7=0x39): fill L1 region at addr_r with constant FP16 value.
-
-    Result address: LSPR['SPM_ADDRR'].address (0x903) -- gtx_params.h:67. AUTHORITATIVE
-    constant; no magic number in handler body (LSPR_SPM_ADDRB is NOT used here).
-    """
+@inst_register.custom0(name='fill', funct7=0b00111001, funct3=0)
+def _fill(npu, proc, inst, cxt) -> int:
+    # fill	4'b0111	3'b001	gpr	gpr	3'b000	rsvd	gtx op	yes	yes	smu	2	N/A	dst_addr[36:0], dir[48]	write_stride[31:0], length[47:32], height[63:48]	fill_pattern[63:0]	N/A	N/A	N/A	fill with 64-bit pattern
     state = proc.state
-    rs1 = state.XPR[insn.rs1]
+    rs1 = state.XPR[inst.rs1]
     length = rs1 & 0xFFFF
     fill_val = (rs1 >> 16) & 0xFFFF
     nest_id = _select_nest(npu)
     spu_id = _select_spu(npu)
     addr_r = npu.lspr[nest_id][spu_id].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
-    
+
     """Fill L1 region at ``addr_r`` with constant FP16 value (``length``
     elements × 2 bytes each).
 

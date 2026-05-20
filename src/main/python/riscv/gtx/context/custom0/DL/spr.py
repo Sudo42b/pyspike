@@ -12,13 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...inst_handler import inst_register
-from ..encoding import (
-    F7_CPSVR,
-    F7_MVSVR,
-    F7_OPSET,
-    F7_RDSPR_ISS,
-    F7_WRSPR_ISS,
-)
+
 from ....config_params import NEST_NUM, SPU_NUM
 from ... import _resolve_nest_spu
 from ....csr import (GSPR_BASE, GSPR_END, NSPR_BASE, NSPR_END,
@@ -37,7 +31,6 @@ def _in_range(addr: int, base: int, end: int) -> bool:
 
 # ─── SPR read/write helpers (context-routed) ──────────────────────────────
 def rd_spr(npu: "GtxNpu", addr: int) -> int:
-    """Read SPR. Port of gtx_npu_t::rd_spr (gtx_npu_spr.cc:83-107)."""
     addr &= 0xFFFF
     if _in_range(addr, LSPR_BASE, LSPR_END):
         if (npu.warp.is_tloop and npu.warp.current_nest < NEST_NUM
@@ -80,9 +73,10 @@ def wr_spr(npu: "GtxNpu", addr: int, value: int) -> None:
 
 
 # ─── ISS-full SPR handlers ────────────────────────────────────────────────
-@inst_register.custom0(name='rdspr', funct7=F7_RDSPR_ISS)
+@inst_register.custom0(funct7=0b1001000, funct3=0b000, name='rdspr')
 def rdspr(npu: "GtxNpu", proc, inst, cxt) -> int:
-    """RDSPR (funct7=0x48): addr from XPR[rs1] → rd_spr(addr) → XPR[rd]."""
+    # rs1    """nest_id[29:24],spu_id[21:16],spr_addr[11:0]"""
+    # rsult(gpr) spr_data[63:0]
     addr = proc.state.XPR[inst.rs1]
     val = rd_spr(npu, addr & 0xFFFF)
     if inst.rd != 0:
@@ -90,7 +84,7 @@ def rdspr(npu: "GtxNpu", proc, inst, cxt) -> int:
     return val
 
 
-@inst_register.custom0(name='wrspr', funct7=F7_WRSPR_ISS)
+@inst_register.custom0(funct7=0b1001001, funct3=0b000, name='wrspr')
 def wrspr(npu: "GtxNpu", proc, inst, cxt) -> int:
     """WRSPR (funct7=0x49): addr from XPR[rs1], value from XPR[rs2]."""
     addr = proc.state.XPR[inst.rs1]
@@ -99,12 +93,15 @@ def wrspr(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom0(name='opset', funct7=F7_OPSET)
+@inst_register.custom0(funct7=0b1001010, funct3=0b000, name='opset')
 def opset(npu: "GtxNpu", proc, inst, cxt) -> int:
     """OPSET (funct7=0x4A): stage operand for the next instruction.
 
     rs1 LSB selects the slot: 0 → GSPR_OPERAND3, 1 → GSPR_OPERAND5.
     Verified against gtx_npu_custom0.cc:115-131.
+    
+    set operand3(target==0) or operrand_sel(target==1)
+    
     """
     slot = proc.state.XPR[inst.rs1] & 1
     val = proc.state.XPR[inst.rs2]
@@ -112,7 +109,7 @@ def opset(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom0(name='cpsvr', funct7=F7_CPSVR)
+@inst_register.custom0(funct7=0b1001011, funct3=0b000, name='cpsvr')
 def cpsvr(npu: "GtxNpu", proc, inst, cxt) -> int:
     """CPSVR (funct7=0x4B): replicate an L0 SVR byte pattern across 32 B.
 
@@ -138,7 +135,7 @@ def cpsvr(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom0(name='mvsvr', funct7=F7_MVSVR)
+@inst_register.custom0(funct7=0b1001100, funct3=0b000, name='mvsvr')
 def mvsvr(npu: "GtxNpu", proc, inst, cxt) -> int:
     """MVSVR (funct7=0x4C): move a 32 B L0 SVR register (copy + clear source).
 

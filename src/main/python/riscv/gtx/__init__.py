@@ -15,6 +15,7 @@ if sys.byteorder != "little":
 from . import config_params
 from . import memory
 from . import npu
+from . import devices  # noqa: F401  — registers the sifive_exit MMIO device
 from .npu import GtxNpu
 
-__all__ = ["config_params", "memory", "npu", "GtxNpu"]
+__all__ = ["config_params", "memory", "npu", "devices", "GtxNpu"]

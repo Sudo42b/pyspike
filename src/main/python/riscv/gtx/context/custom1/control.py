@@ -27,17 +27,6 @@ from ...config_params import NEST_NUM, SPU_NUM
 if TYPE_CHECKING:
     from ...npu import GtxNpu
 
-# custom1 warp funct3 (reconstructed from RoCC {xd,xs1,xs2} bits)
-WARP_F3_START_T: int = 0b000
-WARP_F3_END_T: int = 0b001
-WARP_F3_START_S: int = 0b010
-WARP_F3_END_S: int = 0b011
-WARP_F3_SPLIT: int = 0b100
-WARP_F3_JOIN: int = 0b101
-WARP_F3_START_P: int = 0b110
-WARP_F3_END_P: int = 0b111
-
-
 def _extract_id(rs1: int, rs2: int) -> int:
     """Dual-mode addressing — rs2 marker bit (0x400) selects rs2 low6 vs rs1 low32.
 
@@ -48,7 +37,7 @@ def _extract_id(rs1: int, rs2: int) -> int:
     return rs1 & 0xFFFFFFFF
 
 
-@inst_register.custom1(name='start.p', funct3=WARP_F3_START_P)
+@inst_register.custom1(name='start.p', funct3=0b110)
 def startp(npu: "GtxNpu", proc, inst, cxt) -> int:
     """C1 → C4. Select the active NEST."""
     rs1 = proc.state.XPR[inst.rs1]
@@ -60,7 +49,7 @@ def startp(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom1(name='end.p', funct3=WARP_F3_END_P)
+@inst_register.custom1(name='end.p', funct3=0b111)
 def endp(npu: "GtxNpu", proc, inst, cxt) -> int:
     """C4 → C1. Simple (non-WSPLIT) firmware flushes deferred stores here."""
     npu.CONTEXT = CXT.C1
@@ -69,7 +58,7 @@ def endp(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom1(name='start.s', funct3=WARP_F3_START_S)
+@inst_register.custom1(name='start.s', funct3=0b010)
 def starts(npu: "GtxNpu", proc, inst, cxt) -> int:
     """C4 → C2. Select the active GDMAC (clamped to NEST count, vendor parity)."""
     rs1 = proc.state.XPR[inst.rs1]
@@ -81,14 +70,14 @@ def starts(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom1(name='end.s', funct3=WARP_F3_END_S)
+@inst_register.custom1(name='end.s', funct3=0b011)
 def ends(npu: "GtxNpu", proc, inst, cxt) -> int:
     """C2 → C4."""
     npu.CONTEXT = CXT.C4
     return 0
 
 
-@inst_register.custom1(name='start.t', funct3=WARP_F3_START_T)
+@inst_register.custom1(name='start.t', funct3=0b000)
 def startt(npu: "GtxNpu", proc, inst, cxt) -> int:
     """C4 → C3. Select the active SPU."""
     rs1 = proc.state.XPR[inst.rs1]
@@ -100,14 +89,14 @@ def startt(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom1(name='end.t', funct3=WARP_F3_END_T)
+@inst_register.custom1(name='end.t', funct3=0b001)
 def endt(npu: "GtxNpu", proc, inst, cxt) -> int:
     """C3 → C4."""
     npu.CONTEXT = CXT.C4
     return 0
 
 
-@inst_register.custom1(name='split', funct3=WARP_F3_SPLIT)
+@inst_register.custom1(name='split', funct3=0b100)
 def split(npu: "GtxNpu", proc, inst, cxt) -> int:
     """WSPLIT — set the process-lifetime sentinel that suppresses end.p flush
     (plan-style firmware flushes mid-execution via credit.st.chk instead)."""
@@ -115,7 +104,7 @@ def split(npu: "GtxNpu", proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom1(name='join', funct3=WARP_F3_JOIN)
+@inst_register.custom1(name='join', funct3=0b101)
 def join(npu: "GtxNpu", proc, inst, cxt) -> int:
     """WJOIN — flush deferred stores; no exit (multi-tile firmware joins per
     tile and exits naturally; DDR dump runs via the atexit hook)."""

@@ -1,30 +1,27 @@
-"""
-esum	4'b0101	3'b111	gpr	gpr	3'b001	rsvd	gtx op	yes	yes	spu	3	spm_addr	vector_size[23:0]	max_value[15:0], accumulated_data[31:16]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	max_value[15:0], esum_value[31:16]	fp16 softmax(step2) - exponential sum	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-softmax	4'b0101	3'b111	gpr	gpr	3'b010	rsvd	gtx op	yes	yes	spu	3	spm_addr	vector_size[23:0]	max_value[15:0], esum_value[31:16]	N/A	r2_sel[8:0]	N/A	N/A	fp16 softmax(step3) - softmax	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-esum.i	4'b0101	3'b111	gpr	gpr	3'b101	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	max_value[15:0], accumulated_data[31:16]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	max_value[15:0], esum_value[31:16]	fp16 softmax(step2) - exponential sum imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-softmax.i	4'b0101	3'b111	gpr	gpr	3'b110	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	max_value[15:0], esum_value[31:16]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 softmax(step3) - softmax imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-"""
-
-SOFTMAX_IMM:int = 0b1011101 # 0x5D — L0 ESUM/SOFTMAX
 import torch
-F7_ACT_SOFTMAX: int = 0x2F      # esum funct3=1, softmax funct3=2; _imm at funct3=5/6
+from torch import Tensor
 
-# Softmax
-F7_SOFTMAX:int = 0b0101111     # Softmax/ESUM esum, softmax, esum.i, softmax.i
-IMM_ACT_ESUM    = 4
-IMM_ACT_SOFTMAX = 5
+from ...inst_handler import inst_register
+from ....config_params import L0_SIZE_BYTES
+from ....csr import GSPR
+from ... import _resolve_nest_spu
+from . import _fp16_low16, _fp16_high16, _fp16_raw_bits, _l0_block_view
 
-def softmax_imm(npu, proc, insn, *, op_id: int) -> int:
+# activation op-id enum (must match act.py's ACT_* values).
+ACT_SOFTMAX, ACT_ESUM = 2, 6
+
+
+def softmax_imm(npu, proc, inst, *, op_id: int) -> int:
     """L0 immediate path for ESUM / SOFTMAX. ``gtx_npu_act.cc:436-487``."""
     nest, spu = _resolve_nest_spu(npu)
 
-    in_reg = int(proc.state.XPR[insn.rs1]) & 0x1F
-    op3_raw = int(npu.gspr.get(GSPR['GSPR_OPERAND3'].address, 0xFFFFFFFF))
-    out_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else (insn.rd & 0x1F)
+    in_reg = int(proc.state.XPR[inst.rs1]) & 0x1F
+    op3_raw = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0xFFFFFFFF))
+    out_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else (inst.rd & 0x1F)
 
     view_in = _l0_block_view(npu, nest, spu, in_reg)
 
-    op2 = int(npu.gspr.get(GSPR['GSPR_OPERAND2'].address, 0))
+    op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
     max_val = _fp16_low16(op2)
     accum_val = _fp16_high16(op2)
 
@@ -54,38 +51,6 @@ def softmax_imm(npu, proc, insn, *, op_id: int) -> int:
     return 0
 
 
-
-
-
-@handler(kind='custom0', funct7=F7_ACT_SOFTMAX, funct3=5,
-         mnemonic='esum_i', mask_funct3=True)
-def _esum_i(npu, proc, insn, xs1, xs2):
-    """L0 immediate ESUM (gtx_npu_act.cc:436-487 ESUM branch)."""
-    return softmax_imm(npu, proc, insn, op_id=ACT_ESUM)
-
-
-@handler(kind='custom0', funct7=F7_ACT_SOFTMAX, funct3=6,
-         mnemonic='softmax_i', mask_funct3=True)
-def _softmax_i(npu, proc, insn, xs1, xs2):
-    """L0 immediate SOFTMAX (pre-computed esum from GSPR_OPERAND2 high-16)."""
-    return softmax_imm(npu, proc, insn, op_id=ACT_SOFTMAX)
-
-
-@handler(kind='custom0', funct7=F7_ACT_SOFTMAX, funct3=1,
-         mnemonic='esum', mask_funct3=True)
-def _esum(npu, proc, insn, xs1, xs2):
-    """ESUM: funct7=0x2F funct3=1, FORWARD — writes scalar to L0 (Pitfall 8)."""
-    return act(npu, proc, insn,
-                         op_id=ACT_ESUM, is_reversed=False)
-
-
-@handler(kind='custom0', funct7=F7_ACT_SOFTMAX, funct3=2,
-         mnemonic='softmax', mask_funct3=True)
-def _softmax(npu, proc, insn, xs1, xs2):
-    """SOFTMAX: funct7=0x2F funct3=2, FORWARD."""
-    return act(npu, proc, insn,
-                         op_id=ACT_SOFTMAX, is_reversed=False)
-
 def softmax(arr_f16: Tensor) -> Tensor:
     return torch.nn.functional.softmax(arr_f16.to(torch.float32), dim=0).to(torch.float16)
 
@@ -95,4 +60,32 @@ def esum(arr_f16: Tensor, max_val: float, init_accum: float) -> Tensor:
     max_val_f32 = torch.as_tensor(max_val, dtype=torch.float32)
     init_accum_f32 = torch.as_tensor(init_accum, dtype=torch.float32)
     return (init_accum_f32 + torch.sum(torch.exp(arr_f32 - max_val_f32))).to(torch.float16)
+
+@inst_register.custom0(name='esum', funct7=0b0101111, funct3=0b001)
+def _esum(npu, proc, inst, cxt) -> int:
+    # esum	4'b0101	3'b111	gpr	gpr	3'b001	rsvd	gtx op	yes	yes	spu	3	spm_addr	vector_size[23:0]	max_value[15:0], accumulated_data[31:16]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	max_value[15:0], esum_value[31:16]	fp16 softmax(step2) - exponential sum	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    """ESUM: funct7=0x2F funct3=1, FORWARD — writes scalar to L0 (Pitfall 8)."""
+    from .act import act
+    return act(npu, proc, inst, op_id=ACT_ESUM, is_reversed=False)
+
+@inst_register.custom0(name='softmax', funct7=0b0101111, funct3=0b010)
+def _softmax(npu, proc, inst, cxt) -> int:
+    # softmax	4'b0101	3'b111	gpr	gpr	3'b010	rsvd	gtx op	yes	yes	spu	3	spm_addr	vector_size[23:0]	max_value[15:0], esum_value[31:16]	N/A	r2_sel[8:0]	N/A	N/A	fp16 softmax(step3) - softmax	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    from .act import act
+    return act(npu, proc, inst,
+                         op_id=ACT_SOFTMAX, is_reversed=False)
+
+@inst_register.custom0(name='esum.i', funct7=0b0101111, funct3=0b101)
+def _esum_i(npu, proc, inst, cxt) -> int:
+    # esum.i	4'b0101	3'b111	gpr	gpr	3'b101	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	max_value[15:0], accumulated_data[31:16]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	max_value[15:0], esum_value[31:16]	fp16 softmax(step2) - exponential sum imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    return softmax_imm(npu, proc, inst, op_id=ACT_ESUM)
+
+
+@inst_register.custom0(name='softmax.i', funct7=0b0101111, funct3=0b110)
+def _softmax_i(npu, proc, inst, cxt) -> int:
+    # softmax.i	4'b0101	3'b111	gpr	gpr	3'b110	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	max_value[15:0], esum_value[31:16]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 softmax(step3) - softmax imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    return softmax_imm(npu, proc, inst, op_id=ACT_SOFTMAX)
+
+
+
 

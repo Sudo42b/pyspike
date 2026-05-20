@@ -12,10 +12,7 @@ from typing import Any, TYPE_CHECKING
 from ...inst_handler import inst_register
 from . import dma_imp
 from .dma_imp import ensure_ddr
-from ..encoding import (
-    F7_DMA_LD_ST, F7_DMA_3D,
-    F7_MCAST_S2L, F7_MCAST_G2S,
-)
+
 from ....csr import GSPR
 from ....config_params import (
     NEST_NUM, SPU_NUM, DDR_BASE,
@@ -52,113 +49,6 @@ def _xflags(inst) -> tuple:
 
 def _operand3(npu) -> int:
     return npu.gspr.get(_OPERAND3_ADDR, 0)
-
-
-# ============================================================================
-# firmware_dma load/store/copy (funct7=0x40, funct3=0/1/2)
-# ============================================================================
-@inst_register.custom0(name='load', funct7=F7_DMA_LD_ST, funct3=0)
-def _dma_load(npu, proc, inst, cxt) -> int:
-    """firmware_dma LOAD. C2 (S-loop) DDR→L2; C3 (T-loop) L2→L1."""
-    rs1 = proc.state.XPR[inst.rs1]
-    rs2 = proc.state.XPR[inst.rs2]
-    xd, xs1, xs2 = _xflags(inst)
-    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
-    nest = _select_nest(npu)
-    if npu.warp.is_sloop:
-        return dma_imp.firmware_dma_sloop_load(
-            npu.mem, nest=nest, addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-            length=args['length'], height=args['height'],
-            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-    if npu.warp.is_tloop:
-        return dma_imp.firmware_dma_tloop_load_store(
-            npu.mem, nest=nest, spu=_select_spu(npu), is_store=False,
-            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-            length=args['length'], height=args['height'],
-            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-    return 0
-
-
-@inst_register.custom0(name='store', funct7=F7_DMA_LD_ST, funct3=1)
-def _dma_store(npu, proc, inst, cxt) -> int:
-    """firmware_dma STORE. S-loop store is deferred (pushes onto npu queue)."""
-    rs1 = proc.state.XPR[inst.rs1]
-    rs2 = proc.state.XPR[inst.rs2]
-    xd, xs1, xs2 = _xflags(inst)
-    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
-    nest = _select_nest(npu)
-    if npu.warp.is_sloop:
-        return dma_imp.firmware_dma_sloop_store(
-            npu, nest=nest, addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-            length=args['length'], height=args['height'],
-            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-    if npu.warp.is_tloop:
-        return dma_imp.firmware_dma_tloop_load_store(
-            npu.mem, nest=nest, spu=_select_spu(npu), is_store=True,
-            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
-            length=args['length'], height=args['height'],
-            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
-    return 0
-
-
-@inst_register.custom0(name='copy', funct7=F7_DMA_LD_ST, funct3=2)
-def _dma_copy(npu, proc, inst, cxt) -> int:
-    """firmware_dma COPY (T-loop L1→L1). addr_hi=dst, addr_lo=src."""
-    rs1 = proc.state.XPR[inst.rs1]
-    rs2 = proc.state.XPR[inst.rs2]
-    xd, xs1, xs2 = _xflags(inst)
-    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
-    nest = _select_nest(npu)
-    if npu.warp.is_tloop:
-        return dma_imp.firmware_dma_tloop_copy(
-            npu.mem, nest=nest, spu=_select_spu(npu),
-            src_addr=args['addr_lo'], dst_addr=args['addr_hi'],
-            length=args['length'], height=args['height'])
-    return 0
-
-
-# ============================================================================
-# SVR L1↔L0 transfers (funct7=0x41, funct3=0/1)
-# ============================================================================
-def exec_load_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
-                  l1_addr: int, l0_reg: int) -> None:
-    """L1 → L0 (32 B = one SVR register)."""
-    l1_buf = mem.l1_byte(nest_id, spu_id)
-    l0_buf = mem.l0_byte(nest_id, spu_id)
-    l1_off = l1_addr % L1_SIZE_BYTES
-    l0_off = (l0_reg & 0x1F) * 32
-    assert l1_off + 32 <= L1_SIZE_BYTES, "L1 SVR window wraps — firmware bug"
-    l0_buf[l0_off:l0_off + 32] = l1_buf[l1_off:l1_off + 32]
-
-
-def exec_store_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
-                   l1_addr: int, l0_reg: int) -> None:
-    """L0 → L1 (32 B = one SVR register)."""
-    l1_buf = mem.l1_byte(nest_id, spu_id)
-    l0_buf = mem.l0_byte(nest_id, spu_id)
-    l1_off = l1_addr % L1_SIZE_BYTES
-    l0_off = (l0_reg & 0x1F) * 32
-    assert l1_off + 32 <= L1_SIZE_BYTES, "L1 SVR window wraps — firmware bug"
-    l1_buf[l1_off:l1_off + 32] = l0_buf[l0_off:l0_off + 32]
-
-
-@inst_register.custom0(name='load.svr', funct7=F7_DMA_3D, funct3=0)
-def _load_svr(npu, proc, inst, cxt) -> int:
-    l1_addr = proc.state.XPR[inst.rs1] & 0x7FFFFFF
-    l0_reg = proc.state.XPR[inst.rs2] & 0x1F
-    exec_load_svr(npu.mem, nest_id=_select_nest(npu), spu_id=_select_spu(npu),
-                  l1_addr=l1_addr, l0_reg=l0_reg)
-    return 0
-
-
-@inst_register.custom0(name='store.svr', funct7=F7_DMA_3D, funct3=1)
-def _store_svr(npu, proc, inst, cxt) -> int:
-    l1_addr = proc.state.XPR[inst.rs1] & 0x7FFFFFF
-    l0_reg = proc.state.XPR[inst.rs2] & 0x1F
-    exec_store_svr(npu.mem, nest_id=_select_nest(npu), spu_id=_select_spu(npu),
-                   l1_addr=l1_addr, l0_reg=l0_reg)
-    return 0
-
 
 # ============================================================================
 # Multicast + copy.mem (funct7=0x42 / 0x44) — bodies are vendor-parity ports.
@@ -306,8 +196,110 @@ def firmware_copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw
             l2[d_off:d_off + copy_len].copy_(tmp)
     return 0
 
+# ============================================================================
+# SVR L1↔L0 transfers (funct7=0x41, funct3=0/1)
+# ============================================================================
+def exec_load_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
+                  l1_addr: int, l0_reg: int) -> None:
+    """L1 → L0 (32 B = one SVR register)."""
+    l1_buf = mem.l1_byte(nest_id, spu_id)
+    l0_buf = mem.l0_byte(nest_id, spu_id)
+    l1_off = l1_addr % L1_SIZE_BYTES
+    l0_off = (l0_reg & 0x1F) * 32
+    assert l1_off + 32 <= L1_SIZE_BYTES, "L1 SVR window wraps — firmware bug"
+    l0_buf[l0_off:l0_off + 32] = l1_buf[l1_off:l1_off + 32]
 
-@inst_register.custom0(name='mcast.s2l', funct7=F7_MCAST_S2L, funct3=0)
+
+def exec_store_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
+                   l1_addr: int, l0_reg: int) -> None:
+    """L0 → L1 (32 B = one SVR register)."""
+    l1_buf = mem.l1_byte(nest_id, spu_id)
+    l0_buf = mem.l0_byte(nest_id, spu_id)
+    l1_off = l1_addr % L1_SIZE_BYTES
+    l0_off = (l0_reg & 0x1F) * 32
+    assert l1_off + 32 <= L1_SIZE_BYTES, "L1 SVR window wraps — firmware bug"
+    l1_buf[l1_off:l1_off + 32] = l0_buf[l0_off:l0_off + 32]
+
+@inst_register.custom0(name='load', funct7=0b1000000, funct3=0)
+def _load(npu, proc, inst, cxt) -> int:
+    """firmware_dma LOAD. C2 (S-loop) DDR→L2; C3 (T-loop) L2→L1."""
+    rs1 = proc.state.XPR[inst.rs1]
+    rs2 = proc.state.XPR[inst.rs2]
+    xd, xs1, xs2 = _xflags(inst)
+    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
+    nest = _select_nest(npu)
+    if npu.warp.is_sloop:
+        return dma_imp.firmware_dma_sloop_load(
+            npu.mem, nest=nest, addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    if npu.warp.is_tloop:
+        return dma_imp.firmware_dma_tloop_load_store(
+            npu.mem, nest=nest, spu=_select_spu(npu), is_store=False,
+            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    return 0
+
+
+@inst_register.custom0(name='store', funct7=0b1000000, funct3=1)
+def _store(npu, proc, inst, cxt) -> int:
+    """firmware_dma STORE. S-loop store is deferred (pushes onto npu queue)."""
+    rs1 = proc.state.XPR[inst.rs1]
+    rs2 = proc.state.XPR[inst.rs2]
+    xd, xs1, xs2 = _xflags(inst)
+    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
+    nest = _select_nest(npu)
+    if npu.warp.is_sloop:
+        return dma_imp.firmware_dma_sloop_store(
+            npu, nest=nest, addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    if npu.warp.is_tloop:
+        return dma_imp.firmware_dma_tloop_load_store(
+            npu.mem, nest=nest, spu=_select_spu(npu), is_store=True,
+            addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
+            length=args['length'], height=args['height'],
+            rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
+    return 0
+
+
+@inst_register.custom0(name='copy', funct7=0b1000000, funct3=2)
+def _copy(npu, proc, inst, cxt) -> int:
+    """firmware_dma COPY (T-loop L1→L1). addr_hi=dst, addr_lo=src."""
+    rs1 = proc.state.XPR[inst.rs1]
+    rs2 = proc.state.XPR[inst.rs2]
+    xd, xs1, xs2 = _xflags(inst)
+    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
+    nest = _select_nest(npu)
+    if npu.warp.is_tloop:
+        return dma_imp.firmware_dma_tloop_copy(
+            npu.mem, nest=nest, spu=_select_spu(npu),
+            src_addr=args['addr_lo'], dst_addr=args['addr_hi'],
+            length=args['length'], height=args['height'])
+    return 0
+
+
+@inst_register.custom0(name='load.svr', funct7=0b1000001, funct3=0)
+def _load_svr(npu, proc, inst, cxt) -> int:
+    l1_addr = proc.state.XPR[inst.rs1] & 0x7FFFFFF
+    l0_reg = proc.state.XPR[inst.rs2] & 0x1F
+    exec_load_svr(npu.mem, nest_id=_select_nest(npu), spu_id=_select_spu(npu),
+                  l1_addr=l1_addr, l0_reg=l0_reg)
+    return 0
+
+
+@inst_register.custom0(name='store.svr', funct7=0b1000001, funct3=1)
+def _store_svr(npu, proc, inst, cxt) -> int:
+    l1_addr = proc.state.XPR[inst.rs1] & 0x7FFFFFF
+    l0_reg = proc.state.XPR[inst.rs2] & 0x1F
+    exec_store_svr(npu.mem, nest_id=_select_nest(npu), spu_id=_select_spu(npu),
+                   l1_addr=l1_addr, l0_reg=l0_reg)
+    return 0
+
+
+
+@inst_register.custom0(name='mcast.s2l', funct7=0b1000010, funct3=0)
 def _mcast_s2l(npu, proc, inst, cxt) -> int:
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
@@ -319,7 +311,7 @@ def _mcast_s2l(npu, proc, inst, cxt) -> int:
         rd_stride=rs2 & 0xFFFFFFFF, target_spu_mask=rs3 & 0xFFFF)
 
 
-@inst_register.custom0(name='mcast.g2s', funct7=F7_MCAST_G2S, funct3=0)
+@inst_register.custom0(name='mcast.g2s', funct7=0b1000100, funct3=0)
 def _mcast_g2s(npu, proc, inst, cxt) -> int:
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
@@ -331,7 +323,7 @@ def _mcast_g2s(npu, proc, inst, cxt) -> int:
         rd_stride=rs2 & 0xFFFFFFFF, target_nest_mask=rs3 & 0xFFFF)
 
 
-@inst_register.custom0(name='mcast.s2s', funct7=F7_MCAST_G2S, funct3=2)
+@inst_register.custom0(name='mcast.s2s', funct7=0b1000100, funct3=2)
 def _mcast_s2s(npu, proc, inst, cxt) -> int:
     op1 = proc.state.XPR[inst.rs1]
     op2 = proc.state.XPR[inst.rs2]
@@ -344,7 +336,7 @@ def _mcast_s2s(npu, proc, inst, cxt) -> int:
         target_nest_mask=(op3 >> 32) & 0xFFFFFFFF)
 
 
-@inst_register.custom0(name='copy.mem', funct7=F7_MCAST_G2S, funct3=3)
+@inst_register.custom0(name='copy.mem', funct7=0b1000100, funct3=3)
 def _copy_mem(npu, proc, inst, cxt) -> int:
     op1 = proc.state.XPR[inst.rs1]
     op2 = proc.state.XPR[inst.rs2]

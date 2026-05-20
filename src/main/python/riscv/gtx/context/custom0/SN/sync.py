@@ -1,14 +1,32 @@
-"""
-bar	4'b1111	3'b000	rsvd	rsvd	3'b000	gpr	gtx op	yes	no	spu/nest/nsu	5	N/A	N/A	N/A	N/A	N/A	status[0]	N/A	wait unitl all SPU are idle, returns 1 if operation was successful
-wait	4'b1111	3'b001	gpr	gpr	3'b000	gpr	gtx op	yes	no	spu/nest/nsu	5	N/A	wait_clk_count[31:0], byte[63:32]	start_address[36:0]	N/A	N/A	status[0]	N/A	wait until clock counter expired, returns 1 if operation was successful
-intr	4'b1111	3'b011	rsvd	gpr	3'b000	rsvd	gtx op	yes	no	spu/nest/nsu	5	N/A	intr_src[63:0]	N/A	N/A	N/A	N/A	N/A	interrunpt
-flush	4'b1111	3'b100	rsvd	rsvd	3'b000	rsvd	gtx op	yes	no	nsu	1	N/A	N/A	N/A	N/A	N/A	N/A	N/A	instruction cache flush
-halt	4'b1111	3'b111	rsvd	rsvd	3'b000	rsvd	gtx op	yes	no	nsu	1	N/A	N/A	N/A	N/A	N/A	N/A	N/A	halt with no condition
+"""Sync / barrier ops (custom0) — NOP in the functional model.
 
+Port of gtx_npu_dispatch.cc:915-926: BAR/WAIT/INTR/FLUSH/HALT are sync/control
+ops with no architectural effect in the ISS (DMA is instantaneous, single
+hart, sequential execution). All emitted with funct3=0; all return 0.
 """
+from ...inst_handler import inst_register
 
-# 
-F7_WAIT:int = 0b1111001        # Wait
-F7_INTR:int = 0b1111011        # Interrupt
-F7_FLUSH:int = 0b1111100       # Flush
-F7_HALT:int = 0b1111111        # Halt
+
+@inst_register.custom0(name='bar', funct7=0b1111000, funct3=0)
+def bar(npu, proc, inst, cxt) -> int:
+    return 0
+
+
+@inst_register.custom0(name='wait', funct7=0b1111001, funct3=0)
+def wait(npu, proc, inst, cxt) -> int:
+    return 0
+
+
+@inst_register.custom0(name='intr', funct7=0b1111011, funct3=0)
+def intr(npu, proc, inst, cxt) -> int:
+    return 0
+
+
+@inst_register.custom0(name='flush', funct7=0b1111100, funct3=0)
+def flush(npu, proc, inst, cxt) -> int:
+    return 0
+
+
+@inst_register.custom0(name='halt', funct7=0b1111111, funct3=0)
+def halt(npu, proc, inst, cxt) -> int:
+    return 0

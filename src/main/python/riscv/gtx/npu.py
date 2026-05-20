@@ -24,8 +24,14 @@ from .context.disasm import Custom0_Insn, Custom1_Insn, inst_register
 # import through disasm. Only ported modules are listed; the rest land as
 # they are migrated to the new API.
 from .context.custom1 import control as _control      # noqa: F401,E402
-from .context.custom0.DL import spr as _spr, dma as _dma  # noqa: F401,E402
-from .context.custom0.MX import matmul as _matmul     # noqa: F401,E402
+from .context.custom0.DL import spr as _spr, dma as _dma, credit as _credit  # noqa: F401,E402
+from .context.custom0.MX import (                     # noqa: F401,E402
+    matmul as _matmul, vector as _vector, pooling as _pooling,
+    act as _act, softmax as _softmax, type_cvt as _type_cvt,
+    mem_op as _mem_op, conv as _conv,
+)
+from .context.custom0.MC import ucode as _ucode       # noqa: F401,E402
+from .context.custom0.SN import sync as _sync         # noqa: F401,E402
 
 @isa.register("gtx")
 class GtxNpu(isa.ROCC):
@@ -144,7 +150,7 @@ class GtxNpu(isa.ROCC):
         self.warp.reset()
 
     def custom0(self, proc, insn, xs1, xs2) -> int:
-        funct3 = (insn.xd << 2) | (xs1 << 1) | xs2
+        funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
         func = inst_register._c0_funcs.get((insn.funct, funct3))
         if func:
             nemonic = getattr(func, 'mnemonic', 'unknown')
@@ -153,7 +159,7 @@ class GtxNpu(isa.ROCC):
         return 0
 
     def custom1(self, proc, insn, xs1, xs2) -> int:
-        funct3 = (insn.xd << 2) | (xs1 << 1) | xs2
+        funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
         func = inst_register._c1_funcs.get((funct3))
         if func:
             nemonic = getattr(func, 'mnemonic', 'unknown')
@@ -166,11 +172,20 @@ class GtxNpu(isa.ROCC):
     # ------------------------------------------------------------------
     def flush_deferred_ddr_stores(self) -> None:
         """Drain the S-loop deferred L2→DDR store queue."""
+        _dbg = os.environ.get("GTX_DEBUG_FLUSH")
+        if _dbg:
+            print(f"[FLUSH] queue len={len(self.deferred_ddr_stores)}",
+                  file=sys.stderr, flush=True)
         if not self.deferred_ddr_stores:
             return
         from .config_params import L2_SIZE_BYTES
         for req in self.deferred_ddr_stores:
             l2_src = self.mem.l2_byte(req.nest).cpu()
+            if _dbg:
+                _samp = l2_src[req.l2_off:req.l2_off + 8].tolist()
+                print(f"[FLUSH] nest={req.nest} l2_off={req.l2_off:#x} "
+                      f"ddr_off={req.ddr_off:#x} len={req.length} h={req.height} "
+                      f"l2_sample={_samp}", file=sys.stderr, flush=True)
             max_off = req.ddr_off + (req.height - 1) * req.ddr_stride + req.length
             self.mem.ensure_ddr(max_off)
             cap = self.mem.ddr.capacity()

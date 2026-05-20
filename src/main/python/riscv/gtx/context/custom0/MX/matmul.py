@@ -46,19 +46,6 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
-# Encoding constants
-# =============================================================================
-F7_MM: int = 0x00      # MM family  (collides with gem5 WRSPR — Pitfall F)
-F7_MMC: int = 0x01     # MMC family (collides with gem5 RDSPR — Pitfall F)
-
-F3_MM_S: int = 0           # FP32 result → ADDRC
-F3_MM_O: int = 1           # sum(A) → L0 big-endian + mxe_accum
-F3_MM: int = 2             # basic GEMM, FP16 → ADDRR
-F3_MM_V: int = 3           # dot(A,B) → L0 little-endian + mxe_accum
-F3_MM_T: int = 7           # transposed C^T → ADDRR
-
-
-# =============================================================================
 # rs1 dim decode
 # =============================================================================
 def decode_mm_args(rs1: int) -> dict:
@@ -166,70 +153,70 @@ def _mm_reduce(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
 # =============================================================================
 # Handler entries — Pitfall F: rs1 index 0 ⇒ gem5 WRSPR/RDSPR, not MM ⇒ NOP.
 # =============================================================================
-@inst_register.custom0(name='mm.s', funct7=F7_MM, funct3=F3_MM_S)
+@inst_register.custom0(name='mm.s', funct7=0b0000000, funct3=0)
 def _mm_s(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_gemm(npu, proc, inst, cxt, accumulate=False, transposed=False, fp32_out=True)
 
 
-@inst_register.custom0(name='mm.o', funct7=F7_MM, funct3=F3_MM_O)
+@inst_register.custom0(name='mm.o', funct7=0b0000000, funct3=1)
 def _mm_o(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_reduce(npu, proc, inst, cxt, accumulate=False, is_dot=False)
 
 
-@inst_register.custom0(name='mm', funct7=F7_MM, funct3=F3_MM)
+@inst_register.custom0(name='mm', funct7=0b0000000, funct3=2)
 def _mm(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_gemm(npu, proc, inst, cxt, accumulate=False, transposed=False, fp32_out=False)
 
 
-@inst_register.custom0(name='mm.v', funct7=F7_MM, funct3=F3_MM_V)
+@inst_register.custom0(name='mm.v', funct7=0b0000000, funct3=3)
 def _mm_v(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_reduce(npu, proc, inst, cxt, accumulate=False, is_dot=True)
 
 
-@inst_register.custom0(name='mm.t', funct7=F7_MM, funct3=F3_MM_T)
+@inst_register.custom0(name='mm.t', funct7=0b0000000, funct3=7)
 def _mm_t(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_gemm(npu, proc, inst, cxt, accumulate=False, transposed=True, fp32_out=False)
 
 
-@inst_register.custom0(name='mmc.s', funct7=F7_MMC, funct3=F3_MM_S)
+@inst_register.custom0(name='mmc.s', funct7=0b0000001, funct3=0)
 def _mmc_s(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_gemm(npu, proc, inst, cxt, accumulate=True, transposed=False, fp32_out=True)
 
 
-@inst_register.custom0(name='mmc.o', funct7=F7_MMC, funct3=F3_MM_O)
+@inst_register.custom0(name='mmc.o', funct7=0b0000001, funct3=1)
 def _mmc_o(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_reduce(npu, proc, inst, cxt, accumulate=True, is_dot=False)
 
 
-@inst_register.custom0(name='mmc', funct7=F7_MMC, funct3=F3_MM)
+@inst_register.custom0(name='mmc', funct7=0b0000001, funct3=2)
 def _mmc(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_gemm(npu, proc, inst, cxt, accumulate=True, transposed=False, fp32_out=False)
 
 
-@inst_register.custom0(name='mmc.v', funct7=F7_MMC, funct3=F3_MM_V)
+@inst_register.custom0(name='mmc.v', funct7=0b0000001, funct3=3)
 def _mmc_v(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
     return _mm_reduce(npu, proc, inst, cxt, accumulate=True, is_dot=True)
 
 
-@inst_register.custom0(name='mmc.t', funct7=F7_MMC, funct3=F3_MM_T)
+@inst_register.custom0(name='mmc.t', funct7=0b0000001, funct3=7)
 def _mmc_t(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
     if inst.rs1 == 0:
         return 0
