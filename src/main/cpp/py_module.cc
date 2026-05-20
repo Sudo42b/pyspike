@@ -86,9 +86,17 @@ PYBIND11_MODULE(_riscv, m) {
              py::arg("write"))
         .def("read", &csr_t::read)
         .def_readonly("address", &csr_t::address)
-        // csr_t protected members
+        // csr_t protected members. pybind11 >=3 rejects binding a trampoline
+        // override of a protected base virtual via a member pointer
+        // ("inaccessible base class method"); wrap in a lambda there. 2.x keeps
+        // the direct pointer.
+#if PYBIND11_VERSION_HEX >= 0x030000
+        .def("unlogged_write", [](py_csr_t &self, reg_t val) { return self.unlogged_write(val); })
+        .def("written_value", [](py_csr_t &self) { return self.written_value(); })
+#else
         .def("unlogged_write", &py_csr_t::unlogged_write)
         .def("written_value", &py_csr_t::written_value)
+#endif
         .def_readonly("proc", &py_csr_t::proc,
                       py::return_value_policy::reference_internal)
         .def_readonly("state", &py_csr_t::state,

@@ -5,11 +5,6 @@ import warnings
 
 from ._utils import load_spike_library
 
-try:
-    from ._version import __version__
-except ImportError:
-    warnings.warn("Missing `riscv._version`, run `python -m setuptools_scm --force-write-version-files` to generate.")
-
 __all__ = ["ENV_PYSPIKE_LIBS", "ENV_PYSPIKE_EXTS"]
 
 ENV_PYSPIKE_LIBS = "PYSPIKE_LIBS"
