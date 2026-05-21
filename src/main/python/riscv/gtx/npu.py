@@ -24,11 +24,16 @@ from .context.disasm import Custom0_Insn, Custom1_Insn, inst_register
 # import through disasm. Only ported modules are listed; the rest land as
 # they are migrated to the new API.
 from .context.custom1 import control as _control      # noqa: F401,E402
+from .context.custom1 import tloop_buffer as _tloop_buffer  # noqa: E402
+from .context.custom1.tloop_buffer import (            # noqa: E402
+    BUFFERABLE_MNEMONICS as _BUFFERABLE,
+    TRANSPARENT_MNEMONICS as _TRANSPARENT,
+)
 from .context.custom0.DL import spr as _spr, dma as _dma, credit as _credit  # noqa: F401,E402
 from .context.custom0.MX import (                     # noqa: F401,E402
-    matmul as _matmul, vector as _vector, pooling as _pooling,
-    act as _act, softmax as _softmax, type_cvt as _type_cvt,
-    mem_op as _mem_op, conv as _conv,
+    matmul as _matmul, vector as _vector, scalar as _scalar,
+    pooling as _pooling, act as _act, softmax as _softmax,
+    type_cvt as _type_cvt, mem_op as _mem_op, conv as _conv,
 )
 from .context.custom0.MC import ucode as _ucode       # noqa: F401,E402
 from .context.custom0.SN import sync as _sync         # noqa: F401,E402
@@ -53,6 +58,10 @@ class GtxNpu(isa.ROCC):
         # T/S-loop instruction buffers (eager for now — buffering disabled).
         self._tloop_buf = None
         self._sloop_buf = None
+        # Hoisted out of the custom0/custom1 hot path — env is fixed per run.
+        self._dbg_dispatch = os.environ.get("GTX_DEBUG_DISPATCH")
+        # T-loop fusion kill-switch (GTX_NO_FUSION=1 → fully eager dispatch).
+        self._fusion_enabled = not os.environ.get("GTX_NO_FUSION")
 
         # Layered SPR storage — Tensor-backed via RegisterFile.
         #   gspr: single instance               (shape: [1024])
@@ -150,20 +159,49 @@ class GtxNpu(isa.ROCC):
         self.warp.reset()
 
     def custom0(self, proc, insn, xs1, xs2) -> int:
+        funct = insn.funct
         funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
-        func = inst_register._c0_funcs.get((insn.funct, funct3))
+        func = inst_register._c0_funcs.get((funct, funct3))
+        if self._dbg_dispatch:
+            key = (int(funct), int(funct3))
+            seen = self.__dict__.setdefault("_c0_seen", set())
+            if key not in seen:
+                seen.add(key)
+                tag = ("HIT " + getattr(func, "mnemonic", "?")) if func else "MISS"
+                print(f"[C0] f7=0x{key[0]:02x} f3={key[1]} {tag}",
+                      file=sys.stderr, flush=True)
         if func:
             nemonic = getattr(func, 'mnemonic', 'unknown')
-            c0_insn = Custom0_Insn(nemonic, insn)
+            # T-loop buffering: capture the (load, vec, store) inner cadence
+            # so end.t can flush it as fused bulk torch ops. opset/wrspr stay
+            # eager (TRANSPARENT) without draining; any other mnemonic is a
+            # hard boundary that flushes the pending batch first.
+            if self._tloop_buf is not None and self.warp.is_tloop:
+                if nemonic in _BUFFERABLE:
+                    _tloop_buffer.try_buffer(self, func, proc, insn, nemonic)
+                    return 0
+                if nemonic not in _TRANSPARENT:
+                    _tloop_buffer.flush(self)
+            c0_insn = Custom0_Insn(nemonic, insn, fn7=funct, fn3=funct3)
             return func(self, proc, c0_insn, self.CONTEXT)
         return 0
 
     def custom1(self, proc, insn, xs1, xs2) -> int:
+        # Any warp marker is a hard buffer boundary — drain the T-loop
+        # buffer (still in C3) before the marker mutates CONTEXT.
+        if self._tloop_buf:
+            _tloop_buffer.flush(self)
         funct3 = (insn.xd << 2) | (insn.xs1 << 1) | insn.xs2
         func = inst_register._c1_funcs.get((funct3))
+        if self._dbg_dispatch:
+            seen = self.__dict__.setdefault("_c1_seen", set())
+            if funct3 not in seen:
+                seen.add(funct3)
+                tag = ("HIT " + getattr(func, "mnemonic", "?")) if func else "MISS"
+                print(f"[C1] f3={funct3} {tag}", file=sys.stderr, flush=True)
         if func:
             nemonic = getattr(func, 'mnemonic', 'unknown')
-            c1_insn = Custom1_Insn(nemonic, insn)
+            c1_insn = Custom1_Insn(nemonic, insn, fn3=funct3)
             return func(self, proc, c1_insn, self.CONTEXT)
         return 0
 

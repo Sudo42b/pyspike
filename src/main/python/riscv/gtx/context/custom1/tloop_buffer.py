@@ -32,10 +32,44 @@ from __future__ import annotations
 from collections import namedtuple
 from typing import TYPE_CHECKING
 
-from ...csr import GSPR
+from ...csr import GSPR, LSPR
+from ..disasm import Custom0_Insn
 
 if TYPE_CHECKING:
     from ...npu import GtxNpu
+
+# OPSET staging-word offsets — direct-tensor access on the gspr buffer,
+# mirroring DL/spr.py opset and DL/dma.py _operand3.
+_OPERAND3_ADDR = GSPR['GSPR_GTX_OPERAND3'].address & 0x3FF   # 0x003
+_OPERAND5_ADDR = GSPR['GSPR_GTX_OPERAND5'].address & 0x3FF   # 0x005
+# L1 operand anchors — fusion only collapses frames whose vec reads/writes
+# the same banks the load/store DMA targets (see _execute_fused guard).
+_ADDRA = LSPR['SPM_ADDRA'].address
+_ADDRR = LSPR['SPM_ADDRR'].address
+
+# ── Fusion diagnostics (GTX_DEBUG_FUSION=1) — counts which path each
+# buffered frame takes + a one-shot sample of the contiguity operands.
+import os as _os
+_FUSE_DBG = bool(_os.environ.get("GTX_DEBUG_FUSION"))
+_FSTAT: dict = {}
+_FSAMPLE: dict = {}
+
+
+def _fs(key: str, n: int = 1) -> None:
+    _FSTAT[key] = _FSTAT.get(key, 0) + n
+
+
+if _FUSE_DBG:
+    import atexit as _atexit
+    import sys as _sys
+
+    @_atexit.register
+    def _dump_fstat() -> None:
+        _sys.stderr.write("[FUSION] " + " ".join(
+            f"{k}={v}" for k, v in sorted(_FSTAT.items())) + "\n")
+        if _FSAMPLE:
+            _sys.stderr.write("[FUSION] sample " + " ".join(
+                f"{k}={v}" for k, v in _FSAMPLE.items()) + "\n")
 
 
 # ----------------------------------------------------------------------
@@ -186,26 +220,19 @@ class _InsnShim:
 # ----------------------------------------------------------------------
 # Public API — invoked from :mod:`execute` and :mod:`unit.context.control`
 # ----------------------------------------------------------------------
-def try_buffer(npu: 'GtxNpu') -> bool:
-    """Snapshot the current FSM instruction into the T-loop buffer.
+def try_buffer(npu: 'GtxNpu', handler, proc, insn, mnemonic: str) -> None:
+    """Snapshot one bufferable instruction into the T-loop buffer.
 
-    Returns True iff the instruction was buffered (caller must skip the
-    handler call). False means the caller should flush any pending
-    buffer and run the handler eagerly.
+    ``handler`` is the registered ``(npu, proc, inst, cxt)`` callable;
+    ``insn`` is the live pybind rocc_insn_t. Caller (``GtxNpu.custom0``)
+    has already verified ``mnemonic in BUFFERABLE_MNEMONICS`` and that
+    the buffer is armed, so no re-check here.
 
-    Preconditions: ``npu._tloop_buf is not None`` and
-    ``npu.warp.is_tloop`` are both true (checked by caller for hot-path
-    speed).
+    Snapshots, not deferred ``proc``/``insn`` refs: ``XPR[i]`` and the
+    OPSET staging GSPRs mutate between RoCC instructions, so values are
+    captured now (see module docstring).
     """
-    mnemonic = npu._ctx.get("mnemonic")
-    if mnemonic not in BUFFERABLE_MNEMONICS:
-        return False
-
-    handler = npu._ctx["handler"]
-    proc = npu._ctx["proc"]
-    insn = npu._ctx["insn"]
     state = proc.state
-
     # Positional construction skips namedtuple's kwarg dispatch — the
     # difference is small per call (~200 ns) but multiplied by 1.18 M
     # buffered ops on the ABS hot path it adds up to ~0.3 s.
@@ -214,15 +241,14 @@ def try_buffer(npu: 'GtxNpu') -> bool:
         mnemonic,
         int(state.XPR[insn.rs1]),
         int(state.XPR[insn.rs2]),
-        int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)),
-        int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND5'].address, 0)),
+        int(npu.gspr.tensor[_OPERAND3_ADDR]),
+        int(npu.gspr.tensor[_OPERAND5_ADDR]),
         insn.funct,
         insn.xd,
         insn.xs1,
         insn.xs2,
         insn.rd,
     ))
-    return True
 
 
 def flush(npu: 'GtxNpu') -> None:
@@ -318,7 +344,7 @@ def _parse_frame(buf, i):
     j = i + 1
 
     cred_ld = None
-    if j < n and buf[j].mnemonic == 'credit_ld':
+    if j < n and buf[j].mnemonic == 'credit.ld':
         cred_ld = buf[j]
         j += 1
 
@@ -333,7 +359,7 @@ def _parse_frame(buf, i):
     j += 1
 
     cred_st = None
-    if j < n and buf[j].mnemonic == 'credit_st':
+    if j < n and buf[j].mnemonic == 'credit.st':
         cred_st = buf[j]
         j += 1
 
@@ -379,7 +405,7 @@ def _frame_signature(frame: _Frame):
     return (
         l_lo, l_h, l_len, l_rds, l_wrs,
         s_lo, s_h, s_len, s_rds, s_wrs,
-        v.funct, v.xd, v.xs1_bit, v.xs2_bit, v.rs1,
+        v.funct, v.xd, v.xs1_bit, v.xs2_bit, v.rs1, v.rs2,
     )
 
 
@@ -390,6 +416,8 @@ def _try_fuse_unary(npu, buf, start):
     """
     f0 = _parse_frame(buf, start)
     if f0 is None:
+        if _FUSE_DBG:
+            _fs('parse_fail')
         return 0
 
     sig0 = _frame_signature(f0)
@@ -406,8 +434,13 @@ def _try_fuse_unary(npu, buf, start):
         # Single frame — torch op overhead is identical to sequential
         # replay, so don't bother with the bulk path. Let the caller fall
         # through to plain replay.
+        if _FUSE_DBG:
+            _fs('single_frame')
         return 0
 
+    if _FUSE_DBG:
+        _fs('groups')
+        _fs('grouped_frames', len(frames))
     _execute_fused(npu, frames)
     return cursor - start
 
@@ -415,13 +448,15 @@ def _try_fuse_unary(npu, buf, start):
 def _execute_fused(npu, frames) -> None:
     """Bulk-execute N identical-shape frames as one torch op.
 
-    Fast path requires uniform L2 stride and ``length == vec_size * 2``
-    (single contiguous row per frame, exactly the ABS firmware shape).
+    Fast path requires uniform L2 stride and ``length == vec_size *
+    MX_EXT_BYTES`` (single contiguous row per frame, ABS firmware shape).
     Anything else falls back to a per-frame :func:`_replay` so we never
     miscompile an unusual stride layout.
     """
     import torch  # local to keep module import cycle-free at top level
-    from ...unit.ins.ops.vec import _apply_unary
+    from ..custom0.MX.vector import _apply_unary
+    from ...config_params import (
+        MX_IO_DTYPE, MX_IO_BYTES, MX_EXT_DTYPE, MX_EXT_BYTES)
 
     n = len(frames)
     f0 = frames[0]
@@ -441,49 +476,74 @@ def _execute_fused(npu, frames) -> None:
     sub_op = ((vec0.xd << 2) | (vec0.xs1_bit << 1) | vec0.xs2_bit) & 3
     vec_size = (vec0.rs1 & 0xFFFF) or 0x10000
 
+    nest = npu.warp.current_nest if npu.warp.is_ploop else 0
+    spu = npu.warp.current_spu
+    lspr = npu.lspr[nest][spu]
+
+    # Fast path requires: height-1 single contiguous row per frame,
+    # length == vec_size * MX_IO_BYTES, uniform L2 stride, AND the vec's
+    # L1 banks (SPM_ADDRA/ADDRR) coincide with the load dest / store src
+    # so the L2→abs→L2 shortcut equals the eager L2→L1→abs→L1→L2 chain.
+    # Anything else falls back to per-frame replay (never miscompiles).
     contiguous = (
         l_h == 1 and
-        l_len == vec_size * 2 and
+        l_len == vec_size * MX_EXT_BYTES and
         src_step == l_len and dst_step == l_len and
+        lspr.get(_ADDRA, 0) == l_lo and lspr.get(_ADDRR, 0) == s_lo and
         all(src_offs[i] == src_offs[0] + i * l_len for i in range(n)) and
         all(dst_offs[i] == dst_offs[0] + i * l_len for i in range(n))
     )
+
+    if _FUSE_DBG:
+        _fs('exec_fused')
+        if l_h != 1: _fs('fail_height')
+        if l_len != vec_size * MX_EXT_BYTES: _fs('fail_len')
+        if src_step != l_len: _fs('fail_srcstep')
+        if dst_step != l_len: _fs('fail_dststep')
+        if lspr.get(_ADDRA, 0) != l_lo: _fs('fail_addra')
+        if lspr.get(_ADDRR, 0) != s_lo: _fs('fail_addrr')
+        if 'l_h' not in _FSAMPLE:
+            _FSAMPLE.update(dict(
+                l_h=l_h, l_len=l_len, vec_size=vec_size, mxb=MX_IO_BYTES,
+                src_step=src_step, dst_step=dst_step,
+                l_lo=l_lo, addr_a=int(lspr.get(_ADDRA, 0)),
+                s_lo=s_lo, addr_r=int(lspr.get(_ADDRR, 0))))
+        if contiguous: _fs('bulk')
 
     if not contiguous:
         _replay_frames(npu, frames)
         return
 
-    nest = npu.warp.tmu_id if npu.warp.is_ploop else 0
-    spu = npu.warp.curr_id
-
     l2 = npu.mem.l2_byte(nest)
     src_base = src_offs[0]
     dst_base = dst_offs[0]
-    total_bytes = n * l_len
+    total_bytes = n * l_len               # L2 EXTERNAL bytes (fp16)
 
-    # Read N rows from L2 as a single (N, vec_size) fp16 tensor — no copy,
-    # just a strided view.
-    src_f16 = (
+    # Read N rows from L2 (MX_EXT_DTYPE) and widen to the compute dtype —
+    # mirrors the dtype-converting T-loop load (dma_imp). When ext==io the
+    # .to() is a no-op so this stays the original zero-copy fp16 path.
+    src_io = (
         l2[src_base:src_base + total_bytes]
-        .view(torch.float16)
+        .view(MX_EXT_DTYPE)
         .view(n, vec_size)
+        .to(MX_IO_DTYPE)
     )
 
     # One torch op for all rows — pyTorch dispatch cost is amortised
-    # across the whole tile.
-    result_f16 = _apply_unary(funct7, sub_op, src_f16)
+    # across the whole tile. ``mode`` = vec rs2[1:0] (exp/ln base select).
+    result_io = _apply_unary(funct7, sub_op, src_io, vec0.rs2 & 0x3)
 
-    # Write N rows back to L2 dst slab.
+    # Write N rows back to L2 dst slab, narrowing io→ext (mirrors store).
     dst_view = l2[dst_base:dst_base + total_bytes]
-    dst_view.copy_(result_f16.reshape(-1).view(torch.uint8))
+    dst_view.copy_(result_io.to(MX_EXT_DTYPE).reshape(-1).view(torch.uint8))
 
-    # Maintain L1 invariant: the non-fused path would leave the LAST
-    # row's input at ``BANK_A`` and the last row's output at ``BANK_R``.
-    # Keep that observable, so end-of-thread debug dumps match.
+    # Maintain L1 invariant: the non-fused path leaves the LAST row's input
+    # at ``BANK_A`` and output at ``BANK_R`` — both in the L1 IO dtype
+    # (vec_size * MX_IO_BYTES per row), matching the eager load/abs writes.
     l1 = npu.mem.l1_byte(nest, spu)
-    last_src = src_offs[-1]
-    l1[l_lo:l_lo + l_len].copy_(l2[last_src:last_src + l_len])
-    l1[s_lo:s_lo + l_len].copy_(result_f16[-1].view(torch.uint8))
+    io_row = vec_size * MX_IO_BYTES
+    l1[l_lo:l_lo + io_row].copy_(src_io[-1].view(torch.uint8))
+    l1[s_lo:s_lo + io_row].copy_(result_io[-1].view(torch.uint8))
 
     # Credit counters are independent state — replay only the entries
     # firmware actually emitted (last iter for __load_cr / __store_cr).
@@ -509,20 +569,19 @@ def _replay_frames(npu, frames) -> None:
 def _replay(npu: 'GtxNpu', entry: TLoopEntry) -> None:
     """Invoke ``entry.handler`` with shims that return snapshotted values.
 
-    Staging GSPRs (OPERAND3 / OPERAND5) are restored just before the
-    handler call and re-cleared after, matching the OPSET-aware clear
-    in :mod:`writeback` for non-OPSET custom0 — every bufferable
-    mnemonic is non-OPSET so the clear is unconditional here.
+    Restores the OPSET staging GSPRs (OPERAND3/5) to the values captured
+    when the instruction was buffered, then runs the handler with the
+    ``(npu, proc, inst, cxt)`` signature the registry uses. No clear
+    afterwards: OPERAND3/5 persist in this architecture (set by opset,
+    live until the next opset), so the last replayed entry leaves the
+    same staging value the eager last-opset would — post-flush state
+    stays byte-identical.
     """
-    npu.gspr[GSPR['GSPR_GTX_OPERAND3'].address] = entry.op3
-    npu.gspr[GSPR['GSPR_GTX_OPERAND5'].address] = entry.op5
+    npu.gspr.tensor[_OPERAND3_ADDR] = entry.op3
+    npu.gspr.tensor[_OPERAND5_ADDR] = entry.op5
 
-    insn = _InsnShim(
-        funct=entry.funct, xd=entry.xd,
-        xs1=entry.xs1_bit, xs2=entry.xs2_bit, rd=entry.rd,
-    )
+    insn = Custom0_Insn(entry.mnemonic, _InsnShim(
+        entry.funct, entry.xd, entry.xs1_bit, entry.xs2_bit, entry.rd,
+    ))
     proc = _ProcShim(_StateShim(_XPRShim(entry.rs1, entry.rs2)))
-    entry.handler(proc, insn, entry.rs1, entry.rs2)
-
-    npu.gspr[GSPR['GSPR_GTX_OPERAND3'].address] = 0
-    npu.gspr[GSPR['GSPR_GTX_OPERAND5'].address] = 0
+    entry.handler(npu, proc, insn, npu.CONTEXT)

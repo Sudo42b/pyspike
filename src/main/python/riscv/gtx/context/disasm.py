@@ -41,45 +41,40 @@ def gtx_xrs2(insn):
 #   rs2[24:20]   = source register 2
 #   funct[31:25] = function code (funct7) — used for sub-command dispatch
 class Custom0_Insn:
-    __slots__ = ['_nemonic', 'instruction']  # 파이썬 객체 생성 오버헤드 최소화
-    def __init__(self, name:str, instruction: Any) -> None:
+    # Operand fields decode once into slots so handlers read plain ints
+    # (~0.03µs) instead of re-crossing the pybind boundary on every
+    # ``inst.rsN``. The old per-property ``hasattr`` probe ran the pybind
+    # getter twice per read — the dominant custom0 handler cost.
+    __slots__ = ['_nemonic', 'instruction', 'fn7', 'rs2', 'rs1', 'fn3', 'rd']
+
+    def __init__(self, name: str, instruction: Any, *,
+                 fn7=None, fn3=None) -> None:
         self._nemonic = name
         self.instruction = instruction
+        if fn7 is not None:
+            # Hot dispatch path: fn7/fn3 already decoded by GtxNpu.custom0.
+            self.fn7, self.fn3 = fn7, fn3
+            self.rs2 = instruction.rs2
+            self.rs1 = instruction.rs1
+            self.rd = instruction.rd
+        elif hasattr(instruction, 'funct'):
+            # Object insn (pybind rocc_insn_t or duck-typed microcode insn).
+            self.fn7 = instruction.funct
+            self.rs2 = instruction.rs2
+            self.rs1 = instruction.rs1
+            self.fn3 = (instruction.xd << 2) | (instruction.xs1 << 1) | instruction.xs2
+            self.rd = instruction.rd
+        else:
+            # Raw 32-bit encoding (disasm path).
+            self.fn7 = (instruction >> 25) & 0x7F
+            self.rs2 = (instruction >> 20) & 0x1F
+            self.rs1 = (instruction >> 15) & 0x1F
+            self.fn3 = (instruction >> 12) & 0x7
+            self.rd = (instruction >> 7) & 0x1F
 
     @property
     def nemonic(self):
         return self._nemonic
-    
-    @property
-    def fn7(self) -> int:
-        if hasattr(self.instruction, 'funct'):
-            return self.instruction.funct
-        return (self.instruction >> 25) & 0x7F
-
-    @property
-    def rs2(self) -> int:
-        if hasattr(self.instruction, 'rs2'):
-            return self.instruction.rs2
-        return (self.instruction & 0x1F00000) >> 20   # bits 24:20
-
-    @property
-    def rs1(self) -> int:
-        if hasattr(self.instruction, 'rs1'):
-            return self.instruction.rs1
-        return (self.instruction & 0xF8000) >> 15      # bits 19:15
-
-    @property
-    def fn3(self) -> int:
-        """[xd | xs1 | xs2] 비트 플래그 조합 연산"""
-        if hasattr(self.instruction, 'xd'):
-            return (self.instruction.xd << 2) | (self.instruction.xs1 << 1) | self.instruction.xs2
-        return (self.instruction >> 12) & 0x7          # bits 14:12
-
-    @property
-    def rd(self) -> int:
-        if hasattr(self.instruction, 'rd'):
-            return self.instruction.rd
-        return (self.instruction & 0xF80) >> 7         # bits 11:7
 
     @property
     def opcode(self) -> int:
@@ -98,15 +93,33 @@ class Custom0_Insn:
 # We reconstruct funct3 from these bits and read registers directly.
 # ============================================================================
 class Custom1_Insn:
-    __slots__ = ['_nemonic', 'instruction']  # 파이썬 객체 생성 오버헤드 최소화
-    def __init__(self, name:str, instruction: Any) -> None:
+    # Same eager-decode rationale as Custom0_Insn — see its docstring.
+    __slots__ = ['_nemonic', 'instruction', 'rs1', 'rs2', 'fn3', 'rd']
+
+    def __init__(self, name: str, instruction: Any, *, fn3=None) -> None:
         self._nemonic = name
         self.instruction = instruction
+        if fn3 is not None:
+            # Hot dispatch path: fn3 already decoded by GtxNpu.custom1.
+            self.fn3 = fn3
+            self.rs1 = instruction.rs1
+            self.rs2 = instruction.rs2
+            self.rd = instruction.rd
+        elif hasattr(instruction, 'xd'):
+            self.fn3 = (instruction.xd << 2) | (instruction.xs1 << 1) | instruction.xs2
+            self.rs1 = instruction.rs1
+            self.rs2 = instruction.rs2
+            self.rd = instruction.rd
+        else:
+            self.fn3 = (instruction & 0x7000) >> 12        # bits 14:12
+            self.rs1 = (instruction & 0xF8000) >> 15       # bits 19:15
+            self.rs2 = (instruction & 0x1F00000) >> 20     # bits 24:20
+            self.rd = (instruction & 0xF80) >> 7           # bits 11:7
 
     @property
     def nemonic(self):
         return self._nemonic
-    
+
     @property
     def imm12(self):
         # bits 31:20 → imm_valid (bit 30), imm_id (bits 25:20).
@@ -117,30 +130,6 @@ class Custom1_Insn:
         else:
             imm12 = (raw & 0xFFF00000) >> 20
         return (imm12 >> 10) & 0x1, imm12 & 0x3F
-
-    @property
-    def rs1(self) -> int:
-        if hasattr(self.instruction, 'rs1'):
-            return self.instruction.rs1
-        return (self.instruction & 0xF8000) >> 15      # bits 19:15
-
-    @property
-    def rs2(self) -> int:
-        if hasattr(self.instruction, 'rs2'):
-            return self.instruction.rs2
-        return (self.instruction & 0x1F00000) >> 20    # bits 24:20
-
-    @property
-    def fn3(self) -> int:
-        if hasattr(self.instruction, 'xd'):
-            return (self.instruction.xd << 2) | (self.instruction.xs1 << 1) | self.instruction.xs2
-        return (self.instruction & 0x7000) >> 12       # bits 14:12
-
-    @property
-    def rd(self) -> int:
-        if hasattr(self.instruction, 'rd'):
-            return self.instruction.rd
-        return (self.instruction & 0xF80) >> 7         # bits 11:7
 
     @property
     def opcode(self) -> int:

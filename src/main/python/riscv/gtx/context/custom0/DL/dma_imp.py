@@ -1,20 +1,3 @@
-"""DMA engine -- spike-independent DMA helpers + DeferredDdrStore + decoder.
-
-Direct port of vendor/gtx_cpp_reference/gtx/gtx_npu_dma.cc:25-435.
-
-Per CONTEXT D-01: This module has NO `proc`/`insn` dependencies. It operates
-on `GtxMemory` instances and pure data only -- the spike-dependent entry
-points (firmware_dma @handler) live in `ops/dma.py` (Plan 02). Plans 02/04/05
-all import from this module.
-
-Phase 3 plan 01 Task 2.
-
-Invariant policy (user decision): every per-region access verifies its
-bounds with ``assert`` and then performs the whole transfer in a single
-``copy_()`` or ``permute`` + ``contiguous`` op. Wrap-around and
-out-of-bounds are treated as firmware bugs and surfaced via
-``AssertionError`` — no silent clipping, no fallback paths.
-"""
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -23,21 +6,15 @@ from ....config_params import (
     NEST_NUM, SPU_NUM,
     L0_SIZE_BYTES, L1_SIZE_BYTES, L2_SIZE_BYTES,
     DDR_BASE,
+    MX_IO_DTYPE, MX_IO_BYTES, MX_EXT_DTYPE, MX_EXT_BYTES,
 )
+
+# Whether the T-loop L2↔L1 DMA must convert dtypes (L2/DDR are MX_EXT_DTYPE,
+# L1/L0 are the wider MX_IO_DTYPE). False ⇒ raw byte copy fast path.
+_DMA_CONVERTS: bool = MX_IO_DTYPE is not MX_EXT_DTYPE
 
 if TYPE_CHECKING:
     from ....memory import GtxMemory
-
-
-def ensure_ddr(mem: 'GtxMemory', end_offset: int):
-    """Compat shim for the old top-level ``ddr.ensure_ddr``.
-
-    Delegates to :meth:`GtxMemory.ensure_ddr`, the canonical doubling-grow
-    DDR allocator.
-    """
-    return mem.ensure_ddr(end_offset)
-
-
 @dataclass(frozen=True)
 class DeferredDdrStore:
     """S-loop deferred L2->DDR store request.
@@ -57,10 +34,10 @@ class DeferredDdrStore:
 
 
 # ============================================================================
-# decode_firmware_dma_args -- direct port of gtx_npu_dma.cc:262-288
+# decode_dma_args -- direct port of gtx_npu_dma.cc:262-288
 # ============================================================================
-def decode_firmware_dma_args(rs1: int, rs2: int, rs3: int,
-                              *, xd: int, xs1: int, xs2: int) -> dict:
+def decode_dma_args(rs1: int, rs2: int, rs3: int,
+                    *, xd: int, xs1: int, xs2: int) -> dict:
     """Decode packed firmware_dma rs1/rs2/rs3 -> field dict.
 
     Pitfall 1 (is_copy carve-out): COPY funct3=010 uses rs1>>32 (32-bit dst)
@@ -189,9 +166,9 @@ def exec_store_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
 
 
 # ============================================================================
-# firmware_dma_sloop_store -- direct port of gtx_npu_dma.cc:319-326
+# dma_sloop_store -- direct port of gtx_npu_dma.cc:319-326
 # ============================================================================
-def firmware_dma_sloop_store(npu: Any, *, nest: int, addr_hi: int, addr_lo: int,
+def dma_sloop_store(npu: Any, *, nest: int, addr_hi: int, addr_lo: int,
                               length: int, height: int,
                               rd_stride: int, wr_stride: int) -> int:
     """Push a DeferredDdrStore onto npu.deferred_ddr_stores (S-loop STORE branch).
@@ -213,9 +190,9 @@ def firmware_dma_sloop_store(npu: Any, *, nest: int, addr_hi: int, addr_lo: int,
 
 
 # ============================================================================
-# firmware_dma_sloop_load -- direct port of gtx_npu_dma.cc:294-318 (LOAD branch)
+# dma_sloop_load -- direct port of gtx_npu_dma.cc:294-318 (LOAD branch)
 # ============================================================================
-def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_lo: int,
+def dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_lo: int,
                               length: int, height: int,
                               rd_stride: int, wr_stride: int) -> int:
     """S-loop LOAD: DDR → L2.
@@ -227,7 +204,7 @@ def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_l
     """
     ddr_off_base = (addr_hi - DDR_BASE) if addr_hi >= DDR_BASE else addr_hi
     max_off = ddr_off_base + (height - 1) * rd_stride + length
-    ensure_ddr(mem, max_off)
+    mem.ensure_ddr(max_off)
     ddr_cap = mem.ddr.capacity()
 
     l2_buf = mem.l2_byte(nest)
@@ -258,27 +235,35 @@ def firmware_dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_l
 
 
 # ============================================================================
-# firmware_dma_tloop_load_store -- direct port of gtx_npu_dma.cc:349-391
+# dma_tloop_load_store -- direct port of gtx_npu_dma.cc:349-391
 # ============================================================================
-def firmware_dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
+def dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
                                     is_store: bool,
                                     addr_hi: int, addr_lo: int,
                                     length: int, height: int,
                                     rd_stride: int, wr_stride: int) -> int:
-    """T-loop L2 ↔ L1 strided per-row.
+    """T-loop L2 ↔ L1 strided per-row, dtype-aware at the boundary.
 
-    LOAD:  ``L2[addr_hi + row*rd_stride] -> L1[addr_lo + row*length]``
-    STORE: ``L1[addr_lo + row*length] -> L2[addr_hi + row*wr_stride]``
+    L2 holds MX_EXT_DTYPE (vendor FP16); L1 holds the wider MX_IO_DTYPE.
+    Firmware byte quantities (``length`` / strides / ``addr_hi``) are in
+    EXTERNAL units; the L1 span is scaled to the IO dtype and the data is
+    converted on the way through.
 
-    Invariants (asserted): stride ≥ length, no L2/L1 wrap. Single
-    ``copy_()`` over (height, length) 2D views — no row loop.
+    LOAD:  ``L2[addr_hi + row*rd_stride] -> L1[addr_lo + row*l1_row]``
+    STORE: ``L1[addr_lo + row*l1_row] -> L2[addr_hi + row*wr_stride]``
+
+    ``l1_row = (length / MX_EXT_BYTES) * MX_IO_BYTES``. When the dtypes
+    match (``_DMA_CONVERTS`` False) this is the original raw byte copy.
     """
     l1 = mem.l1_byte(nest, spu)
     l2 = mem.l2_byte(nest)
     hi_stride = wr_stride if is_store else rd_stride
 
+    n_elem = length // MX_EXT_BYTES
+    l1_row = n_elem * MX_IO_BYTES        # L1 bytes per row (IO dtype)
+
     hi_end = addr_hi + (height - 1) * hi_stride + length
-    lo_end = addr_lo + height * length
+    lo_end = addr_lo + height * l1_row
     assert hi_stride >= length, f"hi_stride {hi_stride} < length {length}"
     assert hi_end <= L2_SIZE_BYTES, (
         f"L2 region wraps L2_SIZE_BYTES {L2_SIZE_BYTES} — "
@@ -290,18 +275,29 @@ def firmware_dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
     )
 
     l2_view = l2[addr_hi:addr_hi + height * hi_stride].view(height, hi_stride)[:, :length]
-    l1_view = l1[addr_lo:lo_end].view(height, length)
+    if not _DMA_CONVERTS:
+        l1_view = l1[addr_lo:lo_end].view(height, length)
+        if is_store:
+            l2_view.copy_(l1_view)
+        else:
+            l1_view.copy_(l2_view)
+        return 0
+
+    # Dtype-converting path: L2 (ext) ⇄ L1 (io).
+    l1_io = l1[addr_lo:lo_end].view(MX_IO_DTYPE).view(height, n_elem)
     if is_store:
-        l2_view.copy_(l1_view)
+        ext = l1_io.to(MX_EXT_DTYPE)                       # (h, n_elem) ext
+        l2_view.copy_(ext.view(torch.uint8).view(height, length))
     else:
-        l1_view.copy_(l2_view)
+        ext = l2_view.reshape(-1).view(MX_EXT_DTYPE).view(height, n_elem)
+        l1_io.copy_(ext.to(MX_IO_DTYPE))
     return 0
 
 
 # ============================================================================
-# firmware_dma_tloop_copy -- direct port of gtx_npu_dma.cc:334-348
+# dma_tloop_copy -- direct port of gtx_npu_dma.cc:334-348
 # ============================================================================
-def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
+def dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
                               src_addr: int, dst_addr: int,
                               length: int, height: int) -> int:
     """T-loop L1 → L1 same-SPU copy (memmove semantics).
@@ -312,8 +308,12 @@ def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
     """
     l1 = mem.l1_byte(nest, spu)
 
-    src_end = src_addr + height * length
-    dst_end = dst_addr + height * length
+    # L1↔L1: both sides are MX_IO_DTYPE. Firmware ``length`` is EXTERNAL
+    # bytes; the on-chip data occupies l1_row = (length/ext)*io bytes/row.
+    l1_row = (length // MX_EXT_BYTES) * MX_IO_BYTES if _DMA_CONVERTS else length
+
+    src_end = src_addr + height * l1_row
+    dst_end = dst_addr + height * l1_row
     assert src_end <= L1_SIZE_BYTES, (
         f"src window [{src_addr}, {src_end}) wraps L1_SIZE_BYTES "
         f"{L1_SIZE_BYTES} — firmware bug"
@@ -323,7 +323,7 @@ def firmware_dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
         f"{L1_SIZE_BYTES} — firmware bug"
     )
 
-    src_2d = l1[src_addr:src_end].view(height, length).clone()
-    l1[dst_addr:dst_end].view(height, length).copy_(src_2d)
+    src_2d = l1[src_addr:src_end].view(height, l1_row).clone()
+    l1[dst_addr:dst_end].view(height, l1_row).copy_(src_2d)
     return 0
 

@@ -11,7 +11,6 @@ from typing import Any, TYPE_CHECKING
 
 from ...inst_handler import inst_register
 from . import dma_imp
-from .dma_imp import ensure_ddr
 
 from ....csr import GSPR
 from ....config_params import (
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
     from ....npu import GtxNpu
 
 _OPERAND3_ADDR = GSPR['GSPR_GTX_OPERAND3'].address & 0x3FF   # 0x003
-
 
 # ============================================================================
 # Helpers
@@ -48,12 +46,15 @@ def _xflags(inst) -> tuple:
 
 
 def _operand3(npu) -> int:
-    return npu.gspr.get(_OPERAND3_ADDR, 0)
+    # Direct-tensor SPR read — mirrors opset's direct-tensor write
+    # (DL/spr.py). Skips RegisterFile.get()/__getitem__ on the hot
+    # (opset, load, abs.v, opset, store) cadence.
+    return int(npu.gspr.tensor[_OPERAND3_ADDR])
 
 # ============================================================================
 # Multicast + copy.mem (funct7=0x42 / 0x44) — bodies are vendor-parity ports.
 # ============================================================================
-def firmware_mcast_s2l(mem: 'GtxMemory', *, nest: int, l2_addr: int, l1_addr: int,
+def mcast_s2l(mem: 'GtxMemory', *, nest: int, l2_addr: int, l1_addr: int,
                        height: int, length: int, rd_stride: int,
                        target_spu_mask: int) -> int:
     """L2 → L1 multicast to selected SPUs (gtx_npu_custom0.cc:230-273)."""
@@ -76,7 +77,7 @@ def firmware_mcast_s2l(mem: 'GtxMemory', *, nest: int, l2_addr: int, l1_addr: in
     return 0
 
 
-def firmware_mcast_g2s(mem: 'GtxMemory', *, ddr_addr: int, l2_addr: int,
+def mcast_g2s(mem: 'GtxMemory', *, ddr_addr: int, l2_addr: int,
                        height: int, length: int, rd_stride: int,
                        target_nest_mask: int) -> int:
     """DDR → L2 multicast to selected NESTs (gtx_npu_custom0.cc:545-583)."""
@@ -88,7 +89,7 @@ def firmware_mcast_g2s(mem: 'GtxMemory', *, ddr_addr: int, l2_addr: int,
     assert effective_stride >= length, "rd_stride < length (firmware bug)"
     ddr_off_base = (ddr_addr - DDR_BASE) if ddr_addr >= DDR_BASE else ddr_addr
     max_off = ddr_off_base + (height - 1) * effective_stride + length
-    ensure_ddr(mem, max_off)
+    mem.ensure_ddr(max_off)
     ddr_span = mem.ddr.read(ddr_off_base, max_off - ddr_off_base)
     src_2d_cpu = ddr_span[:height * effective_stride].view(height, effective_stride)[:, :length]
     l2_end = l2_addr + height * length
@@ -100,7 +101,7 @@ def firmware_mcast_g2s(mem: 'GtxMemory', *, ddr_addr: int, l2_addr: int,
     return 0
 
 
-def firmware_mcast_s2s(mem: 'GtxMemory', *, src_tmu: int, src_addr: int, dst_addr: int,
+def mcast_s2s(mem: 'GtxMemory', *, src_tmu: int, src_addr: int, dst_addr: int,
                        src_stride: int, dst_stride: int, length: int, height: int,
                        target_nest_mask: int) -> int:
     """L2 → L2 multicast across NESTs (gtx_npu_dispatch.cc:732-762)."""
@@ -124,7 +125,7 @@ def firmware_mcast_s2s(mem: 'GtxMemory', *, src_tmu: int, src_addr: int, dst_add
     return 0
 
 
-def firmware_copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw: int,
+def copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw: int,
                       src_stride: int, dst_stride: int, length: int, height: int) -> int:
     """DDR↔DDR / L2↔DDR / L2↔L2 copy (gtx_npu_dispatch.cc:763-846)."""
     if height == 0:
@@ -141,7 +142,7 @@ def firmware_copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw
         if src_is_ddr and dst_is_ddr:
             max_src = src_off + (height - 1) * src_stride + length
             max_dst = dst_off + (height - 1) * dst_stride + length
-            ensure_ddr(mem, max(max_src, max_dst))
+            mem.ensure_ddr(max(max_src, max_dst))
             for row in range(height):
                 s_base = src_off + row * src_stride
                 d_base = dst_off + row * dst_stride
@@ -156,7 +157,7 @@ def firmware_copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw
         elif src_is_ddr:
             n = nest_id if nest_id < NEST_NUM else 0
             l2 = mem.l2_byte(n)
-            ensure_ddr(mem, src_off + (height - 1) * src_stride + length)
+            mem.ensure_ddr(src_off + (height - 1) * src_stride + length)
             for row in range(height):
                 s = src_off + row * src_stride
                 d = (dst_addr_raw + row * dst_stride) % L2_SIZE_BYTES
@@ -171,7 +172,7 @@ def firmware_copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw
         else:
             n = nest_id if nest_id < NEST_NUM else 0
             l2 = mem.l2_byte(n)
-            ensure_ddr(mem, dst_off + (height - 1) * dst_stride + length)
+            mem.ensure_ddr(dst_off + (height - 1) * dst_stride + length)
             for row in range(height):
                 s = (src_addr_raw + row * src_stride) % L2_SIZE_BYTES
                 d = dst_off + row * dst_stride
@@ -222,19 +223,19 @@ def exec_store_svr(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
 
 @inst_register.custom0(name='load', funct7=0b1000000, funct3=0)
 def _load(npu, proc, inst, cxt) -> int:
-    """firmware_dma LOAD. C2 (S-loop) DDR→L2; C3 (T-loop) L2→L1."""
+    """dma LOAD. C2 (S-loop) DDR→L2; C3 (T-loop) L2→L1."""
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
     xd, xs1, xs2 = _xflags(inst)
-    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
+    args = dma_imp.decode_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
     nest = _select_nest(npu)
     if npu.warp.is_sloop:
-        return dma_imp.firmware_dma_sloop_load(
+        return dma_imp.dma_sloop_load(
             npu.mem, nest=nest, addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
             length=args['length'], height=args['height'],
             rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
     if npu.warp.is_tloop:
-        return dma_imp.firmware_dma_tloop_load_store(
+        return dma_imp.dma_tloop_load_store(
             npu.mem, nest=nest, spu=_select_spu(npu), is_store=False,
             addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
             length=args['length'], height=args['height'],
@@ -244,19 +245,19 @@ def _load(npu, proc, inst, cxt) -> int:
 
 @inst_register.custom0(name='store', funct7=0b1000000, funct3=1)
 def _store(npu, proc, inst, cxt) -> int:
-    """firmware_dma STORE. S-loop store is deferred (pushes onto npu queue)."""
+    """dma STORE. S-loop store is deferred (pushes onto npu queue)."""
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
     xd, xs1, xs2 = _xflags(inst)
-    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
+    args = dma_imp.decode_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
     nest = _select_nest(npu)
     if npu.warp.is_sloop:
-        return dma_imp.firmware_dma_sloop_store(
+        return dma_imp.dma_sloop_store(
             npu, nest=nest, addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
             length=args['length'], height=args['height'],
             rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
     if npu.warp.is_tloop:
-        return dma_imp.firmware_dma_tloop_load_store(
+        return dma_imp.dma_tloop_load_store(
             npu.mem, nest=nest, spu=_select_spu(npu), is_store=True,
             addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
             length=args['length'], height=args['height'],
@@ -266,14 +267,14 @@ def _store(npu, proc, inst, cxt) -> int:
 
 @inst_register.custom0(name='copy', funct7=0b1000000, funct3=2)
 def _copy(npu, proc, inst, cxt) -> int:
-    """firmware_dma COPY (T-loop L1→L1). addr_hi=dst, addr_lo=src."""
+    """dma COPY (T-loop L1→L1). addr_hi=dst, addr_lo=src."""
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
     xd, xs1, xs2 = _xflags(inst)
-    args = dma_imp.decode_firmware_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
+    args = dma_imp.decode_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
     nest = _select_nest(npu)
     if npu.warp.is_tloop:
-        return dma_imp.firmware_dma_tloop_copy(
+        return dma_imp.dma_tloop_copy(
             npu.mem, nest=nest, spu=_select_spu(npu),
             src_addr=args['addr_lo'], dst_addr=args['addr_hi'],
             length=args['length'], height=args['height'])
@@ -304,7 +305,7 @@ def _mcast_s2l(npu, proc, inst, cxt) -> int:
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
     rs3 = _operand3(npu)
-    return firmware_mcast_s2l(
+    return mcast_s2l(
         npu.mem, nest=_select_nest(npu),
         l2_addr=(rs1 >> 32) & 0xFFFFFFFF, l1_addr=rs1 & 0xFFFFFFFF,
         height=(rs2 >> 48) & 0xFFFF, length=(rs2 >> 32) & 0xFFFF,
@@ -316,7 +317,7 @@ def _mcast_g2s(npu, proc, inst, cxt) -> int:
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
     rs3 = _operand3(npu)
-    return firmware_mcast_g2s(
+    return mcast_g2s(
         npu.mem,
         ddr_addr=(rs1 >> 27) & 0x1FFFFFFFFF, l2_addr=rs1 & 0x7FFFFFF,
         height=(rs2 >> 48) & 0xFFFF, length=(rs2 >> 32) & 0xFFFF,
@@ -328,7 +329,7 @@ def _mcast_s2s(npu, proc, inst, cxt) -> int:
     op1 = proc.state.XPR[inst.rs1]
     op2 = proc.state.XPR[inst.rs2]
     op3 = _operand3(npu)
-    return firmware_mcast_s2s(
+    return mcast_s2s(
         npu.mem,
         src_tmu=(op1 >> 56) & 0x3F, src_addr=op1 & 0x7FFFFFF, dst_addr=(op1 >> 27) & 0x7FFFFFF,
         src_stride=op2 & 0xFFFFFFFF, dst_stride=op3 & 0xFFFFFFFF,
@@ -341,7 +342,7 @@ def _copy_mem(npu, proc, inst, cxt) -> int:
     op1 = proc.state.XPR[inst.rs1]
     op2 = proc.state.XPR[inst.rs2]
     op3 = _operand3(npu)
-    return firmware_copy_mem(
+    return copy_mem(
         npu, nest_id=_select_nest(npu),
         src_addr_raw=op1 & 0x1FFFFFFFFF, dst_addr_raw=op3 & 0x1FFFFFFFFF,
         src_stride=op2 & 0xFFFFFFFF,

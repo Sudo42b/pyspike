@@ -79,20 +79,27 @@ def ends(npu: "GtxNpu", proc, inst, cxt) -> int:
 
 @inst_register.custom1(name='start.t', funct3=0b000)
 def startt(npu: "GtxNpu", proc, inst, cxt) -> int:
-    """C4 → C3. Select the active SPU."""
+    """C4 → C3. Select the active SPU and arm the T-loop buffer.
+
+    Arming lets GtxNpu.custom0 capture the (load, vec, store) inner
+    cadence so end.t can flush it as fused bulk torch ops.
+    """
     rs1 = proc.state.XPR[inst.rs1]
     rs2 = proc.state.XPR[inst.rs2]
     spu_id = _extract_id(rs1, rs2)
     assert 0 <= spu_id < SPU_NUM, f"Invalid SPU id {spu_id} in start.t"
     npu.warp.current_spu = spu_id
     npu.CONTEXT = CXT.C3
+    npu._tloop_buf = [] if npu._fusion_enabled else None
     return 0
 
 
 @inst_register.custom1(name='end.t', funct3=0b001)
 def endt(npu: "GtxNpu", proc, inst, cxt) -> int:
-    """C3 → C4."""
+    """C3 → C4. The pending buffer was already drained by GtxNpu.custom1
+    on entry to this marker; just disarm so post-loop ops run eagerly."""
     npu.CONTEXT = CXT.C4
+    npu._tloop_buf = None
     return 0
 
 
