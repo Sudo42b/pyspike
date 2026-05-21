@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import torch
-from torch import Tensor
-from .softmax import softmax, esum
+import math as _math
+
+import numpy as np
+from numpy import ndarray as Tensor
+from .softmax import softmax_step3, esum
 
 from ...inst_handler import inst_register
-from ....config_params import L0_SIZE_BYTES, NEST_NUM, SPU_NUM
+from ....config_params import L0_SIZE_BYTES, NEST_NUM, SPU_NUM, MX_IO_DTYPE, MX_IO_BYTES
 from ....csr import GSPR, LSPR
-from ... import _resolve_nest_spu
-from . import _fp16_low16, _fp16_high16, _l0_block_view, _write_l0_fp16_scalar
+from ... import _resolve_nest_spu, operand3
+from . import _io_low, _io_high, _l0_block_view_io, _write_l0_io_pair
 
 # activation op-id enum (internal dispatch ids for act/act_imm kernels).
 ACT_RELU, ACT_TANH, ACT_SOFTMAX, ACT_GELU, ACT_SIGMOID, ACT_PRELU, ACT_ESUM = range(7)
@@ -16,24 +18,31 @@ ACT_RELU, ACT_TANH, ACT_SOFTMAX, ACT_GELU, ACT_SIGMOID, ACT_PRELU, ACT_ESUM = ra
 # =============================================================================
 # 3. Activation kernels
 # =============================================================================
-def relu(arr_f16: Tensor) -> torch.Tensor:
-    return torch.relu(arr_f16.to(torch.float32)).to(torch.float16)
+# FP32 internal compute, MX_IO_DTYPE output (FP32 by default — see config_params).
+_erf_vec = np.vectorize(_math.erf, otypes=[np.float32])   # exact erf (no scipy dep)
 
 
-def prelu(arr_f16: Tensor, slope: Tensor) -> Tensor:
-    return torch.nn.functional.prelu(arr_f16.to(torch.float32), slope).to(torch.float16)
+def relu(arr: Tensor) -> np.ndarray:
+    return np.maximum(arr.astype(np.float32), np.float32(0)).astype(MX_IO_DTYPE)
 
 
-def gelu(arr_f16: Tensor) -> Tensor:
-    return torch.nn.functional.gelu(arr_f16.to(torch.float32)).to(torch.float16)
+def prelu(arr: Tensor, slope: Tensor) -> Tensor:
+    x = arr.astype(np.float32)
+    s = slope.astype(np.float32)
+    return np.where(x >= 0, x, s * x).astype(MX_IO_DTYPE)
 
 
-def tanh(arr_f16: Tensor) -> Tensor:
-    return torch.tanh(arr_f16.to(torch.float32)).to(torch.float16)
+def gelu(arr: Tensor) -> Tensor:
+    x = arr.astype(np.float32)
+    return (x * 0.5 * (1.0 + _erf_vec(x * np.float32(0.7071067811865476)))).astype(MX_IO_DTYPE)
 
 
-def sigmoid(arr_f16: Tensor) -> Tensor:
-    return torch.sigmoid(arr_f16.to(torch.float32)).to(torch.float16)
+def tanh(arr: Tensor) -> Tensor:
+    return np.tanh(arr.astype(np.float32)).astype(MX_IO_DTYPE)
+
+
+def sigmoid(arr: Tensor) -> Tensor:
+    return (1.0 / (1.0 + np.exp(-arr.astype(np.float32)))).astype(MX_IO_DTYPE)
 
 # =============================================================================
 # dispatch surface
@@ -56,40 +65,41 @@ def act(npu, proc, inst, *, op_id: int, is_reversed: bool) -> int:
     if length == 0:
         length = 0x10000
 
-    l1_f16 = npu.mem.l1_f16(nest, spu)
-    rd_off = (rd_addr // 2) % (l1_f16.shape[0])
-    view_in = l1_f16[rd_off:rd_off + length]
+    l1_io = npu.mem.l1_io(nest, spu)
+    rd_off = (rd_addr // MX_IO_BYTES) % (l1_io.shape[0])
+    view_in = l1_io[rd_off:rd_off + length]
 
     if op_id == ACT_RELU:
         result = relu(view_in)
     elif op_id == ACT_TANH:
         result = tanh(view_in)
     elif op_id == ACT_SOFTMAX:
-        result = softmax(view_in)
+        # softmax step3: rs2 = max_value[31:0], esum_value[63:32] (FP32 widths).
+        op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
+        result = softmax_step3(view_in, _io_low(op2), _io_high(op2))
     elif op_id == ACT_GELU:
         result = gelu(view_in)
     elif op_id == ACT_SIGMOID:
         result = sigmoid(view_in)
     elif op_id == ACT_PRELU:
-        slope = _fp16_low16(int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0)))
+        slope = _io_low(int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0)))
         result = prelu(view_in, slope)
     elif op_id == ACT_ESUM:
         # Pitfall 8: ESUM is forward (rd=ADDRA) but writes a scalar to L0
         # at offset (GSPR_OPERAND3 & 0x1F)*32 — not to L1[ADDRR].
+        # Result SVR: max_value[low], esum_value[high] (FP32: [31:0]/[63:32]).
         op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
-        max_val = _fp16_low16(op2)
-        init_accum = _fp16_high16(op2)
+        max_val = _io_low(op2)
+        init_accum = _io_high(op2)
         scalar = esum(view_in, max_val=max_val, init_accum=init_accum)
-        l0_offset = (
-            (int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0)) & 0x1F) * 32
-        ) % L0_SIZE_BYTES
-        _write_l0_fp16_scalar(npu, nest, spu, l0_offset, scalar)
+        l0_offset = ((operand3(npu) & 0x1F) * 32) % L0_SIZE_BYTES
+        _write_l0_io_pair(npu, nest, spu, l0_offset, max_val, scalar)
         return 0
     else:
         return 0
 
-    wr_off = (wr_addr // 2) % (l1_f16.shape[0])
-    l1_f16[wr_off:wr_off + length] = result
+    wr_off = (wr_addr // MX_IO_BYTES) % (l1_io.shape[0])
+    l1_io[wr_off:wr_off + length] = result
     return 0
 
 
@@ -98,14 +108,14 @@ def act_imm(npu, proc, inst, *, op_id: int) -> int:
     nest, spu = _resolve_nest_spu(npu)
 
     in_reg = int(proc.state.XPR[inst.rs1]) & 0x1F
-    op3_raw = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0xFFFFFFFF))
+    op3_raw = operand3(npu, 0xFFFFFFFF)
     out_reg = (op3_raw & 0x1F) if op3_raw <= 0x1F else (inst.rd & 0x1F)
 
-    view_in = _l0_block_view(npu, nest, spu, in_reg)
-    view_out = _l0_block_view(npu, nest, spu, out_reg)
+    view_in = _l0_block_view_io(npu, nest, spu, in_reg)
+    view_out = _l0_block_view_io(npu, nest, spu, out_reg)
 
     if op_id == ACT_PRELU:
-        slope = _fp16_low16(int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0)))
+        slope = _io_low(int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0)))
         result = prelu(view_in, slope)
     elif op_id == ACT_GELU:
         result = gelu(view_in)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-import torch
+import numpy as np
 from ....config_params import (
     NEST_NUM, SPU_NUM,
     L0_SIZE_BYTES, L1_SIZE_BYTES, L2_SIZE_BYTES,
@@ -105,12 +105,12 @@ def exec_dma_2d(mem: 'GtxMemory', *, nest_id: int, l2_addr: int, l1_addr: int,
         f"{L1_SIZE_BYTES} — firmware bug"
     )
 
-    l2_view = l2_buf[l2_addr:l2_end].view(height, l2_stride)[:, :width]
-    l1_view = l1_buf[l1_addr:l1_end].view(height, width)
+    l2_view = l2_buf[l2_addr:l2_end].reshape(height, l2_stride)[:, :width]
+    l1_view = l1_buf[l1_addr:l1_end].reshape(height, width)
     if is_load:
-        l1_view.copy_(l2_view)
+        l1_view[...] = l2_view
     else:
-        l2_view.copy_(l1_view)
+        l2_view[...] = l1_view
     return 0
 
 
@@ -211,13 +211,13 @@ def dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_lo: int,
     ddr_span = mem.ddr.read(
         ddr_off_base,
         min(max_off, ddr_cap) - ddr_off_base,
-    ).to(l2_buf.device)
+    )
 
     l2_end = addr_lo + (height - 1) * wr_stride + length
     assert rd_stride >= length, f"rd_stride {rd_stride} < length {length}"
     assert wr_stride >= length, f"wr_stride {wr_stride} < length {length}"
-    assert height * rd_stride <= ddr_span.numel(), (
-        f"DDR span {ddr_span.numel()} too small for height*rd_stride "
+    assert height * rd_stride <= ddr_span.size, (
+        f"DDR span {ddr_span.size} too small for height*rd_stride "
         f"{height * rd_stride} — firmware bug"
     )
     assert l2_end <= L2_SIZE_BYTES, (
@@ -228,9 +228,9 @@ def dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_lo: int,
         f"DDR window exceeds capacity {ddr_cap} — firmware bug"
     )
 
-    src_2d = ddr_span[:height * rd_stride].view(height, rd_stride)[:, :length]
-    dst_2d = l2_buf[addr_lo:addr_lo + height * wr_stride].view(height, wr_stride)[:, :length]
-    dst_2d.copy_(src_2d)
+    src_2d = ddr_span[:height * rd_stride].reshape(height, rd_stride)[:, :length]
+    dst_2d = l2_buf[addr_lo:addr_lo + height * wr_stride].reshape(height, wr_stride)[:, :length]
+    dst_2d[...] = src_2d
     return 0
 
 
@@ -274,23 +274,23 @@ def dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
         f"{L1_SIZE_BYTES} — firmware bug"
     )
 
-    l2_view = l2[addr_hi:addr_hi + height * hi_stride].view(height, hi_stride)[:, :length]
+    l2_view = l2[addr_hi:addr_hi + height * hi_stride].reshape(height, hi_stride)[:, :length]
     if not _DMA_CONVERTS:
-        l1_view = l1[addr_lo:lo_end].view(height, length)
+        l1_view = l1[addr_lo:lo_end].reshape(height, length)
         if is_store:
-            l2_view.copy_(l1_view)
+            l2_view[...] = l1_view
         else:
-            l1_view.copy_(l2_view)
+            l1_view[...] = l2_view
         return 0
 
     # Dtype-converting path: L2 (ext) ⇄ L1 (io).
-    l1_io = l1[addr_lo:lo_end].view(MX_IO_DTYPE).view(height, n_elem)
+    l1_io = l1[addr_lo:lo_end].view(MX_IO_DTYPE).reshape(height, n_elem)
     if is_store:
-        ext = l1_io.to(MX_EXT_DTYPE)                       # (h, n_elem) ext
-        l2_view.copy_(ext.view(torch.uint8).view(height, length))
+        ext = l1_io.astype(MX_EXT_DTYPE)                       # (h, n_elem) ext
+        l2_view[...] = ext.view(np.uint8).reshape(height, length)
     else:
-        ext = l2_view.reshape(-1).view(MX_EXT_DTYPE).view(height, n_elem)
-        l1_io.copy_(ext.to(MX_IO_DTYPE))
+        ext = l2_view.reshape(-1).view(MX_EXT_DTYPE).reshape(height, n_elem)
+        l1_io[...] = ext.astype(MX_IO_DTYPE)
     return 0
 
 
@@ -303,7 +303,7 @@ def dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
     """T-loop L1 → L1 same-SPU copy (memmove semantics).
 
     Invariants (asserted): both windows stay inside L1 without wrap. One
-    ``.clone()`` on the source 2D view handles src/dst overlap, then a
+    ``.copy()`` on the source 2D view handles src/dst overlap, then a
     single ``copy_()`` writes back.
     """
     l1 = mem.l1_byte(nest, spu)
@@ -323,7 +323,7 @@ def dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
         f"{L1_SIZE_BYTES} — firmware bug"
     )
 
-    src_2d = l1[src_addr:src_end].view(height, l1_row).clone()
-    l1[dst_addr:dst_end].view(height, l1_row).copy_(src_2d)
+    src_2d = l1[src_addr:src_end].reshape(height, l1_row).copy()
+    l1[dst_addr:dst_end].reshape(height, l1_row)[...] = src_2d
     return 0
 

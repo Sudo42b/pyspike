@@ -1,7 +1,7 @@
 import os
 import sys
 from typing import Any, List
-import torch
+import numpy as np
 
 from riscv import isa
 from riscv.csrs import csr_t
@@ -71,14 +71,14 @@ class GtxNpu(isa.ROCC):
         self.nspr = RegisterFile(NSPR, shape=(NEST_NUM, 1024), device=DEVICE)
         self.lspr = RegisterFile(LSPR, shape=(NEST_NUM, SPU_NUM, 1024), device=DEVICE)
 
-        self._mxe_accum: torch.Tensor = torch.zeros(
-            (NEST_NUM, SPU_NUM), dtype=torch.float32,
+        self._mxe_accum: np.ndarray = np.zeros(
+            (NEST_NUM, SPU_NUM), dtype=np.float32,
             device=DEVICE)
-        self._credit_ld: torch.Tensor = torch.zeros(
-            (NEST_NUM, SPU_NUM), dtype=torch.int32,
+        self._credit_ld: np.ndarray = np.zeros(
+            (NEST_NUM, SPU_NUM), dtype=np.int32,
             device=DEVICE)
-        self._credit_st: torch.Tensor = torch.zeros(
-            (NEST_NUM, SPU_NUM), dtype=torch.int32,
+        self._credit_st: np.ndarray = np.zeros(
+            (NEST_NUM, SPU_NUM), dtype=np.int32,
             device=DEVICE)
 
         self._disasm_entries: List[disasm_insn_t] = []
@@ -218,7 +218,7 @@ class GtxNpu(isa.ROCC):
             return
         from .config_params import L2_SIZE_BYTES
         for req in self.deferred_ddr_stores:
-            l2_src = self.mem.l2_byte(req.nest).cpu()
+            l2_src = self.mem.l2_byte(req.nest)
             if _dbg:
                 _samp = l2_src[req.l2_off:req.l2_off + 8].tolist()
                 print(f"[FLUSH] nest={req.nest} l2_off={req.l2_off:#x} "

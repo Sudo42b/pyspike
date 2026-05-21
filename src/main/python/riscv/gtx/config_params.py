@@ -1,4 +1,4 @@
-import torch
+import numpy as np
 
 # =========================================================================
 # Vendor reset defaults — sourced from gtx_npu_core.cc:80-109.
@@ -17,7 +17,8 @@ _GSPR_RESET_DEFAULTS = {
     0x011: 0,   # STACK_SAVE
 }
 
-DEVICE: torch.device = torch.device("cpu")
+# NumPy backend is CPU-only; DEVICE kept as a sentinel for call-site compat.
+DEVICE: str = "cpu"
 
 
 # NEST x SPU topology
@@ -40,17 +41,17 @@ L2_SIZE_BYTES: int = 16 * 1024 * 1024          # 16 MB per NEST
 # MX numeric I/O width at the L1/L0 read/write boundaries. Internal compute is
 # always FP32; widening the I/O to FP32 removes the FP16-cast precision loss at
 # the boundaries (a deliberate divergence from vendor). Set MX_IO_DTYPE to
-# torch.float16 to restore vendor-exact FP16 I/O — every MX op routes its
+# np.float16 to restore vendor-exact FP16 I/O — every MX op routes its
 # operand decode / L1 / L0 / SVR access through these two constants.
-MX_IO_DTYPE: torch.dtype = torch.float32
-MX_IO_BYTES: int = torch.finfo(MX_IO_DTYPE).bits // 8
+MX_IO_DTYPE: type = np.float32
+MX_IO_BYTES: int = np.finfo(MX_IO_DTYPE).bits // 8
 
 # External numeric width in DDR/L2 (the interchange / golden format — vendor
 # FP16). The T-loop L2↔L1 DMA converts between this and MX_IO_DTYPE so on-chip
 # (L1/L0) data is the wider compute dtype while DDR I/O stays vendor-exact.
 # When MX_EXT_DTYPE == MX_IO_DTYPE the DMA degrades to a raw byte copy.
-MX_EXT_DTYPE: torch.dtype = torch.float16
-MX_EXT_BYTES: int = torch.finfo(MX_EXT_DTYPE).bits // 8
+MX_EXT_DTYPE: type = np.float16
+MX_EXT_BYTES: int = np.finfo(MX_EXT_DTYPE).bits // 8
 
 # DDR (D-02: capped by DDR_SIZE env var; default below)
 DDR_DEFAULT_SIZE_BYTES: int = 4 * 1024 * 1024 * 1024   # 4 GiB

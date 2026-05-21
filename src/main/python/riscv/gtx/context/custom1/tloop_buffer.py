@@ -14,7 +14,7 @@ At ``__end_thread`` (or any non-bufferable boundary), :func:`flush`
 replays each entry in order through the same handler the FSM would
 have resolved.
 
-Fusion (turning the replay loop into one bulk ``torch.abs`` over the
+Fusion (turning the replay loop into one bulk ``np.abs`` over the
 whole tile) is intentionally NOT done here — it lands in a follow-up
 once this layer is proven correctness-neutral against ABS/NEG/EXP
 regressions.
@@ -303,7 +303,7 @@ def _drain(npu: 'GtxNpu', buf) -> None:
 #                            L2[R_off+r*length]  # buffered
 #     [credit_st]  (only on r == N-1)            # buffered
 #
-# Each row is one Python ``torch.abs(view)``-class call, dominated by
+# Each row is one Python ``np.abs(view)``-class call, dominated by
 # PyTorch dispatch overhead. Detecting N identical-shape frames lets us
 # read the N-row L2 slab once, run the unary on the full ``(N, vec_size)``
 # tensor, and write the slab back — one torch op per kernel instead of
@@ -453,7 +453,7 @@ def _execute_fused(npu, frames) -> None:
     Anything else falls back to a per-frame :func:`_replay` so we never
     miscompile an unusual stride layout.
     """
-    import torch  # local to keep module import cycle-free at top level
+    import numpy as np  # local to keep module import cycle-free at top level
     from ..custom0.MX.vector import _apply_unary
     from ...config_params import (
         MX_IO_DTYPE, MX_IO_BYTES, MX_EXT_DTYPE, MX_EXT_BYTES)
@@ -525,8 +525,8 @@ def _execute_fused(npu, frames) -> None:
     src_io = (
         l2[src_base:src_base + total_bytes]
         .view(MX_EXT_DTYPE)
-        .view(n, vec_size)
-        .to(MX_IO_DTYPE)
+        .reshape(n, vec_size)
+        .astype(MX_IO_DTYPE)
     )
 
     # One torch op for all rows — pyTorch dispatch cost is amortised
@@ -535,15 +535,15 @@ def _execute_fused(npu, frames) -> None:
 
     # Write N rows back to L2 dst slab, narrowing io→ext (mirrors store).
     dst_view = l2[dst_base:dst_base + total_bytes]
-    dst_view.copy_(result_io.to(MX_EXT_DTYPE).reshape(-1).view(torch.uint8))
+    dst_view[...] = result_io.astype(MX_EXT_DTYPE).reshape(-1).view(np.uint8)
 
     # Maintain L1 invariant: the non-fused path leaves the LAST row's input
     # at ``BANK_A`` and output at ``BANK_R`` — both in the L1 IO dtype
     # (vec_size * MX_IO_BYTES per row), matching the eager load/abs writes.
     l1 = npu.mem.l1_byte(nest, spu)
     io_row = vec_size * MX_IO_BYTES
-    l1[l_lo:l_lo + io_row].copy_(src_io[-1].view(torch.uint8))
-    l1[s_lo:s_lo + io_row].copy_(result_io[-1].view(torch.uint8))
+    l1[l_lo:l_lo + io_row][...] = src_io[-1].view(np.uint8)
+    l1[s_lo:s_lo + io_row][...] = result_io[-1].view(np.uint8)
 
     # Credit counters are independent state — replay only the entries
     # firmware actually emitted (last iter for __load_cr / __store_cr).

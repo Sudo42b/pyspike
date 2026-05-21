@@ -1,60 +1,62 @@
 from __future__ import annotations
 
-import torch
+import numpy as np
 
 from ...inst_handler import inst_register
+from ....config_params import MX_IO_DTYPE
 from ....csr import GSPR, LSPR, NSPR
 from ... import _resolve_nest_spu
-from . import _BYTES_PER_ELEM, _CVT_DTYPE_IN, _fp16_low16, _fp16_high16
-# ----- format_cvt @handlers (7 directions including FP64) -------------------
-# Direction is selected by ``GSPR_OPCODE & 1`` per gtx_npu_act.cc:245.
+from . import _BYTES_PER_ELEM, _CVT_DTYPE_IN, _io_low, _io_high
 
-@inst_register.custom0(name='scvt.qh', funct7=0b0100000, funct3=0)
-def _scvt_qh(npu, proc, inst, cxt) -> int:
-    # scvt.qh	4'b0100	3'b000	gpr	gpr	3'b000	rsvd	gtx op	yes	yes	spu	3	N/A	vector_size[23:0]	scale[15:0], offset[31:16]	N/A	r2_sel[8:0]	N/A	N/A	format conversion fp16 to fp8	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+# ----- format_cvt handlers --------------------------------------------------
+# scvt.* convert between the MX native float ('io' = MX_IO_DTYPE: FP32 default /
+# FP16 toggle) and an explicit format (FP8 / FP16 / INT8 / INT32). Within a
+# bidirectional slot the direction is GSPR_OPCODE & 1. scale[31:0]/offset[63:32]
+# in OPERAND2 (width config-gated via _io_low/_io_high). fcvt.* below stay the
+# unscaled FP16<->FP32 / FP16<->FP64 register conversions (NSU path).
+
+@inst_register.custom0(name='scvt.qs', funct7=0b0100000, funct3=0)
+def _scvt_qs(npu, proc, inst, cxt) -> int:
+    """native(MX_IO) <-> FP8 (default native->fp8; OPCODE&1 -> fp8->native)."""
     sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
-        return _format(npu, proc, inst,
-                                src_kind='fp8', dst_kind='fp16')
-    return _format(npu, proc, inst,
-                            src_kind='fp16', dst_kind='fp8')
+        return _format(npu, proc, inst, src_kind='fp8', dst_kind='io')
+    return _format(npu, proc, inst, src_kind='io', dst_kind='fp8')
 
-# scvt.hq	4'b0100	3'b000	gpr	gpr	3'b001	rsvd	gtx op	yes	yes	spu	3	N/A	vector_size[23:0]	scale[15:0], offset[31:16]	N/A	r2_sel[8:0]	N/A	N/A	format conversion fp8 to fp16	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-@inst_register.custom0(name='scvt.hq', funct7=0b0100000, funct3=1)
-def _scvt_hq(npu, proc, inst, cxt) -> int:
+
+@inst_register.custom0(name='scvt.hs', funct7=0b0100000, funct3=1)
+def _scvt_hs(npu, proc, inst, cxt) -> int:
+    """native(MX_IO) <-> FP16 (default native->fp16; OPCODE&1 -> fp16->native)."""
     sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
-        return _format(npu, proc, inst,
-                                src_kind='fp8', dst_kind='fp16')
-    return _format(npu, proc, inst,
-                            src_kind='fp16', dst_kind='fp8')
+        return _format(npu, proc, inst, src_kind='fp16', dst_kind='io')
+    return _format(npu, proc, inst, src_kind='io', dst_kind='fp16')
 
-@inst_register.custom0(name='scvt.ih', funct7=0b0100001, funct3=0)
-def _scvt_ih(npu, proc, inst, cxt) -> int:
-    # scvt.ih	4'b0100	3'b001	gpr	gpr	3'b000	rsvd	gtx op	yes	yes	spu	3	N/A	vector_size[23:0]	scale[15:0], offset[31:16]	N/A	r2_sel[8:0]	N/A	N/A	format conversion fp16 to int8	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+
+@inst_register.custom0(name='scvt.is', funct7=0b0100001, funct3=0)
+def _scvt_is(npu, proc, inst, cxt) -> int:
+    """native(MX_IO) <-> INT8 (default native->int8; OPCODE&1 -> int8->native)."""
     sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
-        return _format(npu, proc, inst,
-                                src_kind='int8', dst_kind='fp16')
-    return _format(npu, proc, inst,
-                            src_kind='fp16', dst_kind='int8')
+        return _format(npu, proc, inst, src_kind='int8', dst_kind='io')
+    return _format(npu, proc, inst, src_kind='io', dst_kind='int8')
 
-@inst_register.custom0(name='scvt.hi', funct7=0b0100001, funct3=1)
-def _scvt_hi(npu, proc, inst, cxt) -> int:
-    # scvt.hi	4'b0100	3'b001	gpr	gpr	3'b001	rsvd	gtx op	yes	yes	spu	3	N/A	vector_size[23:0]	scale[15:0], offset[31:16]	N/A	r2_sel[8:0]	N/A	N/A	format conversion fp16 to int8	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    return 0
 
-@inst_register.custom0(name='scvt.hn', funct7=0b0100010, funct3=1)
-def _scvt_hn(npu, proc, inst, cxt) -> int:
-    # scvt.hn	4'b0100	3'b010	gpr	gpr	3'b001	rsvd	gtx op	yes	yes	spu	3	N/A	vector_size[23:0]	scale[15:0], offset[31:16]	N/A	r2_sel[8:0]	N/A	N/A	format conversion int32 to fp16	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
-    return _format(npu, proc, inst,
-                            src_kind='int32', dst_kind='fp16')
+@inst_register.custom0(name='scvt.si', funct7=0b0100001, funct3=1)
+def _scvt_si(npu, proc, inst, cxt) -> int:
+    """INT8 -> native(MX_IO)."""
+    return _format(npu, proc, inst, src_kind='int8', dst_kind='io')
+
+
+@inst_register.custom0(name='scvt.sn', funct7=0b0100010, funct3=1)
+def _scvt_sn(npu, proc, inst, cxt) -> int:
+    """INT32 -> native(MX_IO)."""
+    return _format(npu, proc, inst, src_kind='int32', dst_kind='io')
 
 
 @inst_register.custom0(name='fcvt.sh', funct7=0b0100100, funct3=0)
 def _fcvt_sh(npu, proc, inst, cxt) -> int:
-    # fcvt.sh	4'b0100	3'b100	rsvd	gpr	3'b000	gpr	gtx op	yes	no	nsu	1	N/A	input data[63:0]	N/A	N/A	N/A	result data[63:0]	N/A	format conversion fp16 to fp32	-
+    # fcvt.sh: unscaled FP16<->FP32 register conversion (direction by OPCODE&1).
     sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
         return _format(npu, proc, inst,
@@ -64,13 +66,13 @@ def _fcvt_sh(npu, proc, inst, cxt) -> int:
 
 @inst_register.custom0(name='fcvt.hs', funct7=0b0100100, funct3=1)
 def _fcvt_hs(npu, proc, inst, cxt) -> int:
-    # fcvt.hs	4'b0100	3'b100	rsvd	gpr	3'b001	gpr	gtx op	yes	no	nsu	1	N/A	input data[63:0]	N/A	N/A	N/A	result data[63:0]	N/A	format conversion fp32 to fp16	-
+    # fcvt.hs: unscaled FP32->FP16 register conversion.
     sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     return 0
 
 @inst_register.custom0(name='fcvt.dh', funct7=0b0100101, funct3=0)
 def _fcvt_dh(npu, proc, inst, cxt) -> int:
-    # fcvt.dh	4'b0100	3'b101	rsvd	gpr	3'b000	gpr	gtx op	yes	no	nsu	1	N/A	input data[63:0]	N/A	N/A	N/A	result data[63:0]	N/A	format conversion fp16 to fp64	-
+    # fcvt.dh: FP16<->FP64 register conversion (direction by OPCODE&1).
     sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     if sub_op & 1:
         return _format(npu, proc, inst,
@@ -81,13 +83,18 @@ def _fcvt_dh(npu, proc, inst, cxt) -> int:
 
 @inst_register.custom0(name='fcvt.hd', funct7=0b0100101, funct3=1)
 def _fcvt_hd(npu, proc, inst, cxt) -> int:
-    # fcvt.hd	4'b0100	3'b101	rsvd	gpr	3'b001	gpr	gtx op	yes	no	nsu	1	N/A	input data[63:0]	N/A	N/A	N/A	result data[63:0]	N/A	format conversion fp64 to fp16	-
+    # fcvt.hd: FP64->FP16 register conversion.
     sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
     return 0
 
 
 def _format(npu, proc, inst, *, src_kind: str, dst_kind: str) -> int:
-    """Direct port of ``gtx_npu_act.cc:222-372`` (``exec_format_cvt``)."""
+    """Direct port of ``gtx_npu_act.cc:222-372`` (``exec_format_cvt``).
+
+    ``'io'`` resolves to the MX native float (``MX_IO_DTYPE``) for both byte
+    width and dtype, so the native side of every scaled conversion tracks the
+    config toggle.
+    """
     nest, spu = _resolve_nest_spu(npu)
 
     length = int(proc.state.XPR[inst.rs1]) & 0xFFFF
@@ -95,27 +102,28 @@ def _format(npu, proc, inst, *, src_kind: str, dst_kind: str) -> int:
         length = 0x10000
 
     op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
-    scale = _fp16_low16(op2)
-    offset = _fp16_high16(op2)
+    # scale/offset widen with MX_IO_DTYPE: FP16 [15:0]/[31:16], FP32 [31:0]/[63:32].
+    scale = _io_low(op2)
+    offset = _io_high(op2)
 
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
 
     l1 = npu.mem.l1_byte(nest, spu)
     in_size = length * _BYTES_PER_ELEM[src_kind]
-    in_bytes = l1[addr_a:addr_a + in_size].clone().contiguous()
+    in_bytes = l1[addr_a:addr_a + in_size].copy().copy()
     in_arr = in_bytes.view(_CVT_DTYPE_IN[src_kind])
 
-    if src_kind == 'fp16' and dst_kind == 'fp8':
-        out_arr = cvt_qh(in_arr, scale, offset)
-    elif src_kind == 'fp8' and dst_kind == 'fp16':
-        out_arr = cvt_hq(in_arr, scale, offset)
-    elif src_kind == 'fp16' and dst_kind == 'int8':
-        out_arr = cvt_ih(in_arr, scale, offset)
-    elif src_kind == 'int8' and dst_kind == 'fp16':
-        out_arr = cvt_hi(in_arr, scale, offset)
-    elif src_kind == 'int32' and dst_kind == 'fp16':
-        out_arr = cvt_hn(in_arr, scale, offset)
+    # scaled native(io) <-> {fp8, fp16, int8, int32}
+    if src_kind == 'io' and dst_kind == 'fp8':
+        out_arr = cvt_io_fp8(in_arr, scale, offset)
+    elif src_kind == 'io' and dst_kind == 'fp16':
+        out_arr = cvt_io_fp16(in_arr, scale, offset)
+    elif src_kind == 'io' and dst_kind == 'int8':
+        out_arr = cvt_io_int8(in_arr, scale, offset)
+    elif dst_kind == 'io':                       # fp8/fp16/int8/int32 -> native
+        out_arr = cvt_to_io(in_arr, scale, offset)
+    # unscaled fcvt register conversions
     elif src_kind == 'fp32' and dst_kind == 'fp16':
         out_arr = cvt_sh(in_arr)
     elif src_kind == 'fp16' and dst_kind == 'fp32':
@@ -127,14 +135,14 @@ def _format(npu, proc, inst, *, src_kind: str, dst_kind: str) -> int:
     else:
         return 0
 
-    out_bytes = out_arr.contiguous().view(torch.uint8)
-    l1[addr_r:addr_r + out_bytes.numel()] = out_bytes
+    out_bytes = out_arr.copy().view(np.uint8)
+    l1[addr_r:addr_r + out_bytes.size] = out_bytes
     return 0
 
 # =============================================================================
 # 1. LUT builders + module-level tables
 # =============================================================================
-def fp8_to_fp16_lut() -> torch.Tensor:
+def fp8_to_fp16_lut() -> np.ndarray:
     vals: list[float] = []
     for h in range(256):
         h_sign = (h & 0x80) >> 7
@@ -149,14 +157,14 @@ def fp8_to_fp16_lut() -> torch.Tensor:
         if h_sign and not (val != val):   # x != x is NaN-safe
             val = -val
         vals.append(val)
-    out = torch.tensor(vals, dtype=torch.float16)
+    out = np.array(vals, dtype=np.float16)
     # Preserve negative-zero bit pattern for h=0x80 (sign=1, exp=0, frac=0).
-    out[0x80] = torch.tensor(-0.0, dtype=torch.float16)
+    out[0x80] = np.array(-0.0, dtype=np.float16)
     return out
 
 
-def fp16_to_fp8_lut() -> torch.Tensor:
-    out = torch.zeros(65536, dtype=torch.uint8)
+def fp16_to_fp8_lut() -> np.ndarray:
+    out = np.zeros(65536, dtype=np.uint8)
     for h in range(65536):
         h_sign = (h >> 15) & 0x1
         h_exp = (h >> 10) & 0x1F
@@ -208,69 +216,63 @@ def fp16_to_fp8_lut() -> torch.Tensor:
 # =============================================================================
 # 2. Format-conversion kernels
 # =============================================================================
-def fp8_e4m3_to_fp16(t_e4m3: torch.Tensor) -> torch.Tensor:
-    return t_e4m3.to(torch.float16)
+def fp8_e4m3_to_fp16(t_e4m3: np.ndarray) -> np.ndarray:
+    return t_e4m3.astype(np.float16)
 
 
-def fp16_to_fp8_e4m3(t_fp16: torch.Tensor) -> torch.Tensor:
-    return t_fp16.to(torch.float8_e4m3fn)
+def fp16_to_fp8_e4m3(t_fp16: np.ndarray) -> np.ndarray:
+    raise NotImplementedError(
+        "fp8 e4m3 encode unsupported on NumPy backend (no native float8) — "
+        "add a manual bit encoder if a kernel needs it")
 
 
-def cvt_qh(arr_f16: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
-    """FP16 -> FP8. ``a = a * scale + offset``."""
-    a_f32 = arr_f16.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (a_f32 * s_f32 + o_f32).to(torch.float8_e4m3fn)
+# ----- native(MX_IO_DTYPE) <-> explicit format, scaled (out = a*scale + offset) -
+def cvt_to_io(arr: np.ndarray, scale, offset) -> np.ndarray:
+    """{FP8, FP16, INT8, INT32} -> native MX_IO_DTYPE."""
+    a = arr.astype(np.float32)
+    s = np.asarray(scale, dtype=np.float32)
+    o = np.asarray(offset, dtype=np.float32)
+    return (a * s + o).astype(MX_IO_DTYPE)
 
 
-def cvt_hq(arr_f8: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
-    """FP8 -> FP16. ``out = decoded * scale + offset``."""
-    arr_f32 = arr_f8.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (arr_f32.to(torch.float16) * s_f32 + o_f32).to(torch.float16)
+def cvt_io_fp8(arr: np.ndarray, scale, offset) -> np.ndarray:
+    """native -> FP8 (e4m3)."""
+    raise NotImplementedError(
+        "fp8 e4m3 encode unsupported on NumPy backend (no native float8)")
 
 
-def cvt_ih(arr_f16: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
-    """FP16 -> INT8 saturating in [-128, 127]. ``gtx_npu_act.cc:288-297``."""
-    a_f32 = arr_f16.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return torch.clamp(torch.round(a_f32 * s_f32 + o_f32), -128, 127).to(torch.int8)
+def cvt_io_fp16(arr: np.ndarray, scale, offset) -> np.ndarray:
+    """native -> FP16."""
+    a = arr.astype(np.float32)
+    s = np.asarray(scale, dtype=np.float32)
+    o = np.asarray(offset, dtype=np.float32)
+    return (a * s + o).astype(np.float16)
 
 
-def cvt_hi(arr_f16: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
-    """INT8 -> FP16. ``out = int8 * scale + offset``."""
-    arr_f32 = arr_f16.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (arr_f32 * s_f32 + o_f32).to(torch.float16)
+def cvt_io_int8(arr: np.ndarray, scale, offset) -> np.ndarray:
+    """native -> INT8 saturating in [-128, 127]."""
+    a = arr.astype(np.float32)
+    s = np.asarray(scale, dtype=np.float32)
+    o = np.asarray(offset, dtype=np.float32)
+    return np.clip(np.round(a * s + o), -128, 127).astype(np.int8)
 
 
-def cvt_hn(arr_i32: torch.Tensor, scale: float, offset: float) -> torch.Tensor:
-    """INT32 -> FP16 normalize. ``gtx_npu_act.cc:301-313``."""
-    arr_f32 = arr_i32.to(torch.float32)
-    s_f32 = torch.as_tensor(scale, dtype=torch.float32)
-    o_f32 = torch.as_tensor(offset, dtype=torch.float32)
-    return (arr_f32 * s_f32 + o_f32).to(torch.float16)
-
-
-def cvt_sh(arr_f32: torch.Tensor) -> torch.Tensor:
+# ----- unscaled fcvt register conversions -----------------------------------
+def cvt_sh(arr_f32: np.ndarray) -> np.ndarray:
     """FP32 -> FP16 (bit-pattern preserving)."""
-    return arr_f32.to(torch.float16)
+    return arr_f32.astype(np.float16)
 
 
-def cvt_hs(arr_f16: torch.Tensor) -> torch.Tensor:
+def cvt_hs(arr_f16: np.ndarray) -> np.ndarray:
     """FP16 -> FP32 (bit-pattern preserving)."""
-    return arr_f16.to(torch.float32)
+    return arr_f16.astype(np.float32)
 
 
-def cvt_dh(arr_f64: torch.Tensor) -> torch.Tensor:
+def cvt_dh(arr_f64: np.ndarray) -> np.ndarray:
     """FP64 -> FP16 (single rounding)."""
-    return arr_f64.to(torch.float16)
+    return arr_f64.astype(np.float16)
 
 
-def cvt_hd(arr_f16: torch.Tensor) -> torch.Tensor:
+def cvt_hd(arr_f16: np.ndarray) -> np.ndarray:
     """FP16 -> FP64 (bit-exact widening)."""
-    return arr_f16.to(torch.float64)
+    return arr_f16.astype(np.float64)

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import torch
+import numpy as np
 
 from ...inst_handler import inst_register
 from ....config_params import DDR_BASE, NEST_NUM, SPU_NUM
 from ....csr import GSPR, LSPR
 from ....memory import GtxMemory
 from ..DL.dma import _select_nest, _select_spu
-from ..DL.dma_imp import ensure_ddr
 
 # ============================================================================
 # transpose -- direct port of gtx_npu_dma.cc:143-167
@@ -17,7 +16,7 @@ def transpose(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
     """In-place L1 matrix transpose (FP16, 2 bytes per elem).
 
     Invariants (asserted): src and dst FP16 windows both fit within L1
-    without wrap. ``.contiguous()`` clones the transposed view, so
+    without wrap. ``.copy()`` clones the transposed view, so
     ``src == dst`` (in-place transpose) is safe. ``rows == 1`` or
     ``cols == 1`` is a degenerate transpose that still costs one
     contiguous copy — no special case needed.
@@ -26,7 +25,7 @@ def transpose(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
     assert spu_id < SPU_NUM, f"spu_id {spu_id} >= SPU_NUM {SPU_NUM}"
     assert rows > 0 and cols > 0, f"rows {rows} or cols {cols} is 0"
 
-    l1_f16 = mem.l1_byte(nest_id, spu_id).view(torch.float16)
+    l1_f16 = mem.l1_byte(nest_id, spu_id).view(np.float16)
     nelem_total = l1_f16.shape[0]
     nelem = rows * cols
     a_h = (addr_a // 2) % nelem_total
@@ -41,8 +40,8 @@ def transpose(mem: 'GtxMemory', *, nest_id: int, spu_id: int,
         f"{nelem_total} — firmware bug"
     )
 
-    src_view = l1_f16[a_h:a_h + nelem].view(rows, cols)
-    l1_f16[r_h:r_h + nelem] = src_view.t().contiguous().view(-1)
+    src_view = l1_f16[a_h:a_h + nelem].reshape(rows, cols)
+    l1_f16[r_h:r_h + nelem] = src_view.T.copy().reshape(-1)
     return 0
 
 
@@ -61,7 +60,7 @@ def transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
     Axis mapping: src axis k holds ``dim_(2-k)`` (axis 0 = dim2, axis
     1 = dim1, axis 2 = dim0). The output shape is
     ``(old_dims[p2], old_dims[p1], old_dims[p0])`` → ``torch.permute(
-    2 - p2, 2 - p1, 2 - p0)``. ``.contiguous()`` flattens row-major,
+    2 - p2, 2 - p1, 2 - p0)``. ``.copy()`` flattens row-major,
     matching the vendor ``dst_idx = oi[p2]*new_s2 + oi[p1]*new_s1 +
     oi[p0]``.
     """
@@ -74,7 +73,7 @@ def transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
 
     nelem = dim2 * dim1 * dim0
     max_off = max(src_off + nelem * 2, dst_off + nelem * 2)
-    ensure_ddr(mem, max_off)
+    mem.ensure_ddr(max_off)
     cap = mem.ddr.capacity()
 
     assert src_off + nelem * 2 <= cap, (
@@ -87,9 +86,9 @@ def transpose_ddr(mem: 'GtxMemory', *, src_addr: int, dst_addr: int,
     )
 
     src_span = mem.ddr.read(src_off, nelem * 2)
-    src_3d = src_span.view(torch.float16).reshape(dim2, dim1, dim0)
-    permuted = src_3d.permute(2 - p2, 2 - p1, 2 - p0).contiguous()
-    mem.ddr.write(dst_off, permuted.view(torch.uint8).reshape(-1))
+    src_3d = src_span.view(np.float16).reshape(dim2, dim1, dim0)
+    permuted = src_3d.transpose(2 - p2, 2 - p1, 2 - p0).copy()
+    mem.ddr.write(dst_off, permuted.view(np.uint8).reshape(-1))
 
 # ============================================================================
 # tpose / fill (funct7=0x38 / 0x39)
@@ -135,7 +134,7 @@ def _fill(npu, proc, inst, cxt) -> int:
         f"invalid nest_id {nest_id} or spu_id {spu_id}"
     )
 
-    l1_u16 = npu.mem.l1_byte(nest_id, spu_id).view(torch.uint16)
+    l1_u16 = npu.mem.l1_byte(nest_id, spu_id).view(np.uint16)
     nelem = l1_u16.shape[0]
     r_off = (addr_r // 2) % nelem
     fill = fill_val & 0xFFFF

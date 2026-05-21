@@ -18,4 +18,9 @@ from . import npu
 from . import devices  # noqa: F401  — registers the sifive_exit MMIO device
 from .npu import GtxNpu
 
+import os as _os
+if _os.environ.get("GTX_PROF"):
+    from . import _prof
+    _prof.install()
+
 __all__ = ["config_params", "memory", "npu", "devices", "GtxNpu"]

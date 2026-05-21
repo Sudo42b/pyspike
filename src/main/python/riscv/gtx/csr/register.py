@@ -92,7 +92,7 @@ class Register:
     """A single CSR definition (Stateless Schema).
 
     This class no longer holds live values. It acts as metadata for
-    RegisterFile to perform bit-field operations on a torch.Tensor.
+    RegisterFile to perform bit-field operations on a np.ndarray.
     """
 
     def __init__(self, name: str, address: int, width: int, rw_type: str,

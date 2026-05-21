@@ -5,11 +5,20 @@ Encoding (RoCC custom0 0x0b). funct7 = family, funct3 = variant:
   family   funct7   variant  funct3  result
   ──────   ──────   ───────  ──────  ────────────────────────────────────
   MM       0x00     mm.s     0       A@B  [+bias] → ADDRC, FP32
-                    mm.o     1       sum(A)       → L0 big-endian + mxe_accum
-                    mm       2       A@B  [+bias] → ADDRR, FP16
-                    mm.v     3       dot(A,B)     → L0 little-endian + mxe_accum
-                    mm.t     7       (A@B)^T      → ADDRR, FP16 (N×M)
+                    mm.o     1       sum(A)       → L0, FP32 + mxe_accum
+                    mm       2       A@B  [+bias] → ADDRR, FP16   ** DEPRECATED (soon) **
+                    mm.v     3       dot(A,B)     → L0, FP32 + mxe_accum
+                    mm.t     7       (A@B)^T      → ADDRR, FP32 (N×M)
+
+  ``.o`` / ``.v`` / ``.t`` results use the MX I/O width (FP32 by default) — a
+  deliberate divergence from vendor (which used FP16/INT32) to remove the
+  FP16-cast precision loss. Gated by config_params.MX_IO_DTYPE (flip to FP16
+  for vendor parity). ``.s`` is FP32→ADDRC in vendor too, so it is not gated.
   MMC      0x01     mmc.{s,o,..}     same, but accumulate (+ ADDRC bias / mxe prior)
+                    mmc      2       (the accumulate twin of ``mm``) ** DEPRECATED (soon) **
+
+NOTE: the plain ``mm`` / ``mmc`` GEMM variants (funct3=2) are slated for
+removal soon — prefer ``mm.s`` (FP32→ADDRC) / ``mm.t`` for new firmware.
 
 rs1 packs the dims: ``colB[63:48] | colA[31:16] | rowA[15:0]`` (0 ⇒ 0x10000).
 
@@ -35,11 +44,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
+import numpy as np
 
 from ...disasm import Custom0_Insn, inst_register
 from ...exec_st import CXT
-from ....config_params import L0_SIZE_BYTES
+from ... import operand3
+from ....config_params import L0_SIZE_BYTES, MX_IO_DTYPE, MX_IO_BYTES
 
 if TYPE_CHECKING:
     from ....npu import GtxNpu   # noqa: F401
@@ -84,26 +94,35 @@ def _mm_gemm(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
     a_hw = lspr.get('SPM_ADDRA', 0) // 2     # FP16 halfword offsets
     b_hw = lspr.get('SPM_ADDRB', 0) // 2
 
-    l1h = npu.mem.view(cxt, 'l1', ws, torch.float16)   # (*batch, HW)
+    l1h = npu.mem.view(cxt, 'l1', ws, np.float16)   # (*batch, HW)
     batch = l1h.shape[:-1]
-    A = l1h[..., a_hw:a_hw + M * K].reshape(*batch, M, K).to(torch.float32)
-    B = l1h[..., b_hw:b_hw + K * N].reshape(*batch, K, N).to(torch.float32)
+    A = l1h[..., a_hw:a_hw + M * K].reshape(*batch, M, K).astype(np.float32)
+    B = l1h[..., b_hw:b_hw + K * N].reshape(*batch, K, N).astype(np.float32)
     C = A @ B                                            # FP32 accumulate
 
     if accumulate:
         c_w = lspr.get('SPM_ADDRC', 0) // 4              # FP32 word offset
-        l1f = npu.mem.view(cxt, 'l1', ws, torch.float32)
+        l1f = npu.mem.view(cxt, 'l1', ws, np.float32)
         C = C + l1f[..., c_w:c_w + M * N].reshape(*batch, M, N)
 
-    if fp32_out:                                         # mm.s / mmc.s → ADDRC
+    if fp32_out:                                         # mm.s / mmc.s → ADDRC, FP32
         c_w = lspr.get('SPM_ADDRC', 0) // 4
-        l1f = npu.mem.view(cxt, 'l1', ws, torch.float32)
+        l1f = npu.mem.view(cxt, 'l1', ws, np.float32)
         l1f[..., c_w:c_w + M * N] = C.reshape(*batch, M * N)
         return 0
 
     out = C.transpose(-2, -1) if transposed else C       # mm.t → (N, M)
-    r_hw = lspr.get('SPM_ADDRR', 0) // 2
-    l1h[..., r_hw:r_hw + M * N] = out.reshape(*batch, M * N).to(torch.float16)
+    if transposed:                                       # mm.t / mmc.t → ADDRR
+        # Divergence from vendor (FP16): keep the transposed GEMM result in the
+        # MX I/O width (FP32 by default) to avoid the FP16-cast precision loss.
+        # Gated by config_params.MX_IO_DTYPE — flip to FP16 for vendor parity.
+        r_w = lspr.get('SPM_ADDRR', 0) // MX_IO_BYTES
+        l1io = npu.mem.view(cxt, 'l1', ws, MX_IO_DTYPE)
+        l1io[..., r_w:r_w + M * N] = out.reshape(*batch, M * N).astype(MX_IO_DTYPE)
+        return 0
+
+    r_hw = lspr.get('SPM_ADDRR', 0) // 2                  # mm / mmc (deprecated) → FP16
+    l1h[..., r_hw:r_hw + M * N] = out.reshape(*batch, M * N).astype(np.float16)
     return 0
 
 
@@ -119,34 +138,33 @@ def _mm_reduce(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
     lspr = npu.lspr[ws.current_nest][ws.current_spu]
     a_hw = lspr.get('SPM_ADDRA', 0) // 2
 
-    l1h = npu.mem.view(cxt, 'l1', ws, torch.float16)     # (*batch, HW)
-    A = l1h[..., a_hw:a_hw + vec].to(torch.float32)
+    l1h = npu.mem.view(cxt, 'l1', ws, np.float16)     # (*batch, HW)
+    A = l1h[..., a_hw:a_hw + vec].astype(np.float32)
     if is_dot:
         b_hw = lspr.get('SPM_ADDRB', 0) // 2
-        B = l1h[..., b_hw:b_hw + vec].to(torch.float32)
+        B = l1h[..., b_hw:b_hw + vec].astype(np.float32)
         red = (A * B).sum(dim=-1)                        # dot, FP32
     else:
         red = A.sum(dim=-1)                              # sum, FP32
 
     idx = _state_scope(cxt, ws)
     if accumulate:
-        red = red + npu._mxe_accum[idx].to(torch.float32)
+        red = red + npu._mxe_accum[idx].astype(np.float32)
     npu._mxe_accum[idx] = red.to(npu._mxe_accum.dtype)   # always update (Pitfall B)
 
-    # FP16 scalar → L0 slot; o = big-endian, v = little-endian (asymmetric).
-    slot = int(npu.gspr.get('GSPR_GTX_OPERAND3', 0)) & 0x1F
+    # Result → L0 slot in the MX I/O width (FP32 LE by default), rest of the
+    # 32 B reg zeroed. Divergence from vendor (which stored an FP16/INT32
+    # scalar): the FP16 output cast was the dominant precision-loss source.
+    # Gated by config_params.MX_IO_DTYPE — flip to FP16 for vendor parity.
+    slot = operand3(npu) & 0x1F                           # rs3 result SVR addr[4:0]
     off = (slot * 32) % L0_SIZE_BYTES
-    l0b = npu.mem.view(cxt, 'l0', ws, torch.uint8)       # (*batch, L0_BYTES)
-    l0b[..., off:off + 32] = 0
-    bits = red.to(torch.float16).contiguous().view(torch.int16).to(torch.int64) & 0xFFFF
-    hi = ((bits >> 8) & 0xFF).to(torch.uint8)
-    lo = (bits & 0xFF).to(torch.uint8)
-    if is_dot:                                           # little-endian (v)
-        l0b[..., off] = lo
-        l0b[..., off + 1] = hi
-    else:                                                # big-endian (o)
-        l0b[..., off] = hi
-        l0b[..., off + 1] = lo
+    l0b = npu.mem.view(cxt, 'l0', ws, np.uint8)       # (*batch, L0_BYTES)
+    l0b[..., off:off + 32] = 0                            # zero the 32 B reg
+    # Write the scalar straight through the MX_IO_DTYPE view — it aliases the
+    # same bytes as the uint8 view, so one batched element assignment replaces
+    # the per-byte Python loop (and stays correct across every CONTEXT scope).
+    l0io = npu.mem.view(cxt, 'l0', ws, MX_IO_DTYPE)
+    l0io[..., off // MX_IO_BYTES] = red.astype(MX_IO_DTYPE)
     return 0
 
 
@@ -169,6 +187,7 @@ def _mm_o(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
 
 @inst_register.custom0(name='mm', funct7=0b0000000, funct3=2)
 def _mm(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
+    """DEPRECATED (soon): plain FP16 GEMM → ADDRR. Prefer mm.s / mm.t."""
     if inst.rs1 == 0:
         return 0
     return _mm_gemm(npu, proc, inst, cxt, accumulate=False, transposed=False, fp32_out=False)
@@ -204,6 +223,7 @@ def _mmc_o(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
 
 @inst_register.custom0(name='mmc', funct7=0b0000001, funct3=2)
 def _mmc(npu, proc, inst: Custom0_Insn, cxt: CXT) -> int:
+    """DEPRECATED (soon): accumulate twin of ``mm``. Prefer mmc.s / mmc.t."""
     if inst.rs1 == 0:
         return 0
     return _mm_gemm(npu, proc, inst, cxt, accumulate=True, transposed=False, fp32_out=False)

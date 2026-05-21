@@ -68,12 +68,12 @@ def mcast_s2l(mem: 'GtxMemory', *, nest: int, l2_addr: int, l1_addr: int,
     src_end = l2_addr + (height - 1) * effective_stride + length
     assert src_end <= L2_SIZE_BYTES, "L2 src wraps — firmware bug"
     src_2d = l2[l2_addr:l2_addr + height * effective_stride] \
-        .view(height, effective_stride)[:, :length]
+        .reshape(height, effective_stride)[:, :length]
     l1_end = l1_addr + height * length
     assert l1_end <= L1_SIZE_BYTES, "L1 dst wraps — firmware bug"
     for s in range(SPU_NUM):
         if (target_spu_mask >> s) & 1:
-            mem.l1_byte(nest, s)[l1_addr:l1_end].view(height, length).copy_(src_2d)
+            mem.l1_byte(nest, s)[l1_addr:l1_end].reshape(height, length)[...] = src_2d
     return 0
 
 
@@ -91,13 +91,13 @@ def mcast_g2s(mem: 'GtxMemory', *, ddr_addr: int, l2_addr: int,
     max_off = ddr_off_base + (height - 1) * effective_stride + length
     mem.ensure_ddr(max_off)
     ddr_span = mem.ddr.read(ddr_off_base, max_off - ddr_off_base)
-    src_2d_cpu = ddr_span[:height * effective_stride].view(height, effective_stride)[:, :length]
+    src_2d_cpu = ddr_span[:height * effective_stride].reshape(height, effective_stride)[:, :length]
     l2_end = l2_addr + height * length
     assert l2_end <= L2_SIZE_BYTES, "L2 dst wraps — firmware bug"
     for k in range(NEST_NUM):
         if (target_nest_mask >> k) & 1:
             l2 = mem.l2_byte(k)
-            l2[l2_addr:l2_end].view(height, length).copy_(src_2d_cpu.to(l2.device))
+            l2[l2_addr:l2_end].reshape(height, length)[...] = src_2d_cpu
     return 0
 
 
@@ -121,7 +121,7 @@ def mcast_s2s(mem: 'GtxMemory', *, src_tmu: int, src_addr: int, dst_addr: int,
         for k in range(NEST_NUM):
             if (target_nest_mask >> k) & 1:
                 dst_l2 = mem.l2_byte(k)
-                dst_l2[d_off:d_off + copy_len].copy_(tmp.to(dst_l2.device))
+                dst_l2[d_off:d_off + copy_len][...] = tmp
     return 0
 
 
@@ -168,7 +168,7 @@ def copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw: int,
                 if d + copy_len > L2_SIZE_BYTES:
                     copy_len = max(0, L2_SIZE_BYTES - d)
                 if copy_len > 0:
-                    l2[d:d + copy_len].copy_(mem.ddr.read(s, copy_len).to(l2.device))
+                    l2[d:d + copy_len][...] = mem.ddr.read(s, copy_len)
         else:
             n = nest_id if nest_id < NEST_NUM else 0
             l2 = mem.l2_byte(n)
@@ -194,7 +194,7 @@ def copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw: int,
             if copy_len <= 0:
                 continue
             tmp = l2[s_off:s_off + copy_len].clone()
-            l2[d_off:d_off + copy_len].copy_(tmp)
+            l2[d_off:d_off + copy_len][...] = tmp
     return 0
 
 # ============================================================================

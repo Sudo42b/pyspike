@@ -1,4 +1,4 @@
-"""im2col handlers — port of gtx_npu_custom0.cc:696-805 (firmware IM2COL).
+"""im2col
 
 ISA encoding (RoCC custom0 0x0b). funct7 = family, funct3 = 0:
 
@@ -29,7 +29,7 @@ Vendor loop (gtx_npu_custom0.cc do_im2col):
 """
 from __future__ import annotations
 
-import torch
+import numpy as np
 
 from ...inst_handler import inst_register
 
@@ -88,59 +88,45 @@ def _im2col(npu, proc, inst, *, is_depthwise: bool) -> int:
     addr_a = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0))  # dst
     addr_r = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0))  # src
 
-    # Build the gather list of source halfword offsets in vendor loop order,
-    # then copy the 2-byte halfwords to consecutive dst offsets (t += 2).
-    src_hw: list[int] = []
+    # Gather-index build, vectorised. Each source halfword offset is
+    #   src = (row_A*col_A*i) + (col_A*j + k) + (dil*l*col_A + dil*m)
+    # emitted in the vendor's nested-loop order. Broadcasting over the loop
+    # axes and flattening row-major (last axis = m varies fastest) reproduces
+    # that order exactly — verified against the loop across stride/dilation/
+    # depthwise configs. j/k step by ``stride`` (out_h/out_w positions).
+    jj = np.arange(out_h, dtype=np.int64) * stride
+    kk = np.arange(out_w, dtype=np.int64) * stride
+    ii = np.arange(nch, dtype=np.int64)
+    ll = np.arange(ksz, dtype=np.int64)
+    mm = np.arange(ksz, dtype=np.int64)
+    chan = row_A * col_A * ii                                   # (nch,)
+    spat_j = col_A * jj                                         # (out_h,)
+    kern = dil * ll.view(ksz, 1) * col_A + dil * mm.view(1, ksz)  # (ksz, ksz)
     if not is_depthwise:
-        # IM2COL_N: output [out_h*out_w, nch * ksz²]
-        # Loop: (j,k) spatial → (i) channel → (l,m) kernel
-        j = 0
-        while (j + filt_sz) <= row_A:
-            k = 0
-            while (k + filt_sz) <= col_A:
-                for i in range(nch):
-                    for l in range(ksz):
-                        for m in range(ksz):
-                            src_hw.append(
-                                (row_A * col_A * i)
-                                + (col_A * j + k)
-                                + (dil * l * col_A + dil * m)
-                            )
-                k += stride
-            j += stride
+        # IM2COL_N order (j, k, i, l, m) → [out_h, out_w, nch, ksz, ksz].
+        idx = (chan.view(1, 1, nch, 1, 1)
+               + (spat_j.view(out_h, 1, 1, 1, 1) + kk.view(1, out_w, 1, 1, 1))
+               + kern.view(1, 1, 1, ksz, ksz))
     else:
-        # IM2COL_D: output [nch * out_h*out_w, ksz²]
-        # Loop: (i) channel → (j,k) spatial → (l,m) kernel
-        for i in range(nch):
-            j = 0
-            while (j + filt_sz) <= row_A:
-                k = 0
-                while (k + filt_sz) <= col_A:
-                    for l in range(ksz):
-                        for m in range(ksz):
-                            src_hw.append(
-                                (row_A * col_A * i)
-                                + (col_A * j + k)
-                                + (dil * l * col_A + dil * m)
-                            )
-                    k += stride
-                j += stride
-
-    if not src_hw:
-        return 0
+        # IM2COL_D order (i, j, k, l, m) → [nch, out_h, out_w, ksz, ksz].
+        idx = (chan.view(nch, 1, 1, 1, 1)
+               + (spat_j.view(1, out_h, 1, 1, 1) + kk.view(1, 1, out_w, 1, 1))
+               + kern.view(1, 1, 1, ksz, ksz))
 
     # src byte offset = addr_r + hw*2 ; dst byte offset = addr_a + t (t += 2).
-    src_idx = torch.tensor(src_hw, dtype=torch.int64)
+    src_idx = idx.reshape(-1)
+    if src_idx.size == 0:
+        return 0
     src_lo = (addr_r + src_idx * 2) % l1_len
     src_hi = (src_lo + 1) % l1_len
 
-    n = src_idx.numel()
-    dst_lo = (addr_a + torch.arange(n, dtype=torch.int64) * 2) % l1_len
+    n = src_idx.size
+    dst_lo = (addr_a + np.arange(n, dtype=np.int64) * 2) % l1_len
     dst_hi = (dst_lo + 1) % l1_len
 
     # Snapshot source bytes first (dst may overlap src for in-place layouts).
-    lo_vals = l1[src_lo].clone()
-    hi_vals = l1[src_hi].clone()
+    lo_vals = l1[src_lo].copy()
+    hi_vals = l1[src_hi].copy()
     l1[dst_lo] = lo_vals
     l1[dst_hi] = hi_vals
     return 0

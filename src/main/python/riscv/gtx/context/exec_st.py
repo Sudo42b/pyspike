@@ -67,7 +67,7 @@ _VALID_INSTRUCTIONS_MAP = {
         "sqrt.i", "exp.i", "ln.i", "abs.i", "neg.i",
         "sign.i", "step.i", "ceil.i", "trunc.i", "floor.i", "rne.i",
         "and.ii", "or.ii", "not.i", "shift.i",
-        "scvt.qh", "scvt.hq", "scvt.ih", "scvt.hi", "scvt.hn",
+        "scvt.qs", "scvt.hs", "scvt.is", "scvt.si", "scvt.sn",
         "fcvt.sh", "fcvt.hs", "fcvt.dh", "fcvt.hd",
         "prelu", "gelu", "tanh", "sigm",
         "prelu.i", "gelu.i", "tanh.i", "sigm.i",

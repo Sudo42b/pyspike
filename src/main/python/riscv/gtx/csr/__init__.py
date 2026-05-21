@@ -46,6 +46,7 @@ NSPR_END  = 0x7FF
 LSPR_BASE = 0x800
 LSPR_END  = 0xBFF
 
+
 # ---------------------------------------------------------------------------
 # PIPE-only views (RDSPR/WRSPR use the PIPE bus; APB is debug-side only)
 # ---------------------------------------------------------------------------

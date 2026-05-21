@@ -17,11 +17,46 @@ the Python atexit handlers explicitly and then ``os._exit``.
 """
 import atexit
 import os
-from typing import Optional
+
+import numpy as np
 
 from riscv import dev
 
+from .config_params import DEFAULT_DDR_SIZE
+
 _PGSIZE = 0x1000
+
+
+# ============================================================================
+# gtx_ddr — DDR as CPU-visible system memory on the Spike bus.
+#
+# The RISC-V CPU reaches DDR through the bus (load/store routed here); we proxy
+# to the process-wide DDR buffer (memory.get_ddr()) — the same bytes the NPU
+# uses — so CPU and NPU share one DDR. The buffer is Python-owned, so it
+# outlives the C++ sim teardown and the atexit DDR dump stays valid (a
+# C++-owned buffer use-after-frees there).
+#
+# CPU DDR access is sparse (firmware param reads / small result writes); bulk
+# DDR I/O is the NPU's, straight on the torch buffer — so the per-access Python
+# load/store cost here is negligible.
+#
+# Wiring:  pyspike ... --device=gtx_ddr,0x370000000
+# ============================================================================
+@dev.register("gtx_ddr", size=DEFAULT_DDR_SIZE)
+class GtxDdr(dev.MMIO):
+    """Bus window over the shared NPU DDR (offset-relative load/store)."""
+
+    def load(self, addr: int, size: int) -> bytes:
+        from .memory import get_ddr
+        ddr = get_ddr()
+        ddr.ensure(addr + size)
+        return np.ascontiguousarray(ddr.read(addr, size)).tobytes()
+
+    def store(self, addr: int, data: bytes) -> None:
+        from .memory import get_ddr
+        ddr = get_ddr()
+        ddr.ensure(addr + len(data))
+        ddr.write(addr, np.frombuffer(bytearray(data), dtype=np.uint8))
 
 
 @dev.register("sifive_exit", size=_PGSIZE)

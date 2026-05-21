@@ -1,7 +1,7 @@
 """RegisterFile — Tensor-backed SPR state with broadcasting.
 
 GtxNpu stores SPR state in `RegisterFile` instances. Each `RegisterFile`
-owns a `torch.Tensor` storage.
+owns a `np.ndarray` storage.
 
 Shapes:
     GSPR:  (1024,)
@@ -16,23 +16,26 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterator, Mapping, Optional, Union, Tuple
 
-import torch
+import numpy as np
 from . import BusType, Register, Field
 
 
+_ADDR_BY_NAME_CACHE: dict = {}   # id(defs) -> {name: addr&0x3FF}; shared across sub-views
+
+
 class RegisterFile:
-    """Live SPR state storage using torch.Tensor.
+    """Live SPR state storage using np.ndarray.
 
     Supports indexing to narrow down dimensions (e.g. lspr[nest][spu]).
     Attributes provide access to registers by name, returning a View
     that supports bit-field manipulation and broadcasting.
     """
 
-    def __init__(self, 
-                 defs: Mapping[str, Register], 
+    def __init__(self,
+                 defs: Mapping[str, Register],
                  shape: Tuple[int, ...] = (1024,),
                  device: str = "cpu",
-                 tensor: Optional[torch.Tensor] = None) -> None:
+                 tensor: Optional[np.ndarray] = None) -> None:
         self._defs = defs
         # last dim must be 1024 for address space
         if shape[-1] != 1024:
@@ -41,18 +44,26 @@ class RegisterFile:
         if tensor is not None:
             self._tensor = tensor
         else:
-            self._tensor = torch.zeros(shape, dtype=torch.int64, device=device)
+            self._tensor = np.zeros(shape, dtype=np.int64)
 
-        # Mapping for fast address lookup
-        self._addr_by_name = {
-            name: reg.address & 0x3FF
-            for name, reg in defs.items()
-            if reg.bus_type is BusType.PIPE
-        }
+        # Mapping for fast address lookup. Cached per ``defs`` object: every
+        # ``lspr[nest][spu]`` narrowing builds a fresh RegisterFile, and
+        # rebuilding this comprehension each time was the dominant per-handler
+        # cost (~95µs/call) — the defs are a shared module constant, so compute
+        # the map once and reuse it across all sub-views.
+        cache = _ADDR_BY_NAME_CACHE.get(id(defs))
+        if cache is None:
+            cache = {
+                name: reg.address & 0x3FF
+                for name, reg in defs.items()
+                if reg.bus_type is BusType.PIPE
+            }
+            _ADDR_BY_NAME_CACHE[id(defs)] = cache
+        self._addr_by_name = cache
 
     @property
-    def tensor(self) -> torch.Tensor:
-        """The underlying storage tensor."""
+    def tensor(self) -> np.ndarray:
+        """The underlying storage array."""
         return self._tensor
 
     @property
@@ -92,8 +103,10 @@ class RegisterFile:
         if name in self._addr_by_name:
             reg = self._defs[name]
             addr = self._addr_by_name[name]
-            # Return a view of this specific register across all dimensions
-            return RegisterView(reg, self._tensor[..., addr])
+            # Hold parent + addr (NOT self._tensor[..., addr]): numpy integer
+            # indexing returns a COPY, so the view must index on assignment to
+            # write back into the storage array.
+            return RegisterView(reg, self._tensor, addr)
 
         # Support for adjacent ranges like SGPR (e.g. lspr.SGPR)
         # If user asks for 'SGPR', and we have SGPR0..127, we could return a batch view.
@@ -115,7 +128,7 @@ class RegisterFile:
     # ----- Utility ---------------------------------------------------------
     def reset(self, defaults: Optional[Mapping[int, int]] = None) -> None:
         """Clear all values and optionally seed vendor defaults."""
-        self._tensor.zero_()
+        self._tensor.fill(0)
         if defaults:
             for addr, val in defaults.items():
                 self._tensor[..., addr & 0x3FF] = val
@@ -152,29 +165,31 @@ class RegisterView:
     Attributes provide access to bit fields.
     Setting a field broadcasts the value across all instances in this view.
     """
-    __slots__ = ("_reg", "_tensor")
+    __slots__ = ("_reg", "_parent", "_addr")
 
-    def __init__(self, reg: Register, tensor: torch.Tensor):
+    def __init__(self, reg: Register, parent: np.ndarray, addr: int):
         self._reg = reg
-        self._tensor = tensor  # Shape matches rf.dimensions (e.g. (), (N,), (N, S))
+        self._parent = parent   # storage array; shape (...,1024)
+        self._addr = addr       # last-dim offset of this register
 
-    def __getattr__(self, name: str) -> Union[int, torch.Tensor]:
+    def __getattr__(self, name: str) -> Union[int, np.ndarray]:
+        cur = self._parent[..., self._addr]
         if name == "value":
-            return self._tensor if self._tensor.ndim > 0 else int(self._tensor)
+            return cur if cur.ndim > 0 else int(cur)
         if name in self._reg.fields:
             field = self._reg.fields[name]
-            val = (self._tensor >> field.shift) & field.mask
-            return val if self._tensor.ndim > 0 else int(val)
-        
+            val = (cur >> field.shift) & field.mask
+            return val if val.ndim > 0 else int(val)
+
         raise AttributeError(f"Register {self._reg.name} has no field {name!r}")
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name.startswith("_"):
             super().__setattr__(name, value)
             return
-        
+
         if name == "value":
-            self._tensor.copy_(torch.as_tensor(value, dtype=torch.int64))
+            self._parent[..., self._addr] = value
             return
 
         if name in self._reg.fields:
@@ -184,46 +199,46 @@ class RegisterView:
 
             # Reinterpret the shifted mask as a signed int64 to avoid
             # Python's arbitrary-precision negative result from
-            # `~(mask << shift)` — torch cannot cast that back into
-            # int64 (OverflowError). See CONTEXT.md root_cause.
+            # `~(mask << shift)` — int64 cannot hold that (OverflowError).
             u64 = (mask << shift) & ((1 << 64) - 1)
             shifted_mask = u64 - (1 << 64) if u64 >> 63 else u64
 
             # Same signed-int64 wrap for `value` when it is a Python int
-            # with the top bit set (e.g. 0xCAFEBABEDEADBEEF) — torch
-            # rejects unsigned ≥ 2^63 in int64 dtype.
+            # with the top bit set (e.g. 0xCAFEBABEDEADBEEF).
             if isinstance(value, int):
                 v64 = value & ((1 << 64) - 1)
                 value = v64 - (1 << 64) if v64 >> 63 else v64
 
-            new_val = torch.as_tensor(value, dtype=torch.int64) & mask
-            self._tensor.copy_((self._tensor & ~shifted_mask) | (new_val << shift))
+            cur = self._parent[..., self._addr]
+            new_val = np.int64(value) & np.int64(mask)
+            self._parent[..., self._addr] = (
+                (cur & ~np.int64(shifted_mask)) | (new_val << np.int64(shift)))
             return
-        
+
         super().__setattr__(name, value)
 
     def __repr__(self) -> str:
-        return f"<RegisterView {self._reg.name} shape={tuple(self._tensor.shape)}>"
+        return f"<RegisterView {self._reg.name} shape={tuple(np.shape(self._parent[..., self._addr]))}>"
 
     def __int__(self) -> int:
-        if self._tensor.ndim > 0:
+        cur = self._parent[..., self._addr]
+        if cur.ndim > 0:
             raise TypeError("Cannot convert multi-dimensional RegisterView to int")
-        return int(self._tensor)
+        return int(cur)
 
-    # @overload
-    # def __getitem__(self, key: int) -> int: ...
     def __getitem__(self, key: Any) -> Any:
         # If it's a bit index
         if isinstance(key, int):
-            return int((self._tensor >> key) & 1)
+            return int((self._parent[..., self._addr] >> key) & 1)
         return getattr(self, key)
-    
+
     def __setitem__(self, key: Any, value: Any) -> None:
         if isinstance(key, int):
-            bit = 1 << key
+            bit = np.int64(1) << np.int64(key)
+            cur = self._parent[..., self._addr]
             if value:
-                self._tensor |= bit
+                self._parent[..., self._addr] = cur | bit
             else:
-                self._tensor &= ~bit
+                self._parent[..., self._addr] = cur & ~bit
             return
         setattr(self, key, value)

@@ -3,7 +3,7 @@ import abc
 import os
 from typing import Any, Optional
 
-import torch
+import numpy as np
 
 from .config_params import DDR_BASE, DEFAULT_DDR_SIZE, INITIAL_FLOOR
 
@@ -14,6 +14,7 @@ from .config_params import (
     NEST_NUM,
     SPU_NUM,
     DEVICE,
+    MX_IO_DTYPE,
 )
 from .context.exec_st import CXT
 
@@ -44,17 +45,17 @@ host↔device traffic confined to the DMA boundary.
 # to the full NEST × SPU topology so per-(NEST, SPU) buffers are views.
 # =============================================================================
 
-_L2_GLOBAL: torch.Tensor = torch.zeros(
+_L2_GLOBAL: np.ndarray = np.zeros(
     (NEST_NUM, L2_SIZE_BYTES),
-    dtype=torch.uint8, device=DEVICE,
+    dtype=np.uint8,
 )
-_L1_GLOBAL: torch.Tensor = torch.zeros(
+_L1_GLOBAL: np.ndarray = np.zeros(
     (NEST_NUM, SPU_NUM, L1_SIZE_BYTES),
-    dtype=torch.uint8, device=DEVICE,
+    dtype=np.uint8,
 )
-_L0_GLOBAL: torch.Tensor = torch.zeros(
+_L0_GLOBAL: np.ndarray = np.zeros(
     (NEST_NUM, SPU_NUM, L0_SIZE_BYTES),
-    dtype=torch.uint8, device=DEVICE,
+    dtype=np.uint8,
 )
 
 
@@ -77,7 +78,7 @@ class MEMORY(abc.ABC):
 # DDR — grow-on-demand backing store
 # =============================================================================
 
-_DDR_DEVICE = torch.device("cpu")
+_DDR_DEVICE = "cpu"
 
 
 class DDR_MEMORY(MEMORY):
@@ -98,8 +99,8 @@ class DDR_MEMORY(MEMORY):
     """
 
     def __init__(self, size: int = DEFAULT_DDR_SIZE) -> None:
-        self._bytes: Optional[torch.Tensor] = torch.zeros(
-            size, dtype=torch.uint8, device=_DDR_DEVICE,
+        self._bytes: Optional[np.ndarray] = np.zeros(
+            size, dtype=np.uint8,
         )
 
     @staticmethod
@@ -122,7 +123,7 @@ class DDR_MEMORY(MEMORY):
 
     def clear(self) -> None:
         if self._bytes is not None:
-            self._bytes.zero_()
+            self._bytes.fill(0)
 
     # --- DDR-specific lifecycle --------------------------------------------
     def free(self) -> None:
@@ -130,9 +131,9 @@ class DDR_MEMORY(MEMORY):
         self._bytes = None
 
     def capacity(self) -> int:
-        return self._bytes.numel() if self._bytes is not None else 0
+        return self._bytes.size if self._bytes is not None else 0
 
-    def ensure(self, end_offset: int) -> Optional[torch.Tensor]:
+    def ensure(self, end_offset: int) -> Optional[np.ndarray]:
         cap = self.maximum_ddr()
         if end_offset > cap:
             raise ValueError(
@@ -143,7 +144,7 @@ class DDR_MEMORY(MEMORY):
         if end_offset > current_size:
             new_size = max(end_offset, current_size * 2, INITIAL_FLOOR)
             new_size = min(new_size, cap)
-            new_arr = torch.zeros(new_size, dtype=torch.uint8, device=_DDR_DEVICE)
+            new_arr = np.zeros(new_size, dtype=np.uint8,)
             if self._bytes is not None:
                 new_arr[:current_size] = self._bytes
             self._bytes = new_arr
@@ -155,25 +156,36 @@ class DDR_MEMORY(MEMORY):
     # DMA boundary. ``write`` accepts either CPU or DEVICE input — a single
     # ``.cpu()`` is applied on cross-device input.
 
-    def read(self, addr: int, n: int) -> torch.Tensor:
+    def read(self, addr: int, n: int) -> np.ndarray:
         if self._bytes is None:
             raise RuntimeError("DDR not allocated — call ensure() first")
         return self._bytes[addr : addr + n]
 
-    def write(self, addr: int, data: torch.Tensor) -> None:
+    def write(self, addr: int, data: np.ndarray) -> None:
         if self._bytes is None:
             raise RuntimeError("DDR not allocated — call ensure() first")
-        if data.device != self._bytes.device:
-            data = data.to(self._bytes.device)
-        self._bytes[addr : addr + data.numel()] = data
+        self._bytes[addr : addr + data.size] = data
 
-    def view(self, dtype: torch.dtype = torch.uint8) -> torch.Tensor:
+    def view(self, dtype: type = np.uint8) -> np.ndarray:
         if self._bytes is None:
             raise RuntimeError("DDR not allocated — call ensure() first")
-        return self._bytes if dtype == torch.uint8 else self._bytes.view(dtype)
+        return self._bytes if dtype == np.uint8 else self._bytes.view(dtype)
 
-    def raw(self) -> Optional[torch.Tensor]:
+    def raw(self) -> Optional[np.ndarray]:
         return self._bytes
+
+
+# Process-wide DDR — RISC-V system DRAM is shared by the CPU (reached via the
+# gtx_ddr MMIO device, devices.py) and the NPU (GtxMemory). One Python-owned
+# buffer: it outlives the C++ sim teardown, so the atexit DDR dump is safe.
+_DDR_SINGLETON: Optional["DDR_MEMORY"] = None
+
+
+def get_ddr() -> "DDR_MEMORY":
+    global _DDR_SINGLETON
+    if _DDR_SINGLETON is None:
+        _DDR_SINGLETON = DDR_MEMORY()
+    return _DDR_SINGLETON
 
 
 # =============================================================================
@@ -187,83 +199,85 @@ class GtxMemory(MEMORY):
     def __init__(self) -> None:
         # Scratchpads share the module-level globals (single contiguous
         # tensor per level — see top of file).
-        self.l2: torch.Tensor = _L2_GLOBAL
-        self.l1: torch.Tensor = _L1_GLOBAL
-        self.l0: torch.Tensor = _L0_GLOBAL
-        self.ddr = DDR_MEMORY()
+        self.l2: np.ndarray = _L2_GLOBAL
+        self.l1: np.ndarray = _L1_GLOBAL
+        self.l0: np.ndarray = _L0_GLOBAL
+        # DDR is process-wide system memory: one shared instance so the CPU
+        # (via the gtx_ddr MMIO device) and the NPU see the same bytes.
+        self.ddr = get_ddr()
         self.spr: dict[int, int] = {}
-        # Pre-built per-(NEST, SPU) views — every ``l[012]_byte`` /
-        # ``l[012]_f16`` lookup pulled ~1.5M live slices on the abs
-        # regression alone (cProfile: ~13s in ``l1_byte``). Caching the
-        # slices once at construction collapses the hot path to a tensor
-        # index, and the f16 view caches reuse the same storage so the
-        # ``.view(torch.float16)`` cost is paid once.
-
-        # Storage must stay aliased to ``self.l[012]``: DMA writes through
-        # the byte view, vec ops write through the fp16 view, and
-        # ``clear()`` / ``reset_scratchpads()`` zero through ``self.l[012]``
-        # — all three paths need to land on the same backing bytes.
-        # ``torch.stack`` (copies the inputs) and ``.to(torch.float16)``
-        # (dtype cast, not reinterpret) both BREAK aliasing, so use the
-        # original tensors directly and ``.view(torch.float16)`` for the
-        # FP16 reinterpret (zero-copy, shared storage).
-        self._l0_views: torch.Tensor = self.l0
-        self._l1_views: torch.Tensor = self.l1
-        self._l2_views: torch.Tensor = self.l2
-        self._l0_f16_views: torch.Tensor = self.l0.view(torch.float16)
-        self._l1_f16_views: torch.Tensor = self.l1.view(torch.float16)
-        self._l2_f16_views: torch.Tensor = self.l2.view(torch.float16)
+        # Pre-built per-(NEST, SPU) views — every ``l[012]_byte`` / ``l[012]_io``
+        # lookup pulled ~1.5M live slices on the abs regression alone (cProfile:
+        # ~13s in ``l1_byte``). Caching the slices once at construction collapses
+        # the hot path to a tensor index; the io view cache reuses the same
+        # storage so the ``.view(MX_IO_DTYPE)`` cost is paid once.
+        #
+        # Storage must stay aliased to ``self.l[012]``: DMA writes through the
+        # byte view, MX ops write through the io view, and ``clear()`` /
+        # ``reset_scratchpads()`` zero through ``self.l[012]`` — all paths must
+        # land on the same backing bytes. ``.view(dtype)`` is a zero-copy
+        # reinterpret (shared storage); ``.to(dtype)`` / ``torch.stack`` copy and
+        # BREAK aliasing. (Arbitrary dtypes — e.g. FP16 GEMM operands — go
+        # through ``view()``'s generic ``.view(dtype)`` branch.)
+        self._l0_views: np.ndarray = self.l0
+        self._l1_views: np.ndarray = self.l1
+        self._l2_views: np.ndarray = self.l2
+        # MX_IO_DTYPE reinterpret (zero-copy) — the numeric I/O width for MX ops
+        # (FP32 default / FP16 toggle). Aliases the same bytes as the byte views.
+        self._l0_io_views: np.ndarray = self.l0.view(MX_IO_DTYPE)
+        self._l1_io_views: np.ndarray = self.l1.view(MX_IO_DTYPE)
+        self._l2_io_views: np.ndarray = self.l2.view(MX_IO_DTYPE)
 
     def getsize(self) -> int:
-        return (self.l0.numel() + self.l1.numel() + self.l2.numel()
+        return (self.l0.size + self.l1.size + self.l2.size
                 + self.ddr.getsize())
 
     def clear(self) -> None:
         """Zero everything (scratchpads + DDR). Keeps backing tensors."""
-        self.l0.zero_()
-        self.l1.zero_()
-        self.l2.zero_()
+        self.l0.fill(0)
+        self.l1.fill(0)
+        self.l2.fill(0)
         self.ddr.clear()
         self.spr.clear()
 
     def reset_scratchpads(self) -> None:
         """Zero scratchpads only — DDR is preserved (loaded firmware data
         must survive a hart reset). See ``GtxNpu.reset``."""
-        self.l0.zero_()
-        self.l1.zero_()
-        self.l2.zero_()
+        self.l0.fill(0)
+        self.l1.fill(0)
+        self.l2.fill(0)
 
     def free(self) -> None:
         """Release backing tensors. Currently only DDR has a release path."""
-        self.l0.zero_()
-        self.l1.zero_()
-        self.l2.zero_()
+        self.l0.fill(0)
+        self.l1.fill(0)
+        self.l2.fill(0)
         self.ddr.free()
         self.spr.clear()
 
     # ----- Raw byte views (D-10 low-level, kept for in-place strided ops) ---
 
-    def l0_byte(self, nest: int, spu: int) -> torch.Tensor:
+    def l0_byte(self, nest: int, spu: int) -> np.ndarray:
         return self._l0_views[nest, spu]
 
-    def l1_byte(self, nest: int, spu: int) -> torch.Tensor:
+    def l1_byte(self, nest: int, spu: int) -> np.ndarray:
         return self._l1_views[nest, spu]
 
-    def l2_byte(self, nest: int) -> torch.Tensor:
+    def l2_byte(self, nest: int) -> np.ndarray:
         return self._l2_views[nest]
 
-    # ----- Halfword fp16 views (D-10 named, D-12 view guarantee) -----
+    # ----- MX_IO_DTYPE views (numeric I/O width; FP32 default, FP16 toggle) ---
 
-    def l0_f16(self, nest: int, spu: int) -> torch.Tensor:
-        return self._l0_f16_views[nest, spu]
+    def l0_io(self, nest: int, spu: int) -> np.ndarray:
+        return self._l0_io_views[nest, spu]
 
-    def l1_f16(self, nest: int, spu: int) -> torch.Tensor:
-        return self._l1_f16_views[nest, spu]
+    def l1_io(self, nest: int, spu: int) -> np.ndarray:
+        return self._l1_io_views[nest, spu]
 
-    def l2_f16(self, nest: int) -> torch.Tensor:
-        return self._l2_f16_views[nest]
+    def l2_io(self, nest: int) -> np.ndarray:
+        return self._l2_io_views[nest]
 
-    def ensure_ddr(self, end_offset: int) -> Optional[torch.Tensor]:
+    def ensure_ddr(self, end_offset: int) -> Optional[np.ndarray]:
         return self.ddr.ensure(end_offset)
 
     def _ddr_offset(self, addr: int) -> int:
@@ -288,16 +302,13 @@ class GtxMemory(MEMORY):
                 chunk = bytes.fromhex(line[: nbytes * 2])
                 chunk = chunk[::-1]
                 self.ensure_ddr(offset + nbytes)
-                # torch.frombuffer requires writable buffer; bytes is read-only,
+                # np.frombuffer requires writable buffer; bytes is read-only,
                 # so go via bytearray (copy is cheap for 32-byte chunks).
                 # frombuffer is CPU-only -- transfer to the DDR tensor's device
                 # so the slice assignment works on GPU backends.
-                src = torch.frombuffer(bytearray(chunk), dtype=torch.uint8)
+                src = np.frombuffer(bytearray(chunk), dtype=np.uint8)
                 ddr_buf = self.ddr.raw()
                 assert ddr_buf is not None  # ensure() should have allocated it
-
-                if src.device != ddr_buf.device:
-                    src = src.to(ddr_buf.device)
                 self.ddr.write(offset, src)
                 offset += nbytes
 
@@ -316,7 +327,7 @@ class GtxMemory(MEMORY):
             start = max(off, 0)
             end = min(off + size, ddr_size)
             if start < end:
-                region = bytes(ddr_src[start:end].detach().cpu().contiguous().numpy())
+                region = np.ascontiguousarray(ddr_src[start:end]).tobytes()
             else:
                 region = b""
             pre = max(0 - off, 0)
@@ -371,48 +382,11 @@ class GtxMemory(MEMORY):
         self.ddr_save_to_hex(path, addr, size)
         return True
 
-# -------------------------------------------------------------------------
-    # Context-Aware Tensor View Dynamic Resolvers (Fancy Context Mapping)
     # -------------------------------------------------------------------------
-    
-    def get_active_load_view(self, cxt: CXT, warp_state: Any) -> torch.Tensor:
-        """현재 NPU CONTEXT 상태에 따라 로드해야 할 대상 메모리 텐서 뷰를 반환합니다.
-        
-        C1 -> DDR 혹은 L2 전체
-        C4 -> 특정 Nest 1개의 L2 뷰 (All SPU 대상 브로드캐스트 준비)
-        C2 -> 특정 Nest 1개의 L1 Shared 뷰
-        C3 -> 특정 Nest, 특정 SPU 1개의 L0 Private 뷰
-        """
-        if cxt == CXT.C3:
-            # Thread Inside: Target Nest + Target SPU의 L0 Private 매핑
-            return self._l0_views[warp_state.current_nest, warp_state.current_spu]
-            
-        elif cxt == CXT.C2:
-            # Shared Inside: Target Nest의 모든 SPU를 커버하는 L1 Shared 매핑
-            # (핸들러에서 필요 시 spu 인덱싱을 하거나 전체 브로드캐스트 가능하도록 SPU 축 노출)
-            return self._l1_views[warp_state.current_nest]
-            
-        elif cxt == CXT.C4:
-            # Plan Inside: Target Nest의 L2 글로벌 영역 매핑
-            return self._l2_views[warp_state.current_nest]
-            
-        else: # CXT.C1
-            # Plan Outside: 최상위 L2 전체 혹은 시스템 DDR
-            return self._l2_views
-
-    def get_active_f16_view(self, cxt: CXT, warp_state: Any) -> torch.Tensor:
-        """get_active_load_view의 FP16 Reinterpret Zero-copy 버전 (벡터 연산 핫패스용)"""
-        if cxt == CXT.C3:
-            return self._l0_f16_views[warp_state.current_nest, warp_state.current_spu]
-        elif cxt == CXT.C2:
-            return self._l1_f16_views[warp_state.current_nest]
-        elif cxt == CXT.C4:
-            return self._l2_f16_views[warp_state.current_nest]
-        else:
-            return self._l2_f16_views
-
+    # Context-aware scoped view resolver
+    # -------------------------------------------------------------------------
     def view(self, cxt: CXT, level: str, ws: Any,
-             dtype: torch.dtype = torch.uint8) -> torch.Tensor:
+             dtype: type = np.uint8) -> np.ndarray:
         """Context-scoped view of a scratchpad ``level`` (``'l0'``/``'l1'``/``'l2'``).
 
         ``level`` picks WHICH memory; CONTEXT picks the (NEST, SPU) SCOPE so a
@@ -426,15 +400,15 @@ class GtxMemory(MEMORY):
         / ``float32`` views share the backing bytes, so writes land in L1/L0.
         L2 has no per-SPU axis — it is scoped per NEST (whole tensor in C1).
         """
-        if dtype is torch.uint8:
+        if dtype is np.uint8:
             base = {'l0': self._l0_views, 'l1': self._l1_views,
                     'l2': self._l2_views}[level]
-        elif dtype is torch.float16:
-            base = {'l0': self._l0_f16_views, 'l1': self._l1_f16_views,
-                    'l2': self._l2_f16_views}[level]
-        else:
-            base = {'l0': self._l0_views, 'l1': self._l1_views,
-                    'l2': self._l2_views}[level].view(dtype)
+        elif dtype is MX_IO_DTYPE:
+            base = {'l0': self._l0_io_views, 'l1': self._l1_io_views,
+                    'l2': self._l2_io_views}[level]
+        else:                                   # any other dtype (e.g. FP16 GEMM
+            base = {'l0': self._l0_views, 'l1': self._l1_views,   # operands) — a
+                    'l2': self._l2_views}[level].view(dtype)      # zero-copy view
 
         if level == 'l2':                       # (NEST, BYTES) — no SPU axis
             return base if cxt is CXT.C1 else base[ws.current_nest]
