@@ -18,6 +18,7 @@ is eager. References:
   vendor/gtx_cpp_reference/gtx/gtx_npu_loop.cc:21-142,
   vendor/gtx_cpp_reference/gtx/gtx_npu_custom1.cc:29-137.
 """
+import sys
 from typing import TYPE_CHECKING
 
 from ..inst_handler import inst_register
@@ -114,6 +115,19 @@ def split(npu: "GtxNpu", proc, inst, cxt) -> int:
 @inst_register.custom1(name='join', funct3=0b101)
 def join(npu: "GtxNpu", proc, inst, cxt) -> int:
     """WJOIN — flush deferred stores; no exit (multi-tile firmware joins per
-    tile and exits naturally; DDR dump runs via the atexit hook)."""
+    tile and exits naturally; DDR dump runs via the atexit hook).
+
+    Strict credit (vendor ISS ``NSU::wjoin``, NSU.cpp:451): every load/store
+    credit must be balanced (== 0) at WJOIN. A remaining credit means firmware
+    left a DMA↔compute hand-off unconsumed — report it (non-fatal, like the ISS)."""
     npu.flush_deferred_ddr_stores()
+    if npu._credit_ld.any() or npu._credit_st.any():
+        for nest in range(NEST_NUM):
+            for spu in range(SPU_NUM):
+                ld = int(npu._credit_ld[nest, spu])
+                st = int(npu._credit_st[nest, spu])
+                if ld or st:
+                    print(f"[GTX_CREDIT_REMAINED] nest{nest} spu{spu}: "
+                          f"ld={ld} st={st} (plz check firmware)",
+                          file=sys.stderr, flush=True)
     return 0

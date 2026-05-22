@@ -12,8 +12,36 @@ to commit the S-loop deferred queue mid-execution. Multi-tile firmware needs
 this per-tile flush — the queue snapshots L2 at flush time, so deferring all
 tiles to the atexit flush would make every entry read the final tile's L2.
 """
+import sys
+
+import numpy as np
+
 from ...inst_handler import inst_register
 from ....config_params import NEST_NUM, SPU_NUM
+
+
+def _dec_one(row, kind: str, nest: int, spu: int) -> None:
+    """Strict single-SPU credit decrement: a decrement when already 0 is a
+    firmware protocol violation — report it, clamp at 0 (never go negative)."""
+    if row[spu] == 0:
+        print(f"[GTX_CREDIT_ERROR] credit.{kind} decrement when already 0 "
+              f"(plz check firmware) - nest{nest} spu{spu}",
+              file=sys.stderr, flush=True)
+    else:
+        row[spu] -= 1
+
+
+def _dec_all(row, kind: str, nest: int) -> None:
+    """Strict all-SPU credit decrement — vectorized (no per-SPU Python loop).
+    Reports underflow only on violation; otherwise one ``np.maximum`` clamp."""
+    zero = (row == 0)
+    if zero.any():
+        for spu in np.nonzero(zero)[0]:
+            print(f"[GTX_CREDIT_ERROR] credit.{kind} decrement when already 0 "
+                  f"(plz check firmware) - nest{nest} spu{int(spu)}",
+                  file=sys.stderr, flush=True)
+    np.subtract(row, 1, out=row)
+    np.maximum(row, 0, out=row)
 
 
 @inst_register.custom0(name='credit.ld', funct7=0b1010000, funct3=0)
@@ -25,7 +53,7 @@ def credit_ld(npu, proc, inst, cxt) -> int:
         if warp.is_sloop:
             npu._credit_ld[nest, :] += 1
         elif warp.is_tloop and warp.current_spu < SPU_NUM:
-            npu._credit_ld[nest, warp.current_spu] -= 1
+            _dec_one(npu._credit_ld[nest], "ld", nest, warp.current_spu)
     return 0
 
 
@@ -38,7 +66,7 @@ def credit_st(npu, proc, inst, cxt) -> int:
         if warp.is_tloop and warp.current_spu < SPU_NUM:
             npu._credit_st[nest, warp.current_spu] += 1
         elif warp.is_sloop:
-            npu._credit_st[nest, :] -= 1
+            _dec_all(npu._credit_st[nest], "st", nest)
     return 0
 
 
