@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 
 from ...csr import GSPR, LSPR
 from ..disasm import Custom0_Insn
+from .. import _resolve_nest_spu
 
 if TYPE_CHECKING:
     from ...npu import GtxNpu
@@ -45,7 +46,15 @@ _OPERAND5_ADDR = GSPR['GSPR_GTX_OPERAND5'].address & 0x3FF   # 0x005
 # L1 operand anchors — fusion only collapses frames whose vec reads/writes
 # the same banks the load/store DMA targets (see _execute_fused guard).
 _ADDRA = LSPR['SPM_ADDRA'].address
+_ADDRB = LSPR['SPM_ADDRB'].address
+_ADDRC = LSPR['SPM_ADDRC'].address
 _ADDRR = LSPR['SPM_ADDRR'].address
+# Scope-masked offsets for direct ``npu.lspr.tensor[nest, spu, off]`` access —
+# avoids the RegisterFile-narrowing allocation in the buffer hot path.
+_ADDRA_T = _ADDRA & 0x3FF
+_ADDRB_T = _ADDRB & 0x3FF
+_ADDRC_T = _ADDRC & 0x3FF
+_ADDRR_T = _ADDRR & 0x3FF
 
 # ── Fusion diagnostics (GTX_DEBUG_FUSION=1) — counts which path each
 # buffered frame takes + a one-shot sample of the contiguity operands.
@@ -153,7 +162,12 @@ TLoopEntry = namedtuple(
     'TLoopEntry',
     ('handler', 'mnemonic',
      'rs1', 'rs2', 'op3', 'op5',
-     'funct', 'xd', 'xs1_bit', 'xs2_bit', 'rd'),
+     'funct', 'xd', 'xs1_bit', 'xs2_bit', 'rd',
+     # Per-frame SPM operand anchors (set via __set_spm_addr, which mutates
+     # between buffered ops — e.g. SILU's neg→exp→add_vs→div each rebinds
+     # ADDRA/ADDRB/ADDRR). Replay must restore these or every frame reads the
+     # last frame's banks. Snapshotted with the same resolver the handler uses.
+     'a_addr', 'b_addr', 'c_addr', 'r_addr'),
 )
 
 
@@ -233,6 +247,8 @@ def try_buffer(npu: 'GtxNpu', handler, proc, insn, mnemonic: str) -> None:
     captured now (see module docstring).
     """
     state = proc.state
+    nest, spu = _resolve_nest_spu(npu)
+    lt = npu.lspr.tensor   # (NEST, SPU, 1024) — direct index, no narrowing
     # Positional construction skips namedtuple's kwarg dispatch — the
     # difference is small per call (~200 ns) but multiplied by 1.18 M
     # buffered ops on the ABS hot path it adds up to ~0.3 s.
@@ -248,6 +264,10 @@ def try_buffer(npu: 'GtxNpu', handler, proc, insn, mnemonic: str) -> None:
         insn.xs1,
         insn.xs2,
         insn.rd,
+        int(lt[nest, spu, _ADDRA_T]),
+        int(lt[nest, spu, _ADDRB_T]),
+        int(lt[nest, spu, _ADDRC_T]),
+        int(lt[nest, spu, _ADDRR_T]),
     ))
 
 
@@ -276,12 +296,18 @@ def flush(npu: 'GtxNpu') -> None:
     # staging words around the drain or the trigger op sees replay leftovers.
     saved_op3 = int(npu.gspr.tensor[_OPERAND3_ADDR])
     saved_op5 = int(npu.gspr.tensor[_OPERAND5_ADDR])
+    _rn, _rs = _resolve_nest_spu(npu)
+    _lt = npu.lspr.tensor
+    saved_a = int(_lt[_rn, _rs, _ADDRA_T]); saved_b = int(_lt[_rn, _rs, _ADDRB_T])
+    saved_c = int(_lt[_rn, _rs, _ADDRC_T]); saved_r = int(_lt[_rn, _rs, _ADDRR_T])
     try:
         _drain(npu, buf)
     finally:
         npu._tloop_buf = []
         npu.gspr.tensor[_OPERAND3_ADDR] = saved_op3
         npu.gspr.tensor[_OPERAND5_ADDR] = saved_op5
+        _lt[_rn, _rs, _ADDRA_T] = saved_a; _lt[_rn, _rs, _ADDRB_T] = saved_b
+        _lt[_rn, _rs, _ADDRC_T] = saved_c; _lt[_rn, _rs, _ADDRR_T] = saved_r
 
 
 def _drain(npu: 'GtxNpu', buf) -> None:
@@ -588,6 +614,14 @@ def _replay(npu: 'GtxNpu', entry: TLoopEntry) -> None:
     """
     npu.gspr.tensor[_OPERAND3_ADDR] = entry.op3
     npu.gspr.tensor[_OPERAND5_ADDR] = entry.op5
+    # Restore this frame's SPM operand anchors — handlers read ADDRA/B/C/R
+    # live from LSPR, and __set_spm_addr may have rebound them between frames.
+    nest, spu = _resolve_nest_spu(npu)
+    lt = npu.lspr.tensor
+    lt[nest, spu, _ADDRA_T] = entry.a_addr
+    lt[nest, spu, _ADDRB_T] = entry.b_addr
+    lt[nest, spu, _ADDRC_T] = entry.c_addr
+    lt[nest, spu, _ADDRR_T] = entry.r_addr
 
     insn = Custom0_Insn(entry.mnemonic, _InsnShim(
         entry.funct, entry.xd, entry.xs1_bit, entry.xs2_bit, entry.rd,
