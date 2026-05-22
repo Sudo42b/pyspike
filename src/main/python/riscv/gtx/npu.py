@@ -137,6 +137,15 @@ class GtxNpu(isa.ROCC):
     # ROCC virtual methods
     # ------------------------------------------------------------------
     def get_disasms(self, proc: processor_t) -> List[Any]:
+        # The RoCC ``reset(proc)`` hook is never invoked by the pyspike binding
+        # (the extension is attached after the processor's initial reset), so the
+        # stack pointer is left at 0. Firmware whose entry (gtx-firmware ``_enter``)
+        # assumes the simulator pre-set sp — as the SystemC ISS and vendor spike do —
+        # would fault on its first prologue store (sp+8 → 0xfff…f8). get_disasms is
+        # the earliest proc-access hook that fires, so seed sp here once (only while
+        # still uninitialized; never clobber a running sp).
+        if proc.state.XPR[2] == 0:
+            proc.state.XPR.write(2, _SP_INIT_VALUE)
         if not self._disasm_entries:
             self._disasm_entries = inst_register.collect_disasms()
         return self._disasm_entries
