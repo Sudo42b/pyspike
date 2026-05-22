@@ -48,6 +48,24 @@ def rd_spr(npu: "GtxNpu", addr: int) -> int:
     return 0
 
 
+def _mirror_svr_to_l0(npu: "GtxNpu", nest: int, spu: int, addr: int,
+                      value: int) -> None:
+    """SVR range (0x800-0x87F): mirror the 64-bit SPR write into the L0 byte
+    array, little-endian — matches vendor wr_spr (gtx_npu_spr.cc:35-41) and
+    SystemC. ``store.svr`` reads SVR registers back from L0, so without this
+    mirror an ``svr``-staged vector (e.g. the ones row in L2_NORM) reads zero.
+    """
+    if addr >= 0x880:
+        return
+    l0_off = (addr - LSPR_BASE) * 8
+    l0 = npu.mem.l0_byte(nest, spu)
+    if l0_off + 8 > l0.size:
+        return
+    v = int(value) & 0xFFFFFFFFFFFFFFFF
+    for i in range(8):
+        l0[l0_off + i] = (v >> (8 * i)) & 0xFF
+
+
 def wr_spr(npu: "GtxNpu", addr: int, value: int) -> None:
     """Write SPR. Port of gtx_npu_t::wr_spr (gtx_npu_spr.cc:16-78)."""
     addr &= 0xFFFF
@@ -55,12 +73,17 @@ def wr_spr(npu: "GtxNpu", addr: int, value: int) -> None:
         if (npu.warp.is_tloop and npu.warp.current_nest < NEST_NUM
                 and npu.warp.current_spu < SPU_NUM):
             npu.lspr[npu.warp.current_nest][npu.warp.current_spu][addr] = value
+            _mirror_svr_to_l0(npu, npu.warp.current_nest,
+                              npu.warp.current_spu, addr, value)
         elif npu.warp.is_ploop and npu.warp.current_nest < NEST_NUM:
             # P-loop: broadcast the same value into every SPU's LSPR in the nest.
-            for spu_rf in npu.lspr[npu.warp.current_nest]:
+            for spu_idx, spu_rf in enumerate(npu.lspr[npu.warp.current_nest]):
                 spu_rf[addr] = value
+                _mirror_svr_to_l0(npu, npu.warp.current_nest, spu_idx,
+                                  addr, value)
         else:
             npu.lspr[0][0][addr] = value
+            _mirror_svr_to_l0(npu, 0, 0, addr, value)
         return
     if _in_range(addr, NSPR_BASE, NSPR_END):
         if npu.warp.is_ploop and npu.warp.current_nest < NEST_NUM:

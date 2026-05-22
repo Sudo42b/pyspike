@@ -125,13 +125,18 @@ def _fmadd_iss(npu, proc, inst) -> int:
 
 # ----- MINMAX_S (0x13): reduce vec against scalar=rs2[15:0] → single FP16 ----
 def _minmax_vs(npu, proc, inst, is_min: bool) -> int:
-    """L1 reduce A against scalar → one FP16 at L0[ADDRR & 0x1F]."""
+    """L1 reduce A against scalar → one FP16 at the L0 SVR slot in OPERAND3.
+
+    The result SVR addr is staged via ``opset(0, result_svr_addr)`` before the
+    instruction (firmware ``__max_vs``/``__min_vs``), so it comes from GSPR
+    OPERAND3 — not ADDRR. (ADDRR is the L1 result anchor, unrelated here.)
+    """
     nest, spu, _rs1, rs2, vsz = _prep(npu, proc, inst)
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
     view_a = _l1_view_addr(npu, nest, spu, addr_a, vsz)
     result = minmax_reduce_kernel(view_a, _io_low(rs2), is_min)
-    dst = _l0_block_view(npu, nest, spu, addr_r & 0x1F)
+    dst = _l0_block_view(npu, nest, spu, operand3(npu, addr_r) & 0x1F)
     dst.fill(0)
     dst[0] = result
     return 0

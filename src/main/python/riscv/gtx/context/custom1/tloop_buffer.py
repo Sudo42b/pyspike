@@ -269,10 +269,19 @@ def flush(npu: 'GtxNpu') -> None:
     if not buf:
         return
     npu._tloop_buf = None
+    # _replay overwrites GSPR_OPERAND3/5 with each frame's snapshot and leaves
+    # the last frame's values behind. A non-bufferable op (e.g. mm.v / max.vs)
+    # triggers this drain *after* its own opset has staged OPERAND3/5, then
+    # reads them eagerly once the drain returns — so save and restore the
+    # staging words around the drain or the trigger op sees replay leftovers.
+    saved_op3 = int(npu.gspr.tensor[_OPERAND3_ADDR])
+    saved_op5 = int(npu.gspr.tensor[_OPERAND5_ADDR])
     try:
         _drain(npu, buf)
     finally:
         npu._tloop_buf = []
+        npu.gspr.tensor[_OPERAND3_ADDR] = saved_op3
+        npu.gspr.tensor[_OPERAND5_ADDR] = saved_op5
 
 
 def _drain(npu: 'GtxNpu', buf) -> None:
