@@ -97,8 +97,11 @@ def _mm_gemm(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
     l1h = npu.mem.view(cxt, 'l1', ws, np.float16)   # (*batch, HW)
     batch = l1h.shape[:-1]
     A = l1h[..., a_hw:a_hw + M * K].reshape(*batch, M, K).astype(np.float32)
-    B = l1h[..., b_hw:b_hw + K * N].reshape(*batch, K, N).astype(np.float32)
-    C = A @ B                                            # FP32 accumulate
+    # B is stored transposed in L1 as (N, K) row-major (vendor gemm_core /
+    # SystemC SPU::MM B-load): B_l1[j, k] at offset j*K + k. The GEMM is
+    # C = A[M×K] @ B_l1[N×K]^T → (M, N).
+    B = l1h[..., b_hw:b_hw + N * K].reshape(*batch, N, K).astype(np.float32)
+    C = A @ np.swapaxes(B, -1, -2)                       # FP32 accumulate
 
     if accumulate:
         c_w = lspr.get('SPM_ADDRC', 0) // 4              # FP32 word offset
