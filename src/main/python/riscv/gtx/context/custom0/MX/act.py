@@ -9,8 +9,20 @@ from .softmax import softmax_step3, esum
 from ...inst_handler import inst_register
 from ....config_params import L0_SIZE_BYTES, NEST_NUM, SPU_NUM, MX_IO_DTYPE, MX_IO_BYTES
 from ....csr import GSPR, LSPR
-from ... import _resolve_nest_spu, operand3
+from ... import _resolve_nest_spu, operand3, rs_select
 from . import _io_low, _io_high, _l0_block_view_io, _write_l0_io_pair
+
+
+def _resolve_softmax_op2(npu, nest, spu) -> int:
+    """ESUM/SOFTMAX max/esum operand. Firmware passes max_value (and esum_value
+    for softmax) as the OPERAND2 immediate but sets r2_sel (source_sel/OPERAND5)
+    to read them from an SVR instead: SVR_0 (max from max.vs) for esum, SVR_1
+    (the max,esum pair esum wrote) for softmax. ``rs_select`` returns the SVR
+    word in SVR mode, else the OPERAND2 immediate. Decode max=_io_low,
+    esum/accum=_io_high of the result."""
+    op2_imm = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
+    raw, _is_svr = rs_select(npu, nest, spu, op2_imm)
+    return raw
 
 # activation op-id enum (internal dispatch ids for act/act_imm kernels).
 ACT_RELU, ACT_TANH, ACT_SOFTMAX, ACT_GELU, ACT_SIGMOID, ACT_PRELU, ACT_ESUM = range(7)
@@ -74,8 +86,9 @@ def act(npu, proc, inst, *, op_id: int, is_reversed: bool) -> int:
     elif op_id == ACT_TANH:
         result = tanh(view_in)
     elif op_id == ACT_SOFTMAX:
-        # softmax step3: rs2 = max_value[31:0], esum_value[63:32] (FP32 widths).
-        op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
+        # max/esum come from the SVR named by r2_sel (SVR_1 = max,esum pair),
+        # not the OPERAND2 immediate — see _resolve_softmax_op2.
+        op2 = _resolve_softmax_op2(npu, nest, spu)
         result = softmax_step3(view_in, _io_low(op2), _io_high(op2))
     elif op_id == ACT_GELU:
         result = gelu(view_in)
@@ -87,8 +100,9 @@ def act(npu, proc, inst, *, op_id: int, is_reversed: bool) -> int:
     elif op_id == ACT_ESUM:
         # Pitfall 8: ESUM is forward (rd=ADDRA) but writes a scalar to L0
         # at offset (GSPR_OPERAND3 & 0x1F)*32 — not to L1[ADDRR].
-        # Result SVR: max_value[low], esum_value[high] (FP32: [31:0]/[63:32]).
-        op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
+        # max comes from the SVR named by r2_sel (SVR_0 = max.vs result), not
+        # the OPERAND2 immediate — see _resolve_softmax_op2.
+        op2 = _resolve_softmax_op2(npu, nest, spu)
         max_val = _io_low(op2)
         init_accum = _io_high(op2)
         scalar = esum(view_in, max_val=max_val, init_accum=init_accum)

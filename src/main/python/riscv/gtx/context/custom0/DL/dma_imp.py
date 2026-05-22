@@ -354,3 +354,30 @@ def dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
     l1[dst_addr:dst_end].reshape(height, l1_row)[...] = src_2d
     return 0
 
+
+def dma_sloop_copy(mem: 'GtxMemory', *, nest: int,
+                   src_addr: int, dst_addr: int, length: int, height: int,
+                   rd_stride: int, wr_stride: int) -> int:
+    """Shared-context (NEST) L2 → L2 strided 2D copy (byte-level, no dtype
+    conversion — both sides are L2/MX_EXT). ``length`` BYTES per row, ``height``
+    rows, with independent read/write strides (REPEAT/CONCAT tile a source into
+    a wider destination). A per-row ``.copy()`` is overlap-safe.
+    """
+    l2 = mem.l2_byte(nest)
+    cap = l2.shape[0]
+    rd_stride = rd_stride if rd_stride else length
+    wr_stride = wr_stride if wr_stride else length
+    # Contiguous fast path → one reshape'd block copy.
+    if rd_stride == length and wr_stride == length:
+        s_end = src_addr + height * length
+        d_end = dst_addr + height * length
+        assert s_end <= cap and d_end <= cap, "L2 copy wraps — firmware bug"
+        l2[dst_addr:d_end] = l2[src_addr:s_end].copy()
+        return 0
+    for i in range(height):
+        s = src_addr + i * rd_stride
+        d = dst_addr + i * wr_stride
+        assert s + length <= cap and d + length <= cap, "L2 copy row wraps"
+        l2[d:d + length] = l2[s:s + length].copy()
+    return 0
+

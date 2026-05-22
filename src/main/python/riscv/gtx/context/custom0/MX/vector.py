@@ -303,13 +303,16 @@ def _arith_ii(npu, proc, inst, sub: Arith) -> int:
 
 # ----- FMADD (0x19) ----------------------------------------------------------
 def _fmadd_vvv(npu, proc, inst) -> int:
-    """L1 A*B + R → R (in place), FP32 internal (vendor GTX_VEC_FMADD)."""
+    """L1 A*B + C → R, FP32 internal (vendor GTX_VEC_FMADD, gtx_npu_vec.cc:96
+    ``rd16(addr_a)*rd16(addr_b)+rd16(addr_c)``). The addend is the C bank
+    (SPM_ADDRC), NOT the R bank — __set_spm_addr's 2nd arg is ADDR_C."""
     nest, spu, _rs1, _rs2, vsz = _prep(npu, proc, inst)
     addr_a, addr_b, addr_r = _l1_addrs(npu, nest, spu)
+    addr_c = npu.lspr[nest][spu].get(LSPR['SPM_ADDRC'].address, 0)
     va = _as_fp32(_l1_view_addr(npu, nest, spu, addr_a, vsz))
     vb = _as_fp32(_l1_view_addr(npu, nest, spu, addr_b, vsz))
-    vr = _l1_view_addr(npu, nest, spu, addr_r, vsz)
-    vr[...] = (va * vb + _as_fp32(vr)).astype(MX_IO_DTYPE)
+    vc = _as_fp32(_l1_view_addr(npu, nest, spu, addr_c, vsz))
+    _l1_view_addr(npu, nest, spu, addr_r, vsz)[...] = (va * vb + vc).astype(MX_IO_DTYPE)
     return 0
 
 

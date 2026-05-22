@@ -230,6 +230,12 @@ def _load(npu, proc, inst, cxt) -> int:
     args = dma_imp.decode_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
     nest = _select_nest(npu)
     if npu.warp.is_sloop:
+        # A deferred store reads L2 lazily; flush any whose source this load is
+        # about to overwrite (CONCAT reuses one L2 row across load/store pairs).
+        wr = args['wr_stride'] or args['length']
+        l2_lo = args['addr_lo']
+        l2_hi = l2_lo + (args['height'] - 1) * wr + args['length']
+        npu.flush_deferred_if_l2_overlap(nest, l2_lo, l2_hi)
         return dma_imp.dma_sloop_load(
             npu.mem, nest=nest, addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
             length=args['length'], height=args['height'],
@@ -278,7 +284,12 @@ def _copy(npu, proc, inst, cxt) -> int:
             npu.mem, nest=nest, spu=_select_spu(npu),
             src_addr=args['addr_lo'], dst_addr=args['addr_hi'],
             length=args['length'], height=args['height'])
-    return 0
+    # Shared (NEST) context → L2 → L2 strided 2D copy (REPEAT/CONCAT tiling).
+    return dma_imp.dma_sloop_copy(
+        npu.mem, nest=nest,
+        src_addr=args['addr_lo'], dst_addr=args['addr_hi'],
+        length=args['length'], height=args['height'],
+        rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
 
 
 @inst_register.custom0(name='load.svr', funct7=0b1000001, funct3=0)

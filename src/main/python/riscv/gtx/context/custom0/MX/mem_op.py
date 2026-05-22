@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from ...inst_handler import inst_register
+from ... import operand3
 from ....config_params import DDR_BASE, NEST_NUM, SPU_NUM
 from ....csr import GSPR, LSPR
 from ....memory import GtxMemory
@@ -113,35 +114,46 @@ def _tpose(npu, proc, inst, cxt) -> int:
 
 @inst_register.custom0(name='fill', funct7=0b00111001, funct3=0)
 def _fill(npu, proc, inst, cxt) -> int:
-    # fill	4'b0111	3'b001	gpr	gpr	3'b000	rsvd	gtx op	yes	yes	smu	2	N/A	dst_addr[36:0], dir[48]	write_stride[31:0], length[47:32], height[63:48]	fill_pattern[63:0]	N/A	N/A	N/A	fill with 64-bit pattern
-    state = proc.state
-    rs1 = state.XPR[inst.rs1]
-    length = rs1 & 0xFFFF
-    fill_val = (rs1 >> 16) & 0xFFFF
-    nest_id = _select_nest(npu)
-    spu_id = _select_spu(npu)
-    addr_r = npu.lspr[nest_id][spu_id].get(LSPR['SPM_ADDRR'].address, 0) & 0xFFFFFFFF
+    """Fill ``height`` rows of ``length`` BYTES with the 64-bit ``fill_pattern``.
 
-    """Fill L1 region at ``addr_r`` with constant FP16 value (``length``
-    elements × 2 bytes each).
-
-    Operates through L1's uint16 view — each ``length`` element write
-    becomes a single ``fill_`` call, preserving the raw 16-bit pattern
-    (no FP16 cast → no NaN/denormal re-encoding). Wrap-around splits
-    the write into two contiguous fills.
+    Port of SystemC ``TMU::fill`` (vendor/simulator/src/TMU.cpp:420):
+      rs1 = dir[48] | dst_addr[36:0]
+      rs2 = height[63:48] | length[47:32] (BYTES) | write_stride[31:0]
+      rs3 = fill_pattern[63:0]  ← staged via ``__opset(0, rs3)`` → OPERAND3
+      dir 0 → L2 (per NEST), dir 1 → DDR. The 64-bit pattern tiles every 8 B.
     """
-    assert nest_id < NEST_NUM and spu_id < SPU_NUM, (
-        f"invalid nest_id {nest_id} or spu_id {spu_id}"
-    )
+    rs1 = int(proc.state.XPR[inst.rs1])
+    rs2 = int(proc.state.XPR[inst.rs2])
+    dst_addr = rs1 & 0x1FFFFFFFFF
+    rw_dir = (rs1 >> 48) & 0x1
+    write_stride = rs2 & 0xFFFFFFFF
+    length = (rs2 >> 32) & 0xFFFF                       # BYTES per row
+    height = (rs2 >> 48) & 0xFFFF
+    pattern = operand3(npu) & 0xFFFFFFFFFFFFFFFF        # fill_pattern (rs3)
+    if length == 0 or height == 0:
+        return 0
 
-    l1_u16 = npu.mem.l1_byte(nest_id, spu_id).view(np.uint16)
-    nelem = l1_u16.shape[0]
-    r_off = (addr_r // 2) % nelem
-    fill = fill_val & 0xFFFF
-    if r_off + length <= nelem:
-        l1_u16[r_off:r_off + length].fill(fill)
-    else:
-        head = nelem - r_off
-        l1_u16[r_off:].fill(fill)
-        l1_u16[:length - head].fill(fill)
+    # Tile the 8-byte LE pattern across one row's worth of bytes.
+    pat8 = np.frombuffer(int(pattern).to_bytes(8, 'little'), dtype=np.uint8)
+    full, rem = divmod(length, 8)
+    row = np.empty(length, dtype=np.uint8)
+    if full:
+        row[:full * 8] = np.tile(pat8, full)
+    if rem:
+        row[full * 8:] = pat8[:rem]
+
+    if rw_dir == 0:                                     # → L2 (per NEST)
+        nest_id = _select_nest(npu)
+        assert nest_id < NEST_NUM, f"invalid nest_id {nest_id}"
+        l2 = npu.mem.l2_byte(nest_id)
+        cap = l2.shape[0]
+        for i in range(height):
+            off = (dst_addr + i * write_stride) % cap
+            l2[off:off + length] = row
+    else:                                               # → DDR
+        ddr = npu.mem.ddr
+        base = npu.mem._ddr_offset(dst_addr)
+        ddr.ensure(base + (height - 1) * write_stride + length)
+        for i in range(height):
+            ddr.write(base + i * write_stride, row)
     return 0

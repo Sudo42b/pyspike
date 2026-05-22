@@ -226,6 +226,26 @@ class GtxNpu(isa.ROCC):
     # ------------------------------------------------------------------
     # Deferred-store flush — wired from end_p / credit_st_chk handlers.
     # ------------------------------------------------------------------
+    def flush_deferred_if_l2_overlap(self, nest: int, lo: int, hi: int) -> None:
+        """Flush deferred stores before an L2 region [lo, hi) is overwritten.
+
+        A deferred S-loop store reads its L2 source lazily at flush time. If a
+        later LOAD reuses the same L2 buffer before the flush (CONCAT: load
+        src0 → store → load src1 into the same row), the store would read the
+        overwritten bytes. Flushing when the incoming write overlaps a pending
+        store's source preserves store-before-overwrite ordering — and is a
+        no-op for the early-scheduled store_cr pattern (NORM/ABS), whose loads
+        target a disjoint L2 region (or run before the store is queued).
+        """
+        for req in self.deferred_ddr_stores:
+            if req.nest != nest:
+                continue
+            s_lo = req.l2_off
+            s_hi = req.l2_off + (req.height - 1) * req.l2_stride + req.length
+            if s_lo < hi and lo < s_hi:
+                self.flush_deferred_ddr_stores()
+                return
+
     def flush_deferred_ddr_stores(self) -> None:
         """Drain the S-loop deferred L2→DDR store queue."""
         _dbg = os.environ.get("GTX_DEBUG_FLUSH")
