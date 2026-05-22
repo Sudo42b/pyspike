@@ -123,7 +123,7 @@ _ARITH_FN = {
 def sasmd_kernel(a, b, op: Arith) -> np.ndarray:
     """SASMD element-wise FP32 internal, MX_IO_DTYPE output. ``b`` scalar/array."""
     a_f32 = _as_fp32(a)
-    if isinstance(b, np.ndarray) and b.dim() > 0:
+    if isinstance(b, np.ndarray) and b.ndim > 0:
         b_f32 = b.astype(np.float32)
     elif hasattr(b, 'shape') and getattr(b, 'shape', ()):
         b_f32 = np.asarray(b, dtype=np.float32)
@@ -177,9 +177,9 @@ def _shift(a_uint: np.ndarray, rs2: int) -> np.ndarray:
     logical) and mask back to the I/O width on left-shift overflow.
     """
     amt = rs2 & 0x1F
-    a = a_uint.to(np.int64)
+    a = a_uint.astype(np.int64)
     shifted = ((a << amt) & _IO_MASK) if (rs2 & 0x20) else (a >> amt)
-    return shifted.to(_IO_UINT)
+    return shifted.astype(_IO_UINT)
 
 
 # LOGIC (0x1F, L0) on FP16 raw bits (vendor exec_bitwise_imm). AND/OR use the
@@ -219,7 +219,7 @@ _ROUND_FN = {
 def _ln(f32: np.ndarray, mode: int) -> np.ndarray:
     """ln / log2 / log10 (mode[1:0]); non-positive inputs → 0."""
     tiny = np.finfo(np.float32).tiny
-    ln_a = _LN_FN[mode & 3](f32.clamp(min=tiny))
+    ln_a = _LN_FN[mode & 3](np.maximum(f32, tiny))
     return np.where(f32 > 0.0, ln_a, np.zeros_like(f32))
 
 

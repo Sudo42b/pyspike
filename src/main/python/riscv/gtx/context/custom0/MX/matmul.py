@@ -143,14 +143,14 @@ def _mm_reduce(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
     if is_dot:
         b_hw = lspr.get('SPM_ADDRB', 0) // 2
         B = l1h[..., b_hw:b_hw + vec].astype(np.float32)
-        red = (A * B).sum(dim=-1)                        # dot, FP32
+        red = (A * B).sum(axis=-1)                       # dot, FP32
     else:
-        red = A.sum(dim=-1)                              # sum, FP32
+        red = A.sum(axis=-1)                             # sum, FP32
 
     idx = _state_scope(cxt, ws)
     if accumulate:
         red = red + npu._mxe_accum[idx].astype(np.float32)
-    npu._mxe_accum[idx] = red.to(npu._mxe_accum.dtype)   # always update (Pitfall B)
+    npu._mxe_accum[idx] = red.astype(npu._mxe_accum.dtype)   # always update (Pitfall B)
 
     # Result → L0 slot in the MX I/O width (FP32 LE by default), rest of the
     # 32 B reg zeroed. Divergence from vendor (which stored an FP16/INT32

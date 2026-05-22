@@ -96,6 +96,13 @@ class RegisterFile:
         
         # Raw address write (modulo 1024 for scope)
         addr = int(key) & 0x3FF
+        # Registers are 64-bit; wrap unsigned values (e.g. packed -inf masks
+        # ≥ 2^63) into int64's two's-complement range so the bit pattern stores
+        # without OverflowError. No-op for values already in [-2^63, 2^63).
+        if isinstance(value, int):
+            value &= 0xFFFFFFFFFFFFFFFF
+            if value >= 0x8000000000000000:
+                value -= 0x10000000000000000
         self._tensor[..., addr] = value
 
     # ----- Attribute access (Register names) -------------------------------

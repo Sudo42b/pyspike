@@ -139,9 +139,9 @@ def _fill(npu, proc, inst, cxt) -> int:
     r_off = (addr_r // 2) % nelem
     fill = fill_val & 0xFFFF
     if r_off + length <= nelem:
-        l1_u16[r_off:r_off + length].fill_(fill)
+        l1_u16[r_off:r_off + length].fill(fill)
     else:
         head = nelem - r_off
-        l1_u16[r_off:].fill_(fill)
-        l1_u16[:length - head].fill_(fill)
+        l1_u16[r_off:].fill(fill)
+        l1_u16[:length - head].fill(fill)
     return 0

@@ -117,7 +117,7 @@ def mcast_s2s(mem: 'GtxMemory', *, src_tmu: int, src_addr: int, dst_addr: int,
         copy_len = min(length, L2_SIZE_BYTES - max(s_off, d_off))
         if copy_len <= 0:
             continue
-        tmp = src_l2[s_off:s_off + copy_len].clone()
+        tmp = src_l2[s_off:s_off + copy_len].copy()
         for k in range(NEST_NUM):
             if (target_nest_mask >> k) & 1:
                 dst_l2 = mem.l2_byte(k)
@@ -193,7 +193,7 @@ def copy_mem(npu: Any, *, nest_id: int, src_addr_raw: int, dst_addr_raw: int,
             copy_len = min(length, L2_SIZE_BYTES - max(s_off, d_off))
             if copy_len <= 0:
                 continue
-            tmp = l2[s_off:s_off + copy_len].clone()
+            tmp = l2[s_off:s_off + copy_len].copy()
             l2[d_off:d_off + copy_len][...] = tmp
     return 0
 

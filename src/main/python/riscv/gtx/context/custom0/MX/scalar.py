@@ -54,7 +54,7 @@ def minmax_reduce_kernel(a, scalar, is_min: bool) -> np.ndarray:
     matching the vendor seed-with-scalar reduction, FP32 internal.
     """
     a_f32 = _as_fp32(a).reshape(-1)
-    seed = np.array(float(scalar), dtype=np.float32, device=a_f32.device)
+    seed = np.array(float(scalar), dtype=np.float32)
     if is_min:
         result = np.minimum(a_f32.min(), seed) if a_f32.size else seed
     else:

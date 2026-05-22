@@ -216,10 +216,6 @@ def dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_lo: int,
     l2_end = addr_lo + (height - 1) * wr_stride + length
     assert rd_stride >= length, f"rd_stride {rd_stride} < length {length}"
     assert wr_stride >= length, f"wr_stride {wr_stride} < length {length}"
-    assert height * rd_stride <= ddr_span.size, (
-        f"DDR span {ddr_span.size} too small for height*rd_stride "
-        f"{height * rd_stride} — firmware bug"
-    )
     assert l2_end <= L2_SIZE_BYTES, (
         f"L2 region wraps L2_SIZE_BYTES {L2_SIZE_BYTES} — "
         f"firmware bug"
@@ -227,6 +223,15 @@ def dma_sloop_load(mem: 'GtxMemory', *, nest: int, addr_hi: int, addr_lo: int,
     assert ddr_off_base + (height - 1) * rd_stride + length <= ddr_cap, (
         f"DDR window exceeds capacity {ddr_cap} — firmware bug"
     )
+
+    # The last row only needs `length` bytes, not a full `rd_stride`, so the DDR
+    # span can be up to (rd_stride - length) short of height*rd_stride. Pad the
+    # tail so the 2D reshape is valid; the padding lands beyond column `length`
+    # of the last row and is sliced off (never read into the output).
+    need = height * rd_stride
+    if ddr_span.size < need:
+        ddr_span = np.concatenate(
+            [ddr_span, np.zeros(need - ddr_span.size, dtype=ddr_span.dtype)])
 
     src_2d = ddr_span[:height * rd_stride].reshape(height, rd_stride)[:, :length]
     dst_2d = l2_buf[addr_lo:addr_lo + height * wr_stride].reshape(height, wr_stride)[:, :length]
@@ -262,9 +267,31 @@ def dma_tloop_load_store(mem: 'GtxMemory', *, nest: int, spu: int,
     n_elem = length // MX_EXT_BYTES
     l1_row = n_elem * MX_IO_BYTES        # L1 bytes per row (IO dtype)
 
+    # Broadcast / overlapping L2 rows (hi_stride < length, e.g. hi_stride == 0
+    # broadcasts one source row to every L1 row — out_prod / rwkv / gla). The
+    # contiguous reshape below can't express overlap, so replay the vendor's
+    # per-row access: `length` bytes per row at (addr_hi + row*hi_stride) % L2.
+    if hi_stride < length:
+        for r in range(height):
+            h_off = (addr_hi + r * hi_stride) % L2_SIZE_BYTES
+            l_off = (addr_lo + r * l1_row) % L1_SIZE_BYTES
+            if not _DMA_CONVERTS:
+                if is_store:
+                    l2[h_off:h_off + length] = l1[l_off:l_off + length]
+                else:
+                    l1[l_off:l_off + length] = l2[h_off:h_off + length]
+            else:
+                l1_io_row = l1[l_off:l_off + l1_row].view(MX_IO_DTYPE)
+                if is_store:
+                    ext = l1_io_row.astype(MX_EXT_DTYPE)
+                    l2[h_off:h_off + length] = ext.view(np.uint8)
+                else:
+                    ext = l2[h_off:h_off + length].view(MX_EXT_DTYPE)
+                    l1_io_row[...] = ext.astype(MX_IO_DTYPE)
+        return 0
+
     hi_end = addr_hi + (height - 1) * hi_stride + length
     lo_end = addr_lo + height * l1_row
-    assert hi_stride >= length, f"hi_stride {hi_stride} < length {length}"
     assert hi_end <= L2_SIZE_BYTES, (
         f"L2 region wraps L2_SIZE_BYTES {L2_SIZE_BYTES} — "
         f"firmware bug"

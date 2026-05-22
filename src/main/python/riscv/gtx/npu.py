@@ -148,9 +148,9 @@ class GtxNpu(isa.ROCC):
         except Exception:
             pass
 
-        self._mxe_accum.fill_(0.0)
-        self._credit_ld.fill_(0)
-        self._credit_st.fill_(0)
+        self._mxe_accum.fill(0.0)
+        self._credit_ld.fill(0)
+        self._credit_st.fill(0)
         self.mem.reset_scratchpads()
         self.reset_register()
         self.deferred_ddr_stores.clear()

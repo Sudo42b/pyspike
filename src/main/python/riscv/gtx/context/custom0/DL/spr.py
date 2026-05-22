@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from ...inst_handler import inst_register
 
 from ....config_params import NEST_NUM, SPU_NUM
@@ -124,14 +126,14 @@ def cpsvr(npu: "GtxNpu", proc, inst, cxt) -> int:
     bsz = rs2_val & 3
     l0 = npu.mem.l0_byte(nest, spu)
     if bsz == 0:
-        p = l0[base].repeat(8)
+        p = np.tile(l0[base], 8)
     elif bsz == 1:
-        p = l0[base:base + 2].repeat(4)
+        p = np.tile(l0[base:base + 2], 4)
     elif bsz == 2:
-        p = l0[base:base + 4].repeat(2)
+        p = np.tile(l0[base:base + 4], 2)
     else:
         p = l0[base:base + 8]
-    l0[base:base + 32] = p.repeat(4)
+    l0[base:base + 32] = np.tile(p, 4)
     return 0
 
 
@@ -152,6 +154,6 @@ def mvsvr(npu: "GtxNpu", proc, inst, cxt) -> int:
     l0 = npu.mem.l0_byte(nest, spu)
     src_off = src_idx * 32
     dst_off = dst_idx * 32
-    l0[dst_off:dst_off + 32] = l0[src_off:src_off + 32].clone()
-    l0[src_off:src_off + 32].zero_()
+    l0[dst_off:dst_off + 32] = l0[src_off:src_off + 32].copy()
+    l0[src_off:src_off + 32] = 0
     return 0
