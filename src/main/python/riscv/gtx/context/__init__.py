@@ -111,7 +111,7 @@ def svr_word(npu, nest: int, spu: int, svr_addr: int, svr_sub_addr: int) -> int:
     return int.from_bytes(bytes(word.tolist()), "little")
 
 
-def rs_select(npu, nest: int, spu: int, gpr_value: int) -> int:
+def rs_select(npu, nest: int, spu: int, gpr_value: int) -> tuple[int, bool]:
     """Resolve a source operand per r2_sel — port of SystemC ``SPU::rs_select``.
 
     ``op_sel(npu)`` is the source_sel word; bits [8:7] pick the source:
@@ -121,13 +121,20 @@ def rs_select(npu, nest: int, spu: int, gpr_value: int) -> int:
                       svr_addr     = source_sel[6:2]
                       svr_sub_addr = source_sel[1:0]
         else  gpr  -> gpr_value unchanged
+
+    Returns ``(raw_value, is_svr)``. The caller must decode an SVR read at the
+    on-chip MX I/O width (``_io_low``) but a GPR/zero immediate as FP16
+    (``_fp16_low16``): firmware packs scalar immediates (epsilon, fp16(N), …)
+    as FP16 bit patterns regardless of MX_IO_DTYPE, while the SVR scratch holds
+    MX_IO-width data. In FP16 mode the two widths coincide; in FP32 mode they
+    must diverge or the FP16 immediate decodes as a denormal ≈ 0.
     """
     source_sel = op_sel(npu)
     src = (source_sel >> 7) & 0b11
     if src == SRC_SEL_ZERO:
-        return 0
+        return 0, False
     if src == SRC_SEL_SVR:
         svr_addr     = (source_sel >> 2) & 0x1F
         svr_sub_addr = source_sel & 0x3
-        return svr_word(npu, nest, spu, svr_addr, svr_sub_addr)
-    return gpr_value
+        return svr_word(npu, nest, spu, svr_addr, svr_sub_addr), True
+    return gpr_value, False

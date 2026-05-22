@@ -155,6 +155,13 @@ def _mm_reduce(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
         red = red + npu._mxe_accum[idx].astype(np.float32)
     npu._mxe_accum[idx] = red.astype(npu._mxe_accum.dtype)   # always update (Pitfall B)
 
+    import os as _os, sys as _sys
+    if _os.environ.get("GTX_DEBUG_NORM"):
+        _slot = operand3(npu) & 0x1F
+        print(f"[MMRED] {'dot' if is_dot else 'sum'} cxt={cxt} vec={vec} "
+              f"a_hw={a_hw} A0={float(A.reshape(-1)[0]):.4f} red={float(np.asarray(red).reshape(-1)[0]):.4f} "
+              f"-> SVR{_slot} (op3={operand3(npu):#x})", file=_sys.stderr, flush=True)
+
     # Result → L0 slot in the MX I/O width (FP32 LE by default), rest of the
     # 32 B reg zeroed. Divergence from vendor (which stored an FP16/INT32
     # scalar): the FP16 output cast was the dominant precision-loss source.

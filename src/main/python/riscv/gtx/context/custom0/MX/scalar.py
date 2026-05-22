@@ -31,7 +31,7 @@ from .vector import Arith, _as_fp32, sasmd_kernel
 # Shared MX I/O-width helpers (FP32 default / FP16 toggle) — single defs in
 # the package __init__.
 from . import (
-    _io_low, _io_high,
+    _io_low, _io_high, _fp16_low16, _fp16_high16,
     _l1_view_addr_io as _l1_view_addr,
     _l0_block_view_io as _l0_block_view,
 )
@@ -66,6 +66,11 @@ def minmax_reduce_kernel(a, scalar, is_min: bool) -> np.ndarray:
 # Preamble + leaf dispatchers — each handler calls its leaf directly with the
 # op baked in; the registry already keyed on (funct7, funct3).
 # =============================================================================
+import os as _os, sys as _sys
+_DBG_NORM = _os.environ.get("GTX_DEBUG_NORM")
+_dbg_n = [0]
+
+
 def _prep(npu, proc, inst) -> tuple:
     """Scalar-handler preamble: resolve (nest, spu), decode rs1/rs2 (vec_size is
     rs1[18:0]), stage OPERAND2. Returns ``(nest, spu, rs1, rs2, vec_size)``."""
@@ -79,14 +84,38 @@ def _prep(npu, proc, inst) -> tuple:
     return nest, spu, rs1, rs2, vec_size
 
 
+def _dbg(npu, tag, nest, spu, rs1, rs2, extra=""):
+    if not _DBG_NORM or _dbg_n[0] > 40:
+        return
+    _dbg_n[0] += 1
+    op3 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND3'].address, 0xABCD))
+    op5 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND5'].address, 0xABCD))
+    svrs = []
+    for r in range(4):
+        v = _l0_block_view(npu, nest, spu, r).reshape(-1)
+        svrs.append(float(v[0]))
+    print(f"[NORM] n{nest}s{spu} {tag} rs1={rs1:#x} rs2={rs2:#x} op3={op3:#x} op5={op5:#x} "
+          f"SVR0={svrs[0]:.4f} SVR1={svrs[1]:.4f} SVR2={svrs[2]:.4f} SVR3={svrs[3]:.4f} {extra}",
+          file=_sys.stderr, flush=True)
+
+
 # ----- SASMD (0x10): scalar = rs_select(rs2) → gpr / zero / L0 SVR -----------
+def _scalar_operand(npu, nest, spu, rs2):
+    """Decode the scalar (rs2) operand: SVR reads at the MX I/O width, GPR/zero
+    immediates as FP16 (firmware packs immediates as FP16 bit patterns)."""
+    raw, is_svr = rs_select(npu, nest, spu, rs2)
+    return _io_low(raw) if is_svr else _fp16_low16(raw)
+
+
 def _sasmd_vs(npu, proc, inst, sub: Arith) -> int:
     """L1 vector-scalar ADD/SUB/MUL/DIV (A from ADDRA, R to ADDRR)."""
     nest, spu, _rs1, rs2, vsz = _prep(npu, proc, inst)
-    scalar = _io_low(rs_select(npu, nest, spu, rs2))
+    scalar = _scalar_operand(npu, nest, spu, rs2)
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
     view_a = _l1_view_addr(npu, nest, spu, addr_a, vsz)
+    _dbg(npu, f"{sub.name}.vs", nest, spu, _rs1, rs2,
+         f"scalar={float(scalar):.4f} a0={float(view_a.reshape(-1)[0]):.4f} aA=0x{addr_a:x} aR=0x{addr_r:x}")
     _l1_view_addr(npu, nest, spu, addr_r, vsz)[...] = sasmd_kernel(view_a, scalar, op=sub)
     return 0
 
@@ -94,9 +123,11 @@ def _sasmd_vs(npu, proc, inst, sub: Arith) -> int:
 def _sasmd_is(npu, proc, inst, sub: Arith) -> int:
     """L0 SVR scalar ADD/SUB/MUL/DIV. a=rs1[4:0], r=OPERAND3[4:0]."""
     nest, spu, rs1, rs2, _vsz = _prep(npu, proc, inst)
-    scalar = _io_low(rs_select(npu, nest, spu, rs2))
+    scalar = _scalar_operand(npu, nest, spu, rs2)
     view_a = _l0_block_view(npu, nest, spu, rs1 & 0x1F)
     r_reg = operand3(npu, inst.rd) & 0x1F
+    _dbg(npu, f"{sub.name}.is", nest, spu, rs1, rs2,
+         f"scalar={float(scalar):.4f} a0={float(view_a.reshape(-1)[0]):.4f} -> SVR{r_reg}")
     _l0_block_view(npu, nest, spu, r_reg)[...] = sasmd_kernel(view_a, scalar, op=sub)
     return 0
 
@@ -108,7 +139,8 @@ def _fmadd_vss(npu, proc, inst) -> int:
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
     view_a = _l1_view_addr(npu, nest, spu, addr_a, vsz)
-    result = fmadd_kernel(view_a, _io_low(rs2), _io_high(rs2))
+    # b = rs2[15:0], c = rs2[31:16] — both FP16 immediates packed by firmware.
+    result = fmadd_kernel(view_a, _fp16_low16(rs2), _fp16_high16(rs2))
     _l1_view_addr(npu, nest, spu, addr_r, vsz)[...] = result
     return 0
 
@@ -118,7 +150,7 @@ def _fmadd_iss(npu, proc, inst) -> int:
     nest, spu, rs1, rs2, _vsz = _prep(npu, proc, inst)
     view_a = _l0_block_view(npu, nest, spu, rs1 & 0x1F)
     dst_reg = operand3(npu, inst.rd) & 0x1F
-    result = fmadd_kernel(view_a, _io_low(rs2), _io_high(rs2))
+    result = fmadd_kernel(view_a, _fp16_low16(rs2), _fp16_high16(rs2))
     _l0_block_view(npu, nest, spu, dst_reg)[...] = result
     return 0
 
@@ -135,7 +167,7 @@ def _minmax_vs(npu, proc, inst, is_min: bool) -> int:
     addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
     addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
     view_a = _l1_view_addr(npu, nest, spu, addr_a, vsz)
-    result = minmax_reduce_kernel(view_a, _io_low(rs2), is_min)
+    result = minmax_reduce_kernel(view_a, _fp16_low16(rs2), is_min)
     dst = _l0_block_view(npu, nest, spu, operand3(npu, addr_r) & 0x1F)
     dst.fill(0)
     dst[0] = result
@@ -147,7 +179,7 @@ def _minmax_is(npu, proc, inst, is_min: bool) -> int:
     nest, spu, rs1, rs2, _vsz = _prep(npu, proc, inst)
     view_a = _l0_block_view(npu, nest, spu, rs1 & 0x1F)
     dst_reg = operand3(npu, inst.rd) & 0x1F
-    result = minmax_reduce_kernel(view_a, _io_low(rs2), is_min)
+    result = minmax_reduce_kernel(view_a, _fp16_low16(rs2), is_min)
     dst = _l0_block_view(npu, nest, spu, dst_reg)
     dst.fill(0)
     dst[0] = result

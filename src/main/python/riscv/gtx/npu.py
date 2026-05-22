@@ -38,6 +38,10 @@ from .context.custom0.MX import (                     # noqa: F401,E402
 from .context.custom0.MC import ucode as _ucode       # noqa: F401,E402
 from .context.custom0.SN import sync as _sync         # noqa: F401,E402
 
+# OPSET staging GSPRs (rs3/rs4) — cleared after each consuming op (vendor parity).
+_OPERAND3_ADDR = GSPR['GSPR_GTX_OPERAND3'].address & 0x3FF   # 0x003
+_OPERAND5_ADDR = GSPR['GSPR_GTX_OPERAND5'].address & 0x3FF   # 0x005
+
 @isa.register("gtx")
 class GtxNpu(isa.ROCC):
     """GTX NPU functional model — RoCC ``custom0``/``custom1`` dispatch."""
@@ -183,7 +187,16 @@ class GtxNpu(isa.ROCC):
                 if nemonic not in _TRANSPARENT:
                     _tloop_buffer.flush(self)
             c0_insn = Custom0_Insn(nemonic, insn, fn7=funct, fn3=funct3)
-            return func(self, proc, c0_insn, self.CONTEXT)
+            ret = func(self, proc, c0_insn, self.CONTEXT)
+            # OPSET stages OPERAND3/5 for the NEXT instruction only; the vendor
+            # (gtx_npu_custom0.cc:117-130) clears both to 0 once that instruction
+            # dispatches. Mirror it so stale staging never leaks across ops
+            # (e.g. __var div.vs's 0x180 into __layernorm add.is). opset itself
+            # must not clear — it just set them.
+            if nemonic != 'opset':
+                self.gspr.tensor[_OPERAND3_ADDR] = 0
+                self.gspr.tensor[_OPERAND5_ADDR] = 0
+            return ret
         return 0
 
     def custom1(self, proc, insn, xs1, xs2) -> int:
@@ -202,7 +215,12 @@ class GtxNpu(isa.ROCC):
         if func:
             nemonic = getattr(func, 'mnemonic', 'unknown')
             c1_insn = Custom1_Insn(nemonic, insn, fn3=funct3)
-            return func(self, proc, c1_insn, self.CONTEXT)
+            ret = func(self, proc, c1_insn, self.CONTEXT)
+            # SystemC clears rs3/rs4 staging after warp control ops too
+            # (GTX_extension.h:1526-1535 START_T/END_T/START_P/...). Mirror it.
+            self.gspr.tensor[_OPERAND3_ADDR] = 0
+            self.gspr.tensor[_OPERAND5_ADDR] = 0
+            return ret
         return 0
 
     # ------------------------------------------------------------------

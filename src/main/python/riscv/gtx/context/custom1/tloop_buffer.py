@@ -119,9 +119,6 @@ BUFFERABLE_MNEMONICS = frozenset({
 #   - ``opset``           stages GSPR_OPERAND3/5 for the next load/store
 #     — buffering ``opset`` itself would lose ordering on the staging
 #     write, so it stays eager but does not force a flush.
-#   - ``wrspr``           writes LSPR for the current (NEST, SPU); fires
-#     a handful of times at thread-start (``__set_spm_addr``) and never
-#     inside the inner loop, so the buffer is empty when these run.
 #   - ``credit_*_chk``    credit-gated dequeue point (260517-s9k): runs
 #     eagerly in the FSM; the handler internally drains the T-loop
 #     buffer at the chk boundary (TMU side, ``unit.context.dma.
@@ -130,9 +127,16 @@ BUFFERABLE_MNEMONICS = frozenset({
 #     TRANSPARENT set so the FSM does not force an additional hard
 #     flush before the handler runs — the handler owns the drain.
 # ----------------------------------------------------------------------
+# NOTE: ``wrspr`` is intentionally NOT transparent. Composite intrinsics
+# (__layernorm/__rmsnorm/__var) call __set_spm_addr (a wrspr) AND wrspr SGPR_0
+# *inside* the per-row loop with buffered .vs/.is ops pending. If wrspr ran
+# eagerly without draining, it would mutate SVR/SPM state ahead of the buffered
+# ops that depend on the prior state (e.g. wrspr SGPR_0=x_num clobbers SVR_0=sum
+# before the buffered div.is reads it). It must flush first. For the ABS hot
+# loop wrspr only fires at thread-start with an empty buffer, so flush() is a
+# cheap no-op there — zero perf impact.
 TRANSPARENT_MNEMONICS = frozenset({
     'opset',
-    'wrspr',
     'credit.chk', 'credit.ld.chk', 'credit.st.chk',
 })
 
@@ -269,6 +273,13 @@ def try_buffer(npu: 'GtxNpu', handler, proc, insn, mnemonic: str) -> None:
         int(lt[nest, spu, _ADDRC_T]),
         int(lt[nest, spu, _ADDRR_T]),
     ))
+    # OPSET staging lives for the NEXT instruction only — the vendor clears it
+    # once an instruction consumes it. The snapshot above preserves the value
+    # for replay, so clear the live GSPRs now (matching GtxNpu.custom0's eager
+    # clear) or a buffered op's staged length leaks into the next eager op
+    # (e.g. __load's OPERAND3=TOTAL_BYTES landing as mm.o's result-SVR slot).
+    npu.gspr.tensor[_OPERAND3_ADDR] = 0
+    npu.gspr.tensor[_OPERAND5_ADDR] = 0
 
 
 def flush(npu: 'GtxNpu') -> None:
