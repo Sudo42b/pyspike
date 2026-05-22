@@ -16,6 +16,12 @@ _start:
     /* Set stack pointer */
     la      sp, __C_STACK_TOP__
 
+    /* Enable the FP unit (mstatus.FS = Initial). Kernels that use host
+     * float (ROPE/TIMESTEP_EMBEDDING sincos) emit hard-float insns; without
+     * FS!=Off the first FP op traps to mtvec (=0, unset) and spins forever. */
+    li      t0, 0x2000
+    csrs    mstatus, t0
+
     /* Clear BSS */
     la      t0, __BSS_START__
     la      t1, __BSS_END__
