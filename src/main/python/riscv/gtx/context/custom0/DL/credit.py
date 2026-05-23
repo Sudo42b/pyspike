@@ -5,12 +5,17 @@ hand-off. In pyspike's eager functional model the *_chk spins always pass
 (DMA is instantaneous), so the counters are tracked for vendor 1:1 parity
 but never stall control flow.
 
-The load-bearing behavior is ``credit.st.chk``'s deferred-DDR-store flush:
-plan-style (WSPLIT) firmware suppresses the ``end.p`` flush
-(``control.py:endp`` checks ``wsplit_seen``) and relies on ``credit.st.chk``
-to commit the S-loop deferred queue mid-execution. Multi-tile firmware needs
-this per-tile flush — the queue snapshots L2 at flush time, so deferring all
-tiles to the atexit flush would make every entry read the final tile's L2.
+The load-bearing behavior is ``credit.chk``'s deferred-DDR-store flush in the
+S-loop: plan-style (WSPLIT) firmware suppresses the ``end.p`` flush
+(``control.py:endp`` checks ``wsplit_seen``) and relies on the S-loop
+``credit.chk`` to commit the deferred queue mid-execution. Multi-tile firmware
+needs this per-tile flush — the queue reads L2 lazily at flush time, so
+deferring all tiles to the atexit flush would make every entry read the final
+tile's L2.
+
+ISA note: there is a single ``credit.chk`` (funct7 0x53) — no separate
+credit.ld.chk/st.chk. The firmware emits 0x53 (the encoding the SystemC ISS and
+vendor spike decode); 0x52 is a legacy binutils mis-encoding kept as an alias.
 """
 import sys
 
@@ -102,18 +107,23 @@ def credit_st(npu, proc, inst, cxt) -> int:
     return 0
 
 
-@inst_register.custom0(name='credit.ld.chk', funct7=0b1010010, funct3=0)
-def credit_ld_chk(npu, proc, inst, cxt) -> int:
-    """credit.ld.chk (0x52): NOP — spin passes unconditionally (DMA instantaneous)."""
-    return 0
-
-
-@inst_register.custom0(name='credit.st.chk', funct7=0b1010011, funct3=0)
-def credit_st_chk(npu, proc, inst, cxt) -> int:
-    """credit.st.chk (0x53): S-loop commits the deferred L2→DDR store queue.
-
-    Sole flush trigger for plan-style (WSPLIT) firmware — see module docstring.
+def credit_chk(npu, proc, inst, cxt) -> int:
+    """credit.chk: the single credit barrier (there is no credit.ld.chk/st.chk —
+    that was a mis-split of this one instruction). In pyspike's eager functional
+    model the spin passes immediately (DMA instantaneous), so it is a NOP except
+    in the S-loop, where it commits the deferred L2→DDR store queue. That per-tile
+    flush is load-bearing for plan-style (WSPLIT) firmware — see module docstring;
+    it is harmless elsewhere because the shared ``credit.chk`` runs before the
+    S-loop ``store_cr`` queues anything (empty queue → no-op). T-loop credit.chk
+    is a plain NOP.
     """
     if npu.warp.is_sloop:
         npu.flush_deferred_ddr_stores()
     return 0
+
+
+# Canonical encoding funct7=0x53 (what the SystemC ISS / vendor spike decode, and
+# what the firmware now emits via .insn). 0x52 is the legacy mis-encoding older
+# binutils produced for the same `credit.chk` mnemonic — aliased for robustness.
+inst_register.custom0(name='credit.chk', funct7=0b1010011, funct3=0)(credit_chk)
+inst_register.custom0(name='credit.chk', funct7=0b1010010, funct3=0)(credit_chk)
