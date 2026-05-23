@@ -31,17 +31,44 @@ def _dec_one(row, kind: str, nest: int, spu: int) -> None:
         row[spu] -= 1
 
 
-def _dec_all(row, kind: str, nest: int) -> None:
-    """Strict all-SPU credit decrement — vectorized (no per-SPU Python loop).
-    Reports underflow only on violation; otherwise one ``np.maximum`` clamp."""
-    zero = (row == 0)
-    if zero.any():
-        for spu in np.nonzero(zero)[0]:
-            print(f"[GTX_CREDIT_ERROR] credit.{kind} decrement when already 0 "
-                  f"(plz check firmware) - nest{nest} spu{int(spu)}",
-                  file=sys.stderr, flush=True)
-    np.subtract(row, 1, out=row)
-    np.maximum(row, 0, out=row)
+# SPU bit positions for expanding a credit.st target_spu mask into a per-SPU
+# decrement vector: ``(mask >> _SPU_BITS) & 1``.
+_SPU_BITS = np.arange(SPU_NUM, dtype=np.int32)
+
+
+def apply_deferred_st(npu) -> None:
+    """Apply the S-loop ``credit.st`` decrements deferred to the plan boundary.
+
+    Called from ``end.p`` and ``WJOIN`` (control.py). Sequential pyspike runs
+    the S-loop store consume (``credit.st--``) before the T-loop produce
+    (``credit.st++``) within a tile, so an eager decrement underflows on the
+    first tile and leaves ``credit.st==1`` at every WJOIN. Hardware runs
+    SMU/TMU concurrently (``++`` then ``--``); deferring the decrement to the
+    plan boundary restores that balance. The deferred amount is per-SPU,
+    masked to the SPUs the store actually covers (``target_spu``), so inactive
+    SPUs in a partial last tile are never spuriously decremented.
+
+    Data-path-independent: nothing reads the counters mid-execution
+    (``credit.chk`` is a NOP/flush), so this only affects the strict
+    diagnostics, never the DDR result.
+    """
+    pend = npu._credit_st_deferred
+    if not pend.any():
+        return
+    for nest in range(NEST_NUM):
+        dec = pend[nest]
+        if not dec.any():
+            continue
+        row = npu._credit_st[nest]
+        short = dec > row
+        if short.any():
+            for spu in np.nonzero(short)[0]:
+                print(f"[GTX_CREDIT_ERROR] credit.st decrement when already 0 "
+                      f"(plz check firmware) - nest{nest} spu{int(spu)}",
+                      file=sys.stderr, flush=True)
+        np.subtract(row, dec, out=row)
+        np.maximum(row, 0, out=row)
+    pend.fill(0)
 
 
 @inst_register.custom0(name='credit.ld', funct7=0b1010000, funct3=0)
@@ -59,14 +86,19 @@ def credit_ld(npu, proc, inst, cxt) -> int:
 
 @inst_register.custom0(name='credit.st', funct7=0b1010001, funct3=0)
 def credit_st(npu, proc, inst, cxt) -> int:
-    """credit.st (0x51): T-loop compute done → inc; S-loop DMA-store consume → dec all."""
+    """credit.st (0x51): T-loop compute done → inc; S-loop DMA-store consume → dec.
+
+    rs1 is the ``target_spu`` mask (``__store_cr``'s active_tid_mask). The
+    S-loop consume is *deferred* per-SPU to the plan boundary (end.p / WJOIN)
+    so it settles after the T-loop produce — see :func:`apply_deferred_st`."""
     warp = npu.warp
     nest = warp.current_nest if warp.is_ploop else 0
     if nest < NEST_NUM:
         if warp.is_tloop and warp.current_spu < SPU_NUM:
             npu._credit_st[nest, warp.current_spu] += 1
         elif warp.is_sloop:
-            _dec_all(npu._credit_st[nest], "st", nest)
+            mask = int(proc.state.XPR[inst.rs1]) & 0xFFFF
+            npu._credit_st_deferred[nest] += (mask >> _SPU_BITS) & 1
     return 0
 
 

@@ -84,6 +84,14 @@ class GtxNpu(isa.ROCC):
         self._credit_st: np.ndarray = np.zeros(
             (NEST_NUM, SPU_NUM), dtype=np.int32,
             device=DEVICE)
+        # Per-(NEST, SPU) count of S-loop credit.st decrements deferred to the
+        # plan boundary (end.p / WJOIN). Sequential pyspike runs the S-loop
+        # store consume (credit.st--) before the T-loop produce (credit.st++);
+        # the hardware runs SMU/TMU concurrently. Deferring the decrement (and
+        # masking it to the SPUs the store actually covers) restores the balance
+        # — see context/custom0/DL/credit.py:apply_deferred_st.
+        self._credit_st_deferred: np.ndarray = np.zeros(
+            (NEST_NUM, SPU_NUM), dtype=np.int32, device=DEVICE)
 
         self._disasm_entries: List[disasm_insn_t] = []
 
@@ -164,6 +172,7 @@ class GtxNpu(isa.ROCC):
         self._mxe_accum.fill(0.0)
         self._credit_ld.fill(0)
         self._credit_st.fill(0)
+        self._credit_st_deferred.fill(0)
         self.mem.reset_scratchpads()
         self.reset_register()
         self.deferred_ddr_stores.clear()

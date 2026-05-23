@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from ..inst_handler import inst_register
 from ..exec_st import CXT
+from ..custom0.DL.credit import apply_deferred_st
 from ...config_params import NEST_NUM, SPU_NUM
 
 if TYPE_CHECKING:
@@ -52,7 +53,9 @@ def startp(npu: "GtxNpu", proc, inst, cxt) -> int:
 
 @inst_register.custom1(name='end.p', funct3=0b111)
 def endp(npu: "GtxNpu", proc, inst, cxt) -> int:
-    """C4 → C1. Simple (non-WSPLIT) firmware flushes deferred stores here."""
+    """C4 → C1. Settle deferred S-loop store credits (after the T-loop produce),
+    then — for simple (non-WSPLIT) firmware — flush deferred stores."""
+    apply_deferred_st(npu)
     npu.CONTEXT = CXT.C1
     if not npu.warp.wsplit_seen:
         npu.flush_deferred_ddr_stores()
@@ -120,6 +123,7 @@ def join(npu: "GtxNpu", proc, inst, cxt) -> int:
     Strict credit (vendor ISS ``NSU::wjoin``, NSU.cpp:451): every load/store
     credit must be balanced (== 0) at WJOIN. A remaining credit means firmware
     left a DMA↔compute hand-off unconsumed — report it (non-fatal, like the ISS)."""
+    apply_deferred_st(npu)  # settle any S-loop store credits not closed by end.p
     npu.flush_deferred_ddr_stores()
     if npu._credit_ld.any() or npu._credit_st.any():
         for nest in range(NEST_NUM):
