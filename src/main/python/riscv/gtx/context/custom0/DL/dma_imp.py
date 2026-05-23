@@ -329,9 +329,13 @@ def dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
                               length: int, height: int) -> int:
     """T-loop L1 → L1 same-SPU copy (memmove semantics).
 
-    Invariants (asserted): both windows stay inside L1 without wrap. One
-    ``.copy()`` on the source 2D view handles src/dst overlap, then a
-    single ``copy_()`` writes back.
+    Fast path: both windows stay inside L1 — one ``.copy()`` (handles src/dst
+    overlap) + one slice assignment. Wrap path: when a window runs past L1 the
+    indices wrap modulo L1, matching the vendor ``% GTX_L1_SIZE`` (gtx_npu_dma.cc:
+    340/358). This arises legitimately — e.g. a 0-length mask copy expands to the
+    65536 HW-convention length (DIAG_MASK row where num_mask == 0), which the
+    vendor wraps harmlessly; asserting here would abort the run before WJOIN and
+    leave the deferred L2→DDR store unflushed (all-zero result).
     """
     l1 = mem.l1_byte(nest, spu)
 
@@ -339,19 +343,20 @@ def dma_tloop_copy(mem: 'GtxMemory', *, nest: int, spu: int,
     # bytes; the on-chip data occupies l1_row = (length/ext)*io bytes/row.
     l1_row = (length // MX_EXT_BYTES) * MX_IO_BYTES if _DMA_CONVERTS else length
 
-    src_end = src_addr + height * l1_row
-    dst_end = dst_addr + height * l1_row
-    assert src_end <= L1_SIZE_BYTES, (
-        f"src window [{src_addr}, {src_end}) wraps L1_SIZE_BYTES "
-        f"{L1_SIZE_BYTES} — firmware bug"
-    )
-    assert dst_end <= L1_SIZE_BYTES, (
-        f"dst window [{dst_addr}, {dst_end}) wraps L1_SIZE_BYTES "
-        f"{L1_SIZE_BYTES} — firmware bug"
-    )
+    n = height * l1_row
+    src_end = src_addr + n
+    dst_end = dst_addr + n
+    if src_end <= L1_SIZE_BYTES and dst_end <= L1_SIZE_BYTES:
+        src_2d = l1[src_addr:src_end].reshape(height, l1_row).copy()
+        l1[dst_addr:dst_end].reshape(height, l1_row)[...] = src_2d
+        return 0
 
-    src_2d = l1[src_addr:src_end].reshape(height, l1_row).copy()
-    l1[dst_addr:dst_end].reshape(height, l1_row)[...] = src_2d
+    # Wrap path (vendor parity): gather modulo L1 into a temp, then scatter.
+    off = np.arange(n)
+    src_idx = (src_addr + off) % L1_SIZE_BYTES
+    dst_idx = (dst_addr + off) % L1_SIZE_BYTES
+    tmp = l1[src_idx].copy()
+    l1[dst_idx] = tmp
     return 0
 
 

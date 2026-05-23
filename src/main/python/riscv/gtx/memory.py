@@ -18,6 +18,23 @@ from .config_params import (
 )
 from .context.exec_st import CXT
 
+
+# DDR 32-byte bus-word reversal applied at the hex<->DDR boundary. Two corpora
+# disagree on the convention, so the mode is env-selectable:
+#   'byte' (default): full byte reversal (vendor "rightmost byte -> mem[0]"; the
+#                     test/ corpus, big-endian hex).
+#   'elem'          : reverse the fp16 element order only, keeping each element's
+#                     two bytes (the GTX_ISS / ggml_ops_c corpus — little-endian
+#                     fp16, no per-element byteswap; proven by ARANGE/abs goldens).
+_DDR_REVERSE_MODE = os.environ.get("GTX_DDR_REVERSE_MODE", "byte").lower()
+
+
+def _reverse_bus_word(chunk: bytes) -> bytes:
+    """Reverse one (<=32-byte) bus word per GTX_DDR_REVERSE_MODE (see above)."""
+    if _DDR_REVERSE_MODE == "elem" and len(chunk) % 2 == 0:
+        return b"".join(chunk[i:i + 2] for i in range(len(chunk) - 2, -2, -2))
+    return chunk[::-1]
+
 """GTX memory hierarchy.
 
 L0 / L1 / L2 scratchpads live as three **module-level tensors**
@@ -300,7 +317,7 @@ class GtxMemory(MEMORY):
                 if nbytes == 0:
                     continue
                 chunk = bytes.fromhex(line[: nbytes * 2])
-                chunk = chunk[::-1]
+                chunk = _reverse_bus_word(chunk)
                 self.ensure_ddr(offset + nbytes)
                 # np.frombuffer requires writable buffer; bytes is read-only,
                 # so go via bytearray (copy is cheap for 32-byte chunks).
@@ -340,7 +357,8 @@ class GtxMemory(MEMORY):
         if size & 0x1F:
             data = data + b"\x00" * (32 - (size & 0x1F))
         nlines = (size + 31) // 32
-        lines = [data[i * 32:(i + 1) * 32][::-1].hex() for i in range(nlines)]
+        lines = [_reverse_bus_word(data[i * 32:(i + 1) * 32]).hex()
+                 for i in range(nlines)]
         with open(filename, "w") as f:
             f.write("\n".join(lines))
             f.write("\n")

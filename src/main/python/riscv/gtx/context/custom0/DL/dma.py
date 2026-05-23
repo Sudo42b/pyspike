@@ -7,6 +7,7 @@ is DDR↔L2 DMA, C3 (T-loop) is L2↔L1 DMA.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, TYPE_CHECKING
 
 from ...inst_handler import inst_register
@@ -263,6 +264,13 @@ def _store(npu, proc, inst, cxt) -> int:
             length=args['length'], height=args['height'],
             rd_stride=args['rd_stride'], wr_stride=args['wr_stride'])
     if npu.warp.is_tloop:
+        if os.environ.get("GTX_DEBUG_DMA"):
+            import sys as _sys
+            _spu = _select_spu(npu)
+            _l1 = npu.mem.l1_byte(nest, _spu)
+            _src = _l1[args['addr_lo']:args['addr_lo'] + args['length']]
+            print(f"[DBG store] spu={_spu} hi={args['addr_hi']:#x} lo={args['addr_lo']:#x} "
+                  f"len={args['length']} src={bytes(_src.tolist()).hex()}", file=_sys.stderr)
         return dma_imp.dma_tloop_load_store(
             npu.mem, nest=nest, spu=_select_spu(npu), is_store=True,
             addr_hi=args['addr_hi'], addr_lo=args['addr_lo'],
@@ -279,6 +287,12 @@ def _copy(npu, proc, inst, cxt) -> int:
     xd, xs1, xs2 = _xflags(inst)
     args = dma_imp.decode_dma_args(rs1, rs2, _operand3(npu), xd=xd, xs1=xs1, xs2=xs2)
     nest = _select_nest(npu)
+    if os.environ.get("GTX_DEBUG_DMA"):
+        import sys as _sys
+        _sb = npu.mem.l1_byte(nest, _select_spu(npu))[args['addr_lo']:args['addr_lo']+args['length']]
+        print(f"[DBG copy] tloop={npu.warp.is_tloop} src={args['addr_lo']:#x} "
+              f"dst={args['addr_hi']:#x} len={args['length']} h={args['height']} "
+              f"src_bytes={bytes(_sb.tolist()).hex()}", file=_sys.stderr)
     if npu.warp.is_tloop:
         return dma_imp.dma_tloop_copy(
             npu.mem, nest=nest, spu=_select_spu(npu),

@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 
 # =========================================================================
@@ -43,7 +45,13 @@ L2_SIZE_BYTES: int = 16 * 1024 * 1024          # 16 MB per NEST
 # the boundaries (a deliberate divergence from vendor). Set MX_IO_DTYPE to
 # np.float16 to restore vendor-exact FP16 I/O — every MX op routes its
 # operand decode / L1 / L0 / SVR access through these two constants.
-MX_IO_DTYPE: type = np.float32
+# Env override GTX_MX_IO_DTYPE=float16 selects vendor-exact FP16 I/O (the
+# baseline that matches the FP16 SystemC-ISS goldens, e.g. ggml_ops_c).
+MX_IO_DTYPE: type = (
+    np.float16
+    if os.environ.get("GTX_MX_IO_DTYPE", "float32").lower() in ("float16", "fp16", "16")
+    else np.float32
+)
 MX_IO_BYTES: int = np.finfo(MX_IO_DTYPE).bits // 8
 
 # External numeric width in DDR/L2 (the interchange / golden format — vendor

@@ -77,3 +77,38 @@ $ISS -I <uni.elf> -S 0x370000000 -L <input> -B 0x37f000000 -E <Nbytes_HEX> -T <o
 ```bash
 # 빠른 복구: ln -s ../vendor/gtx_cpp_reference/test/compare_all_ops.py test/compare_all_ops.py
 ```
+
+---
+
+## ✅ 완료 (2026-05-23 세션 2) — 코퍼스=ggml_ops_c
+
+**결정**: 코퍼스 (A) ggml_ops_c 확정 (test/는 compute에서 ISS=0이라 ISS검증 불가). 디코딩 = **LE per-element + 16-element bus 역순**(GTX_DDR_REVERSE_MODE=elem). ARANGE ref [15,14,..,0,31,..]가 결정증거. test/(BE)와 혼동 금지.
+
+### 1. numpy 수학 교정 ✅
+- `test/gen_golden.py` 엔디안 인식(GTX_GOLDEN_BASE/GTX_GOLDEN_ENDIAN) + verify.py식 채점(sign-mag ULP≤1 or atol≤0.001, NaN/Inf=miss). floor/ceil/round/trunc NaN 가드.
+- 결과: ~36 op numpy==ISS(유한). 남은 FAIL=대부분 numpy 버그 아님(거대입력 overflow·초월함수·degenerate param).
+
+### 2. ISS 검증 ✅
+- ggml_ops_c `ref`==`result.hex`==ISS 출력 → 골든 생성 즉시 ISS 대비 검증됨.
+
+### 3. spike·pyspike 정합 ✅ (둘 다 수정)
+**검증 harness**: `test/verify_pyspike_ggml.py` (build_kernel.sh → pyspike → numpy/ISS 채점).
+실행 env: `GTX_MX_IO_DTYPE=float16 GTX_DDR_REVERSE_MODE=elem GTX_DDR_REVERSED=1`.
+
+**pyspike 수정 (5):**
+1. `memory.py` — GTX_DDR_REVERSE_MODE env + `_reverse_bus_word()` (byte/elem). **시스템 전반.**
+2. `config_params.py` — GTX_MX_IO_DTYPE env (float16 baseline).
+3. `MX/act.py` `_prelu`/`_prelu_i` — rs2→OPERAND2 slope staging (leaky_relu ff146→0).
+4. `DL/dma_imp.py` `dma_tloop_copy` — L1 wrap 시 assert→modulo wrap (diag_mask ff392→0; length-0→65536 copy 크래시 해결).
+5. `src/test/gtx/build_kernel.sh` — EXTRA_INC (gtx_isa_compat.h 13 op 해금).
+
+**spike 수정 (1):** `/mnt/e/14_NIGHTLY/gtx_spike/gtx/src/gtx_npu_dma.cc` ddr_init/dump에 elem 역순 모드 추가 → `setup.sh --rebuild`. (leaky_relu/diag_mask는 vendor C++에 이미 정상 — pyspike 포팅 누락이었음.)
+
+**최종 (pyspike, 54 op):** vs_ISS PASS/NAN-EDGE=49, vs_ISS"FAIL"4(scale/fill/geglu*=pyspike==numpy, ISS만 다름), cumsum=TIMEOUT. **진짜 compute 버그 0.**
+**spike**: abs/leaky_relu/diag_mask vs_ISS ff=0 확인.
+
+### 남은 후속 (비차단)
+- **cumsum pyspike TIMEOUT** (COLS=64, 성능 — 별도 조사).
+- 초월함수(sin/cos) numpy(libm) vs ISS(HW근사) 갭 — 입력 거대값 ill-conditioned. 정밀 정합하려면 입력 범위 축소 재생성(+ISS 재실행) 필요.
+- param 테스트(scale/fill/clamp/add1) degenerate (offset0 param=0) — 무의미, 입력 재생성 시 해소.
+- 미커밋 (브랜치 gtx-strict-credit). spike repo도 미커밋.

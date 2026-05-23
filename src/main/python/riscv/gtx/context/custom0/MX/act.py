@@ -147,6 +147,11 @@ def act_imm(npu, proc, inst, *, op_id: int) -> int:
 @inst_register.custom0(name='prelu', funct7=0b0101000, funct3=3)
 def _prelu(npu, proc, inst, cxt) -> int:
     # prelu	4'b0101	3'b000	gpr	gpr	3'b011	rsvd	gtx op	yes	yes	spu	3	spm_addr	vector_size[23:0]	slop_value[15:0]	N/A	r2_sel[8:0]	N/A	N/A	fp16 prelu(A)	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    # slop_value[15:0] arrives in rs2; vendor stages it into OPERAND2 before
+    # exec_activation (gtx_npu_custom0.cc:451-453). __lrelu passes fp16(0.01)
+    # this way with a raw `prelu` (no opset), so without staging the slope reads
+    # as a stale 0 and prelu collapses to relu (negatives zeroed).
+    npu.gspr[GSPR['GSPR_GTX_OPERAND2'].address] = int(proc.state.XPR[inst.rs2]) & 0xFFFF
     return act(npu, proc, inst,
                          op_id=ACT_PRELU, is_reversed=True)
 
@@ -178,6 +183,8 @@ def _sigmoid(npu, proc, inst, cxt) -> int:
 @inst_register.custom0(name='prelu.i', funct7=0b0101000, funct3=7)
 def _prelu_i(npu, proc, inst, cxt) -> int:
     # prelu.i	4'b0101	3'b000	gpr	gpr	3'b111	rsvd	gtx op	yes	yes	spu	3	N/A	src_SVR_addr_A[4:0]	slop_value[15:0]	result_SVR_addr[4:0]	r2_sel[8:0]	N/A	result[255:0]	fp16 prelu(A) imm	r2_sel = source_sel[8:7] 00: gpr / 10: zero / 11: svr, svr_addr[6:2], svr_sub_addr[1:0]
+    # slope from rs2, same as the L1 path (vendor exec_act_imm slope = rs2 & 0xFFFF).
+    npu.gspr[GSPR['GSPR_GTX_OPERAND2'].address] = int(proc.state.XPR[inst.rs2]) & 0xFFFF
     return act_imm(npu, proc, inst, op_id=ACT_PRELU)
 
 

@@ -30,13 +30,16 @@ if [ "${1:-}" = "--run" ]; then RUN=1; shift; fi
 KSRC="$1"; OUT="$2"
 KDIR="$(cd "$(dirname "$KSRC")" && pwd)"
 
-CFLAGS="-march=rv64g_xgtxnpu -mabi=lp64d -mcmodel=large -O0 -g -ffreestanding \
+CFLAGS="-march=rv64g_xgtxnpu -mabi=lp64d -mcmodel=large -O3 -g -ffreestanding \
   -nostartfiles -ffunction-sections -fdata-sections -std=c11 \
   -DGTX_MAIN_OFFSET=0x370000000ULL \
   -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function \
   -Wno-missing-field-initializers -Wno-strict-aliasing \
   -Wno-incompatible-pointer-types -Wno-compare-distinct-pointer-types"
 INCS="-I$KDIR -I$GFW/include/gtx/intrinsics -I$GFW/include -I$GFW/include/gtx -I$KINC"
+# Extra include dir (e.g. the ggml_ops_c corpus root, which holds gtx_isa_compat.h
+# pulled in by exp/sqrt/softmax/norm/... kernels).
+INCS="$INCS ${EXTRA_INC:+-I$EXTRA_INC}"
 SRCS="$KSRC $INTRIN/intrin_level1.c $INTRIN/intrin_level2.c $INTRIN/intrin_level3.c $HERE/spike_crt.S"
 
 # shellcheck disable=SC2086
@@ -53,7 +56,8 @@ if [ "$RUN" -eq 1 ]; then
   echo "[run] dumping 0x37f000000 +$OSIZE B"
   GTX_DDR_SIZE=2G GTX_DDR_INIT="$INPUT" GTX_DDR_DUMP="$TMPOUT" \
     GTX_DDR_DUMP_ADDR=0x37f000000 GTX_DDR_DUMP_SIZE="$OSIZE" GTX_DDR_REVERSED=1 \
-    UV_LINK_MODE=copy uv run --no-sync pyspike --extlib=riscv.gtx --extension=gtx "$OUT"
+    UV_LINK_MODE=copy uv run --no-sync pyspike --extlib=riscv.gtx --extension=gtx \
+    --device=gtx_ddr,0x370000000 "$OUT"
   grep -vE '^@' "$GOLDEN" > "${TMPOUT}.golden"
   if diff -q "$TMPOUT" "${TMPOUT}.golden" >/dev/null 2>&1; then
     echo "[PASS] $OUT matches golden"
