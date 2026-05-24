@@ -52,9 +52,14 @@ verify_match() {
 }
 
 # ---- 1) pyspike (build_kernel elf) --------------------------------------
+# GTX_MX_IO_DTYPE=float16: pyspike's on-chip I/O width must be FP16 to match
+# the FP16 HW model (ISS) and vendor spike. Without it pyspike defaults to FP32
+# I/O, which misreads FP16-packed register immediates (ARANGE start/step,
+# CLAMP/SCALE scalar, prelu slope, ...) as a single FP32 → garbage. byte-mode
+# DDR reversal (GTX_DDR_REVERSED=1) is correct for the test/ corpus.
 DPY="$ART/${BASE}.py.hex"; : > "$DPY"
 t0=$(date +%s.%N)
-GTX_DDR_SIZE=2G GTX_DDR_INIT="$INPUT" GTX_DDR_DUMP="$DPY" GTX_DDR_DUMP_ADDR=0x37f000000 \
+GTX_MX_IO_DTYPE=float16 GTX_DDR_SIZE=2G GTX_DDR_INIT="$INPUT" GTX_DDR_DUMP="$DPY" GTX_DDR_DUMP_ADDR=0x37f000000 \
   GTX_DDR_DUMP_SIZE=$OSIZE GTX_DDR_REVERSED=1 UV_LINK_MODE=copy \
   timeout "$TMO" uv run --no-sync pyspike --extlib=riscv.gtx --extension=gtx \
   --device=gtx_ddr,0x370000000 "$ELF_K" >"$ART/${BASE}.py.log" 2>&1

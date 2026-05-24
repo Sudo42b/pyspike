@@ -5,18 +5,21 @@ hand-off. In pyspike's eager functional model the *_chk spins always pass
 (DMA is instantaneous), so the counters are tracked for vendor 1:1 parity
 but never stall control flow.
 
-The load-bearing behavior is ``credit.chk``'s deferred-DDR-store flush in the
-S-loop: plan-style (WSPLIT) firmware suppresses the ``end.p`` flush
-(``control.py:endp`` checks ``wsplit_seen``) and relies on the S-loop
-``credit.chk`` to commit the deferred queue mid-execution. Multi-tile firmware
-needs this per-tile flush — the queue reads L2 lazily at flush time, so
-deferring all tiles to the atexit flush would make every entry read the final
-tile's L2.
+The deferred L2→DDR store queue is committed at the **plan boundary** — WJOIN
+(``control.py:join``) for WSPLIT firmware, ``end.p`` otherwise — plus the
+on-overwrite ``flush_deferred_if_l2_overlap`` guard. Both run AFTER the T-loop
+thread section, so a shared ``store`` emitted before its producing thread (in
+program order) still reads correct, post-compute L2. ``credit.chk`` does NOT
+flush (it did, historically — see :func:`credit_chk` — but that committed
+store-before-compute kernels like MUL_MAT/NORM with stale L2). Per-tile
+correctness comes from the per-(``__split``/``__join``) WJOIN flush, not from a
+credit.chk flush.
 
 ISA note: there is a single ``credit.chk`` (funct7 0x53) — no separate
 credit.ld.chk/st.chk. The firmware emits 0x53 (the encoding the SystemC ISS and
 vendor spike decode); 0x52 is a legacy binutils mis-encoding kept as an alias.
 """
+import os
 import sys
 
 import numpy as np
@@ -110,14 +113,22 @@ def credit_st(npu, proc, inst, cxt) -> int:
 def credit_chk(npu, proc, inst, cxt) -> int:
     """credit.chk: the single credit barrier (there is no credit.ld.chk/st.chk —
     that was a mis-split of this one instruction). In pyspike's eager functional
-    model the spin passes immediately (DMA instantaneous), so it is a NOP except
-    in the S-loop, where it commits the deferred L2→DDR store queue. That per-tile
-    flush is load-bearing for plan-style (WSPLIT) firmware — see module docstring;
-    it is harmless elsewhere because the shared ``credit.chk`` runs before the
-    S-loop ``store_cr`` queues anything (empty queue → no-op). T-loop credit.chk
-    is a plain NOP.
+    model the spin passes immediately (DMA instantaneous), so it is a NOP.
+
+    It does NOT flush the deferred L2→DDR store queue. Flushing here was wrong:
+    when a kernel emits the shared ``store`` BEFORE the producing T-loop thread
+    (program order: ``__start_shared``/store … then ``__start_thread``/compute,
+    e.g. MUL_MAT's per-thread store loop or NORM/GROUP_NORM/RMS_NORM), the
+    credit.chk that precedes/interleaves the store committed it while L2 still
+    held stale (pre-compute) data → partial/zero output. On real HW (ISS) the
+    barrier blocks until the thread's ``credit.st``; pyspike models that by
+    deferring the commit to the plan boundary (WJOIN, control.py:join) plus the
+    on-overwrite ``flush_deferred_if_l2_overlap`` guard — both run AFTER the
+    thread section, so the queue reads correct L2. Verified 2026-05-24: a full
+    95-op noflush sweep matched ISS on MUL_MAT/NORM/GROUP_NORM/RMS_NORM with
+    0 regressions. Set ``GTX_CHK_FLUSH=1`` to restore the legacy eager flush.
     """
-    if npu.warp.is_sloop:
+    if npu.warp.is_sloop and os.environ.get("GTX_CHK_FLUSH") == "1":
         npu.flush_deferred_ddr_stores()
     return 0
 

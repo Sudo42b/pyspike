@@ -1,203 +1,137 @@
-// =================================================================
-// Copyright   : (C) Supergate - All Rights Reserved
-// Project     : VTS
-// Description : N1 add kernel test (vector + vector)
-// Author      : mh.kim ( NPU Div - NPU Core Design Team )    
-// Last Update : 2026/03/04
-// =================================================================
-#include "gtx/intrinsics/intrin.h"
+//==================================================================
+// n1s16_mul — element-wise OP (vector + vector), 1 NEST x 16 SPUs
+// dst[i] = src0[i] * src1[i], multi-tile (ISS-compatible, ABS-style).
+//
+// Rewritten from the legacy mh.kim __start_plani kernel (which only
+// committed on lenient spike; ISS/pyspike produced 0) to the proven
+// ABS/ggml_ops_c structure: shared __load_cr supplies the thread credit,
+// __credit_chk gates the deferred L2->DDR __store_cr that flushes at the
+// plan boundary — so all three sims (ISS / spike / pyspike) converge.
+//==================================================================
+
+#include "intrin.h"
 #include "gtx/address.h"
+#include "gtx_csr.h"
+#include <stdint.h>
 
-// Hardware
-#define TARGET_NEST_ID                  0                 
-#define SPU_NUM_PER_NEST                16                
-#define D_TYPE                          2                 
-#define L1_BANK_SIZE                    (64 * 3 * 1024)         
-#define NOT_USE                         0xBEEF
+#define NEST_NUM            1
+#define SPU_NUM_PER_NEST    16
+#define DTYPE               2       // FP16
 
-// Memory - DDR
-#define BASE_DDR_A                      GTX_MAIN_ADDR(0x1000000)
-#define BASE_DDR_B                      GTX_MAIN_ADDR(0x2000000)
-#define BASE_DDR_RES                    GTX_MAIN_ADDR(0xf000000)
+#define WIDTH               8
+#define HEIGHT              131072  // 1,048,576 elements / WIDTH
 
-// Memory - L2SPM
-#define BASE_L2_A                       0x000000    
-#define BASE_L2_B                       0x050000    
-#define BASE_L2_RES                     0x0a0000    
-#define BASE_L2_BANK_OFFSET             0x100000  
+#define BASE_DDR_A          0x1000000
+#define BASE_DDR_B          0x2000000
+#define BASE_DDR_RESULT     0xf000000
 
-// Memory - L1SPM
-#define BASE_L1_A                       0x00000
-#define BASE_L1_B                       0x30000
-#define BASE_L1_C                       0x30000
-#define BASE_L1_R                       0x00000
+#define BANK_A              0x00000
+#define BANK_B              0x20000
+#define BANK_C              0x30000
+#define BANK_R              0x50000
 
-// Input size
-#define I_VECTOR_SIZE                   (1024 * 1024)          
+#define ROW_BYTES           (WIDTH * DTYPE)
+#define ROWS_PER_NEST       (HEIGHT / NEST_NUM)
+#define NEST_DATA_BYTES     (ROWS_PER_NEST * ROW_BYTES)
+#define MAX_SHARED_DMA_BYTES 65535u
+#define SHARED_TILE_MAX_ROWS ((uint32_t)(MAX_SHARED_DMA_BYTES / ROW_BYTES))
+#define SHARED_TILE_MAX_BYTES (SHARED_TILE_MAX_ROWS * ROW_BYTES)
+// L2 layout: A | B | RESULT, each one shared-tile wide.
+#define L2_A                0x000000
+#define L2_B                (L2_A + SHARED_TILE_MAX_BYTES)
+#define L2_RESULT           (L2_B + SHARED_TILE_MAX_BYTES)
 
-// Equation
-#define CEIL_DIV(a, b)                  (((a) + (b) - 1) / (b))
-#define MIN(a,b)                        ((a) < (b) ? (a) : (b))
-#define MAX(a,b)                        ((a) > (b) ? (a) : (b))
+static inline uint32_t min_u32(uint32_t a, uint32_t b) {
+    return a < b ? a : b;
+}
 
-// Tiling parameter
-#define CAL_QUOT                        (I_VECTOR_SIZE / SPU_NUM_PER_NEST)
-#define CAL_MOD                         (I_VECTOR_SIZE % SPU_NUM_PER_NEST)
+static inline uint32_t rows_for_tid(uint32_t total_rows, uint8_t tid) {
+    uint32_t q = total_rows / SPU_NUM_PER_NEST;
+    uint32_t rem = total_rows % SPU_NUM_PER_NEST;
+    return (uint32_t)(tid < rem ? (q + 1) : q);
+}
 
-// Tiling calculation
-#define CAL_NUM_PER_THREAD(tid)         ((tid) < CAL_MOD ? (CAL_QUOT + 1) : CAL_QUOT)
-#define OFFSET_THREAD(tid)              (((MIN((tid), CAL_MOD) * (CAL_QUOT + 1)) + (MAX(0, (int)(tid) - (int)CAL_MOD) * CAL_QUOT)) * D_TYPE)
+static inline uint32_t row_start_for_tid(uint32_t total_rows, uint8_t tid) {
+    uint32_t q = total_rows / SPU_NUM_PER_NEST;
+    uint32_t rem = total_rows % SPU_NUM_PER_NEST;
+    return (uint32_t)(tid < rem
+        ? tid * (q + 1)
+        : rem * (q + 1) + (tid - rem) * q);
+}
 
+static inline uint16_t active_tid_mask_for_rows(uint32_t total_rows) {
+    uint32_t cnt = min_u32(total_rows, SPU_NUM_PER_NEST);
+    return (uint16_t)(cnt >= SPU_NUM_PER_NEST ? 0xFFFFu : ((1u << cnt) - 1u));
+}
 
 int main(void) {
+    uint8_t nest_id = 0;
+    uint32_t nest_off = (uint32_t)nest_id * NEST_DATA_BYTES;
 
-    //=============================================================================
-    // Set variables
-    //=============================================================================
-    uint32_t bank_offset_shared = 0;
-    uint32_t bank_offset_thread = 0;
+    for (uint32_t tile_row_start = 0; tile_row_start < ROWS_PER_NEST; tile_row_start += SHARED_TILE_MAX_ROWS) {
+        uint32_t tile_rows = min_u32(ROWS_PER_NEST - tile_row_start, SHARED_TILE_MAX_ROWS);
+        uint32_t tile_bytes = tile_rows * ROW_BYTES;
+        uint32_t tile_ddr_off = nest_off + tile_row_start * ROW_BYTES;
+        uint16_t active_tid_mask = active_tid_mask_for_rows(tile_rows);
 
+        __split();
+        {
+            __start_plan(nest_id);
 
-    //=============================================================================
-    // GTX run
-    //=============================================================================
-    __split();
+                __start_shared();
+                    // src0 (A) -> L2, no credit
+                    __load(GTX_MAIN_ADDR(BASE_DDR_A) + tile_ddr_off, L2_A,
+                        tile_bytes, (uint16_t)tile_bytes, 1, (uint16_t)tile_bytes);
+                    // src1 (B) -> L2, with credit to the active threads
+                    __load_cr(GTX_MAIN_ADDR(BASE_DDR_B) + tile_ddr_off, L2_B,
+                        tile_bytes, (uint16_t)tile_bytes, 1, (uint16_t)tile_bytes,
+                        1, active_tid_mask, 0xBEEF);
 
-        __start_plani(TARGET_NEST_ID);
+                    __credit_chk(active_tid_mask);
 
-            // Set L1SPM bank start address 
-            __set_spm_addr(BASE_L1_R, BASE_L1_C, BASE_L1_B, BASE_L1_A);
+                    __store_cr(L2_RESULT, GTX_MAIN_ADDR(BASE_DDR_RESULT) + tile_ddr_off,
+                        tile_bytes, (uint16_t)tile_bytes, 1, (uint16_t)tile_bytes,
+                        1, active_tid_mask);
+                __end_shared();
 
-            __start_shared();
+                for (uint8_t tid = 0; tid < SPU_NUM_PER_NEST; tid++) {
+                    uint32_t row_start = row_start_for_tid(tile_rows, tid);
+                    uint32_t rows_for_this_tid = rows_for_tid(tile_rows, tid);
+                    uint16_t tid_mask = (uint16_t)(0x1u << tid);
 
-                for (uint8_t thread_id = 0; thread_id < SPU_NUM_PER_NEST; thread_id++) {
-                    
-                    // Adjust status
-                    uint32_t cal_num_per_thread = CAL_NUM_PER_THREAD(thread_id);
-                    
-                    // Load vector A tile per thread
-                    __load(
-                        BASE_DDR_A + OFFSET_THREAD(thread_id)               ,   
-                        BASE_L2_A  + bank_offset_shared                     ,   
-                        cal_num_per_thread                                  ,   
-                        cal_num_per_thread                                  ,   
-                        D_TYPE                                              ,   
-                        cal_num_per_thread                                                                                     
-                    );
+                    __start_thread(tid);
+                        __set_spm_addr(BANK_R, BANK_C, BANK_B, BANK_A);
+                        __credit_chk(0xBEEF);
 
-                    // Load vector B tile per thread
-                    __load(
-                        BASE_DDR_B + OFFSET_THREAD(thread_id)               ,   
-                        BASE_L2_B  + bank_offset_shared                     ,   
-                        cal_num_per_thread                                  ,   
-                        cal_num_per_thread                                  ,   
-                        D_TYPE                                              ,   
-                        cal_num_per_thread                                                                                     
-                    );
+                        for (uint32_t r = 0; r < rows_for_this_tid; r++) {
+                            uint32_t row_off = (row_start + r) * ROW_BYTES;
 
-                    // Load credit inc 
-                    __credit_ld(0x1 << (thread_id), NOT_USE);
+                            __load(L2_A + row_off, BANK_A,
+                                ROW_BYTES, (uint16_t)ROW_BYTES, 1, (uint16_t)ROW_BYTES);
+                            __load(L2_B + row_off, BANK_B,
+                                ROW_BYTES, (uint16_t)ROW_BYTES, 1, (uint16_t)ROW_BYTES);
 
-                    // Adjust offset
-                    bank_offset_shared += BASE_L2_BANK_OFFSET;
+                            if (r == rows_for_this_tid - 1) {
+                                __credit_ld(tid, nest_id);
+                            }
+
+                            __mul_vv(WIDTH);
+
+                            if (r == rows_for_this_tid - 1) {
+                                __store_cr(BANK_R, L2_RESULT + row_off,
+                                    ROW_BYTES, (uint16_t)ROW_BYTES, 1, (uint16_t)ROW_BYTES,
+                                    1, tid_mask);
+                            } else {
+                                __store(BANK_R, L2_RESULT + row_off,
+                                    ROW_BYTES, (uint16_t)ROW_BYTES, 1, (uint16_t)ROW_BYTES);
+                            }
+                        }
+                    __end_thread(tid);
                 }
 
-                // Adjust offset
-                bank_offset_shared = 0;
-
-                for (uint8_t thread_id = 0; thread_id < SPU_NUM_PER_NEST; thread_id++) {
-                    
-                    // Adjust status
-                    uint32_t cal_num_per_thread = CAL_NUM_PER_THREAD(thread_id);
-                    uint16_t target             = (0x1 << thread_id);
-
-                    // Store credit inc check
-                    __credit_chk(target);
-
-                    // Store vector RES tile per thread
-                    __store(
-                        BASE_L2_RES  + bank_offset_shared                   ,   
-                        BASE_DDR_RES + OFFSET_THREAD(thread_id)             ,   
-                        cal_num_per_thread                                  ,   
-                        cal_num_per_thread                                  ,   
-                        D_TYPE                                              ,   
-                        cal_num_per_thread                                  
-                    );
-
-                    // Store credit dec
-                    __credit_st(target);   
-
-                    // Adjust offset
-                    bank_offset_shared += BASE_L2_BANK_OFFSET;
-                }
-
-            __end_shared();
-
-             for (uint8_t thread_id = 0; thread_id < SPU_NUM_PER_NEST; thread_id++) {
-
-                __start_thread(thread_id);
-
-                    // Assign base address
-                    uint32_t L2_A_thread   = BASE_L2_A   + bank_offset_thread;
-                    uint32_t L2_B_thread   = BASE_L2_B   + bank_offset_thread;
-                    uint32_t L2_RES_thread = BASE_L2_RES + bank_offset_thread;
-
-                    // Adjust status
-                    uint32_t cal_num_per_thread = CAL_NUM_PER_THREAD(thread_id);   
-
-                    // Load credit inc check
-                    __credit_chk(NOT_USE);
-                    
-                    // Load vector A last tile
-                    __load(
-                        L2_A_thread                                                     ,
-                        BASE_L1_A                                                       ,
-                        cal_num_per_thread                                              ,
-                        cal_num_per_thread                                              ,
-                        D_TYPE                                                          ,
-                        NOT_USE
-                    );
-
-                    // Load vector B last tile
-                    __load(
-                        L2_B_thread                                                     ,
-                        BASE_L1_B                                                       ,
-                        cal_num_per_thread                                              ,
-                        cal_num_per_thread                                              ,
-                        D_TYPE                                                          ,
-                        NOT_USE
-                    );
-
-                    // Load credit dec
-                    __credit_ld(NOT_USE, NOT_USE);
-
-                    // [add.vv]
-                    __mul_vv(cal_num_per_thread);
-
-                    // Store vector result last tile
-                    __store(
-                        BASE_L1_R                                                       ,
-                        L2_RES_thread                                                   ,
-                        cal_num_per_thread                                              ,
-                        cal_num_per_thread                                              ,
-                        D_TYPE                                                          ,
-                        NOT_USE                                                          
-                    );
-
-                    // Store credit inc
-                    __credit_st(NOT_USE);
-
-                    // Adjust offset
-                    bank_offset_thread += BASE_L2_BANK_OFFSET;
-                    
-                __end_thread(thread_id);
-            }
-
-
-        __end_plani(TARGET_NEST_ID);
-        
-    __join();
-
-
+            __end_plan(nest_id);
+        }
+        __join();
+    }
     return 0;
 }

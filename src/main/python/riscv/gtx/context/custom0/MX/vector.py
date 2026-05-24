@@ -170,15 +170,19 @@ _CLAMP_FN = {
 
 
 def _shift(a_uint: np.ndarray, rs2: int) -> np.ndarray:
-    """rs2 = shift_num[4:0], shift_mode[5] (0 → ``>>``, 1 → ``<<``).
+    """rs2 = shift_num[3:0], shift_mode[4] (0 → ``>>``, 1 → ``<<``).
 
-    Operates on the raw bit pattern at the MX I/O width (16- or 32-bit). torch
-    has no unsigned shift; promote to int64 (values non-negative, so ``>>`` is
-    logical) and mask back to the I/O width on left-shift overflow.
+    Matches firmware ``__shift_i`` packing ``rs2 = (shift_mode << 4) | shift_num``
+    (intrin_level1.c) and the ISS decode. The earlier shift_num[4:0]/mode[5]
+    layout swallowed the mode bit into the amount and read the direction from the
+    wrong bit, so every left shift became a right shift by 16+num — breaking
+    COUNT_EQUAL's popcount fold. Operates on the raw bit pattern at the MX I/O
+    width; promote to int64 (values non-negative, so ``>>`` is logical) and mask
+    back to the I/O width on left-shift overflow.
     """
-    amt = rs2 & 0x1F
+    amt = rs2 & 0xF
     a = a_uint.astype(np.int64)
-    shifted = ((a << amt) & _IO_MASK) if (rs2 & 0x20) else (a >> amt)
+    shifted = ((a << amt) & _IO_MASK) if (rs2 & 0x10) else (a >> amt)
     return shifted.astype(_IO_UINT)
 
 
@@ -187,7 +191,7 @@ def _shift(a_uint: np.ndarray, rs2: int) -> np.ndarray:
 _LOGIC_FN = {
     Logic.AND: lambda a, b, rs2: a & b,
     Logic.OR: lambda a, b, rs2: a | b,
-    Logic.NOT: lambda a, b, rs2: a ^ a.new_tensor(_IO_MASK),
+    Logic.NOT: lambda a, b, rs2: a ^ _IO_UINT(_IO_MASK),
     Logic.SHIFT: lambda a, b, rs2: _shift(a, rs2),
 }
 
