@@ -14,7 +14,7 @@ ENV_PYSPIKE_EXTS = "PYSPIKE_EXTS"
 # load spike runtime library (libriscv.so, libcustomext.so)
 try:
     load_spike_library("riscv")
-except RuntimeError:
+except (RuntimeError, OSError):
     warnings.warn("Missing `libriscv.so`, run `python install -e '.[dev]' to build it.")
 else:
     try:
