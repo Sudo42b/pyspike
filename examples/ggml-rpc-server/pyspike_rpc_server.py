@@ -29,6 +29,11 @@ import wire_protocol as wp  # noqa: E402
 import op_registry as opr   # noqa: E402
 import ddr_backend as ddr   # noqa: E402
 import ggml_compute as gc   # noqa: E402
+import pyspike_runner as psr  # noqa: E402
+
+# Opt-in: when set, GRAPH_COMPUTE tries to route compatible nodes through
+# pyspike .elf execution; otherwise everything falls back to NumPy.
+USE_PYSPIKE = os.environ.get("PYSPIKE_RPC_BACKEND", "").lower() in ("spike", "pyspike", "1", "true")
 
 log = logging.getLogger("pyspike-rpc")
 
@@ -295,6 +300,10 @@ class RpcSession:
                 continue
 
             try:
+                # Opt-in pyspike route first; falls through to NumPy on miss.
+                if USE_PYSPIKE and self._try_pyspike(node, by_id, dev):
+                    ok += 1
+                    continue
                 srcs = self._resolve_srcs(node, by_id, dev)
                 result = gc.compute(node, srcs)
                 if result is None:
@@ -334,6 +343,50 @@ class RpcSession:
         """Place compute output into the destination tensor's DDR slot."""
         dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
         ddr.write_tensor(node, dst_buf.data, dst_off, result)
+
+    # sub-op id → (kernel name for log, pyspike runner fn). Extend by adding
+    # a firmware template under firmware_templates/ + a runner in pyspike_runner.
+    _UNARY_PYSPIKE_KERNELS = {
+        opr.GGML_UNARY_OP_ABS:  ("ABS",  psr.run_unary_abs_fp16),
+        opr.GGML_UNARY_OP_SILU: ("SILU", psr.run_unary_silu_fp16),
+    }
+
+    def _try_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """If `node` matches a pattern we have a pyspike kernel for, run it
+        and write the result. Returns True on success, False to signal NumPy
+        fallback. Any pyspike error is logged and also returns False.
+        """
+        if node.op != opr.GGML_OP_UNARY:
+            return False
+        kernel = self._UNARY_PYSPIKE_KERNELS.get(node.op_params[0])
+        if kernel is None:
+            return False
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        # Resolve the single source tensor's raw bytes (skip numpy conversion).
+        src_id = node.src[0]
+        if src_id == 0:
+            return False
+        src_t = by_id.get(src_id)
+        if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+            return False
+        src_buf, src_off = dev.buffer_for_data_addr(src_t.data)
+        nbytes = ddr.tensor_nbytes(src_t)
+        if nbytes == 0 or nbytes % psr.ROW_BYTES != 0:
+            return False
+
+        kernel_name, runner = kernel
+        try:
+            log.info("[%s] node 0x%x %s pyspike route: %d bytes (%d fp16)",
+                     self.addr, node.id, kernel_name, nbytes, nbytes // 2)
+            out_bytes = runner(bytes(src_buf.data[src_off:src_off + nbytes]))
+        except Exception as e:
+            log.warning("[%s] pyspike route failed (%s) → NumPy fallback", self.addr, e)
+            return False
+
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
 
     def _h_graph_recompute(self, _payload: bytes) -> None:
         # One-way — same stub as GRAPH_COMPUTE for M1.

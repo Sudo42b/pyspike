@@ -280,6 +280,113 @@ def compute(node: RpcTensor, srcs: list[np.ndarray]) -> np.ndarray:
         m = np.triu(np.ones((n, n), dtype=bool), k=1 + n_past)
         return np.where(m, 0, x)
 
+    # --- conv / pool / upscale family --------------------------------------
+    if op == opr.GGML_OP_IM2COL:
+        # ggml im2col: a is kernel (only for shape), b is input. Result layout
+        # (numpy / PyTorch view): (B, OH, OW, IC*KH*KW), inner = KW, KH, IC.
+        s0, s1, p0, p1, d0, d1, is_2D = (int(params[k]) for k in range(7))
+        if not is_2D:
+            raise NotImplementedError("IM2COL is_2D=0 (1-D) not implemented")
+        a = srcs[0]
+        b = _f32(srcs[1])
+        # ggml-rpc strips trailing unit dims; add B=1 / OC=1 back as needed.
+        if a.ndim == 3:
+            a = a[None, :, :, :]                       # (OC=1?, IC, KH, KW)
+        if a.ndim == 2:
+            a = a[None, None, :, :]                    # (1, 1, KH, KW)
+        if b.ndim == 3:
+            b = b[None, :, :, :]                       # (B=1, IC, IH, IW)
+        elif b.ndim == 2:
+            b = b[None, None, :, :]                    # (1, 1, IH, IW)
+        OC, IC, KH, KW = a.shape       # kernel — only the spatial+IC dims matter
+        B, IC_b, IH, IW = b.shape
+        OH = (IH + 2 * p1 - d1 * (KH - 1) - 1) // s1 + 1
+        OW = (IW + 2 * p0 - d0 * (KW - 1) - 1) // s0 + 1
+        bp = np.pad(b, ((0, 0), (0, 0), (p1, p1), (p0, p0)))
+        # (B, IC, KH, KW, OH, OW) then transpose to (B, OH, OW, IC, KH, KW)
+        out = np.empty((B, OH, OW, IC_b, KH, KW), dtype=np.float32)
+        for kh_i in range(KH):
+            for kw_i in range(KW):
+                ys = kh_i * d1
+                xs = kw_i * d0
+                sliced = bp[:, :, ys:ys + s1 * OH:s1, xs:xs + s0 * OW:s0]
+                out[..., kh_i, kw_i] = sliced.transpose(0, 2, 3, 1)
+        # flatten IC, KH, KW → IC*KH*KW (KW innermost matches ggml ne[0] order)
+        return out.reshape(B, OH, OW, IC_b * KH * KW)
+
+    if op == opr.GGML_OP_CONV_2D_DW:
+        # depthwise conv via ggml_conv_2d_dw_direct: kernel a (C, 1, KH, KW),
+        # input b (B, C, IH, IW), output (B, C, OH, OW). Same params as IM2COL
+        # minus the trailing is_2D flag (always 2-D here).
+        s0, s1, p0, p1, d0, d1 = (int(params[k]) for k in range(6))
+        a = _f32(srcs[0])
+        b = _f32(srcs[1])
+        # kernel numpy shape after axis-reversal is (C, 1, KH, KW); some
+        # callers feed (C, KH, KW) — handle both.
+        if a.ndim == 3:
+            a = a[:, None, :, :]
+        if b.ndim == 3:
+            b = b[None, :, :, :]
+        C_k, _, KH, KW = a.shape
+        B, C, IH, IW = b.shape
+        OH = (IH + 2 * p1 - d1 * (KH - 1) - 1) // s1 + 1
+        OW = (IW + 2 * p0 - d0 * (KW - 1) - 1) // s0 + 1
+        bp = np.pad(b, ((0, 0), (0, 0), (p1, p1), (p0, p0)))
+        out = np.zeros((B, C, OH, OW), dtype=np.float32)
+        kw = a[:, 0]                                # (C, KH, KW)
+        for kh_i in range(KH):
+            for kw_i in range(KW):
+                ys = kh_i * d1
+                xs = kw_i * d0
+                sliced = bp[:, :, ys:ys + s1 * OH:s1, xs:xs + s0 * OW:s0]
+                out += sliced * kw[None, :, kh_i, kw_i, None, None]
+        return out
+
+    if op == opr.GGML_OP_POOL_2D:
+        # params: {pool_op, k0, k1, s0, s1, p0, p1}; p0/p1 are floats cast to
+        # int32 by ggml (so they're integer in practice).
+        pool_op = int(params[0])
+        k0, k1, s0, s1 = (int(params[i]) for i in (1, 2, 3, 4))
+        p0, p1 = int(params[5]), int(params[6])
+        x = _f32(srcs[0])
+        if x.ndim == 3:
+            x = x[None, :, :, :]
+        B, C, IH, IW = x.shape
+        OH = (IH + 2 * p1 - k1) // s1 + 1
+        OW = (IW + 2 * p0 - k0) // s0 + 1
+        pad_val = -np.inf if pool_op == 0 else 0.0
+        xp = np.pad(x, ((0, 0), (0, 0), (p1, p1), (p0, p0)),
+                    constant_values=pad_val)
+        out = np.empty((B, C, OH, OW), dtype=np.float32)
+        for oh in range(OH):
+            for ow in range(OW):
+                win = xp[:, :, oh * s1:oh * s1 + k1, ow * s0:ow * s0 + k0]
+                if pool_op == 0:                      # MAX
+                    out[:, :, oh, ow] = win.max(axis=(2, 3))
+                else:                                 # AVG
+                    out[:, :, oh, ow] = win.mean(axis=(2, 3))
+        return out
+
+    if op == opr.GGML_OP_UPSCALE:
+        # ggml stores mode as int32 at op_params[0]; only nearest (mode=0) is
+        # commonly used. dst shape is encoded in node.ne (PyTorch view: B,C,OH,OW).
+        mode = int(params[0]) & 0xFF
+        x = _f32(srcs[0])
+        # node.ne is in ggml order (W, H, C, B); numpy view is reverse.
+        # Pyspike caller delivers x shape already as the numpy view; just match
+        # spatial dims via repeat.
+        target_w = node.ne[0]
+        target_h = node.ne[1]
+        IH, IW = x.shape[-2], x.shape[-1]
+        sh = target_h // IH
+        sw = target_w // IW
+        if mode != 0:
+            raise NotImplementedError(f"UPSCALE mode={mode} not implemented")
+        if sh < 1 or sw < 1 or target_h % IH or target_w % IW:
+            raise NotImplementedError(
+                f"non-integer upscale {IH}x{IW} -> {target_h}x{target_w}")
+        return np.repeat(np.repeat(x, sh, axis=-2), sw, axis=-1)
+
     # --- view-only metadata ops: dst already aliases src buffer; nothing to do.
     if op in (opr.GGML_OP_NONE, opr.GGML_OP_RESHAPE, opr.GGML_OP_VIEW,
               opr.GGML_OP_PERMUTE, opr.GGML_OP_TRANSPOSE):
