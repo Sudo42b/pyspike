@@ -246,9 +246,21 @@ def compute(node: RpcTensor, srcs: list[np.ndarray]) -> np.ndarray:
     if op in (opr.GGML_OP_DUP, opr.GGML_OP_CPY, opr.GGML_OP_CONT):
         return _f32(srcs[0])    # caller casts to dst type
     if op == opr.GGML_OP_REPEAT:
-        # Repeat src0 to fit dst shape. We get dst shape from node.ne.
-        dst_shape = tuple(node.ne[d] for d in range(4) if node.ne[d] > 0)[::-1]
-        return np.broadcast_to(_f32(srcs[0]), dst_shape).copy()
+        # ggml REPEAT: dst[i] = src[i % src.dim]. Each dst dim must be an
+        # integer multiple of the corresponding src dim. broadcast_to only
+        # covers the dim==1 case; use np.tile for the general tile pattern
+        # YOLO and other CNNs hit (e.g. (4,4) → (8,8)).
+        # Match ddr.view_tensor's ndim convention: trim trailing-1 ggml dims.
+        ndim = 4
+        while ndim > 1 and node.ne[ndim - 1] == 1:
+            ndim -= 1
+        src = _f32(srcs[0])
+        dst_shape = tuple(node.ne[d] for d in range(ndim))[::-1]
+        # Right-align: pad src.shape with leading 1s up to dst rank.
+        if src.ndim < len(dst_shape):
+            src = src.reshape((1,) * (len(dst_shape) - src.ndim) + src.shape)
+        reps = tuple(d // s for s, d in zip(src.shape, dst_shape))
+        return np.tile(src, reps)
     if op == opr.GGML_OP_CONCAT:
         axis_ggml = params[0]
         # ggml axis is in ne-space; numpy axis is reversed.
@@ -391,5 +403,45 @@ def compute(node: RpcTensor, srcs: list[np.ndarray]) -> np.ndarray:
     if op in (opr.GGML_OP_NONE, opr.GGML_OP_RESHAPE, opr.GGML_OP_VIEW,
               opr.GGML_OP_PERMUTE, opr.GGML_OP_TRANSPOSE):
         return None
+
+    if op == opr.GGML_OP_CONT:
+        # ggml_cont: collapse a non-contiguous view into a fresh row-major
+        # tensor. The source numpy view already carries the strided layout —
+        # ascontiguousarray gives us the contiguous snapshot ggml expects in
+        # the dst tensor's flat buffer.
+        return np.ascontiguousarray(_f32(srcs[0]))
+
+    if op == opr.GGML_OP_CONV_2D:
+        # ggml_conv_2d_direct: kernel a (OC, IC, KH, KW), input b (B, IC, IH, IW),
+        # produces (B, OC, OH, OW). Same params order as IM2COL (no is_2D flag).
+        # YOLO graphs normally expand conv2d to IM2COL + MUL_MAT, but the
+        # direct op exists and a client may emit it.
+        s0, s1, p0, p1, d0, d1 = (int(params[k]) for k in range(6))
+        a = _f32(srcs[0])
+        b = _f32(srcs[1])
+        if a.ndim == 3:
+            a = a[None, :, :, :]                       # (1, IC, KH, KW)
+        if a.ndim == 2:
+            a = a[None, None, :, :]
+        if b.ndim == 3:
+            b = b[None, :, :, :]
+        elif b.ndim == 2:
+            b = b[None, None, :, :]
+        OC, IC_w, KH, KW = a.shape
+        B, IC_b, IH, IW = b.shape
+        OH = (IH + 2 * p1 - d1 * (KH - 1) - 1) // s1 + 1
+        OW = (IW + 2 * p0 - d0 * (KW - 1) - 1) // s0 + 1
+        bp = np.pad(b, ((0, 0), (0, 0), (p1, p1), (p0, p0)))
+        out = np.zeros((B, OC, OH, OW), dtype=np.float32)
+        for kh_i in range(KH):
+            for kw_i in range(KW):
+                ys = kh_i * d1
+                xs = kw_i * d0
+                sliced = bp[:, :, ys:ys + s1 * OH:s1, xs:xs + s0 * OW:s0]
+                # sliced: (B, IC, OH, OW); weight slice: (OC, IC) for this (kh,kw)
+                w_slice = a[:, :, kh_i, kw_i]          # (OC, IC)
+                # einsum: out[b,o,h,w] += sum_c sliced[b,c,h,w] * w_slice[o,c]
+                out += np.einsum('bchw,oc->bohw', sliced, w_slice)
+        return out
 
     raise NotImplementedError(f"ggml op {op} not implemented in NumPy backend")
