@@ -32,7 +32,7 @@ ROW_BYTES = WIDTH * DTYPE_BYTES        # 16
 _PYSPIKE_ENV = dict(
     GTX_MX_IO_DTYPE="float16",
     GTX_DDR_REVERSE_MODE="elem",
-    GTX_DDR_SIZE="2G",
+    GTX_DDR_SIZE="4G",
     GTX_DDR_REVERSED="1",
     UV_LINK_MODE="copy",
 )
@@ -804,6 +804,35 @@ def run_concat_fp16(src0: bytes, src1: bytes,
                         dump_size=dst_bytes)
 
 
+def run_pool_2d_max_fp16(input_bytes: bytes,
+                         in_h: int, in_w: int,
+                         k_h: int, k_w: int,
+                         s_h: int, s_w: int) -> bytes:
+    """POOL_2D max. Uses __pool_m intrinsic; padding=0.
+    Output: OH × OW fp16 with OH/OW = (IN_dim - K_dim) / S_dim + 1.
+    """
+    expected = in_h * in_w * DTYPE_BYTES
+    if len(input_bytes) != expected:
+        raise ValueError(
+            f"pool input bytes {len(input_bytes)} != {in_h}*{in_w}*{DTYPE_BYTES}")
+    if k_h <= 0 or k_w <= 0 or s_h <= 0 or s_w <= 0:
+        raise ValueError("pool kernel/stride must be positive")
+    out_h = (in_h - k_h) // s_h + 1
+    out_w = (in_w - k_w) // s_w + 1
+    if out_h <= 0 or out_w <= 0:
+        raise ValueError(f"pool output size non-positive: out_h={out_h} out_w={out_w}")
+    src_c = _render_template("unary_pool_2d_max",
+                             OP_NAME="unary_pool_2d_max",
+                             IN_H=in_h, IN_W=in_w,
+                             OUT_H=out_h, OUT_W=out_w,
+                             K_H=k_h, K_W=k_w, S_H=s_h, S_W=s_w)
+    elf = _build_kernel(src_c, _cache_key("unary_pool_2d_max", "f16",
+                                          (in_h, in_w, k_h, k_w, s_h, s_w)))
+    dst_bytes = out_h * out_w * DTYPE_BYTES
+    return _run_pyspike(elf, [(DEFAULT_INPUT_OFFSET, input_bytes)],
+                        dump_size=dst_bytes)
+
+
 def run_pool_2d_avg_fp16(input_bytes: bytes,
                          in_h: int, in_w: int,
                          k_h: int, k_w: int,
@@ -898,6 +927,7 @@ SUPPORTED_PYSPIKE_OPS = {
     "pad_fp16":           run_pad_fp16,
     "concat_fp16":        run_concat_fp16,
     "pool_2d_avg_fp16":   run_pool_2d_avg_fp16,
+    "pool_2d_max_fp16":   run_pool_2d_max_fp16,
     "im2col_fp16":        run_im2col_fp16,
     "conv_2d_fp16":       run_conv_2d_fp16,
 }

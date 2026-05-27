@@ -602,12 +602,11 @@ class RpcSession:
         return True
 
     def _try_pool_2d_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
-        """POOL_2D: pyspike kernel supports AVG with zero padding only.
-        MAX and any non-zero padding go to NumPy fallback."""
+        """POOL_2D AVG via __pool_a, MAX via __pool_m. Padding=0 only."""
         if node.type != ddr.GGML_TYPE_F16:
             return False
         pool_op = int(node.op_params[0])
-        if pool_op != 1:                              # 0=MAX, 1=AVG; AVG only
+        if pool_op not in (0, 1):                    # 0=MAX, 1=AVG
             return False
         k0, k1 = int(node.op_params[1]), int(node.op_params[2])
         s0, s1 = int(node.op_params[3]), int(node.op_params[4])
@@ -620,7 +619,6 @@ class RpcSession:
         src_t = by_id.get(src_id)
         if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
             return False
-        # Only single-channel single-batch shapes for now.
         if src_t.ne[2] != 1 or src_t.ne[3] != 1:
             return False
         in_w, in_h = src_t.ne[0], src_t.ne[1]
@@ -630,10 +628,12 @@ class RpcSession:
         sb, so = dev.buffer_for_data_addr(src_t.data)
         nbytes = ddr.tensor_nbytes(src_t)
         src_bytes = bytes(sb.data[so:so + nbytes])
+        runner_key = "pool_2d_avg_fp16" if pool_op == 1 else "pool_2d_max_fp16"
+        kernel_name = "POOL_2D_AVG" if pool_op == 1 else "POOL_2D_MAX"
         try:
-            log.info("[%s] node 0x%x POOL_2D AVG pyspike route: in=(%d,%d) k=(%d,%d) s=(%d,%d)",
-                     self.addr, node.id, in_h, in_w, k1, k0, s1, s0)
-            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["pool_2d_avg_fp16"](
+            log.info("[%s] node 0x%x %s pyspike route: in=(%d,%d) k=(%d,%d) s=(%d,%d)",
+                     self.addr, node.id, kernel_name, in_h, in_w, k1, k0, s1, s0)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS[runner_key](
                 src_bytes, in_h, in_w, k1, k0, s1, s0)
         except Exception as e:
             log.warning("[%s] pool_2d pyspike failed (%s) → NumPy fallback",
@@ -747,6 +747,52 @@ class RpcSession:
                 input_bytes, in_h, in_w, k_h, k_w, s0)
         except Exception as e:
             log.warning("[%s] im2col pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_upscale_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """UPSCALE (nearest, integer factor) → reuse the REPEAT pyspike kernel.
+        ggml semantics: dst[b, c, h, w] = src[b, c, h/sh, w/sw]. With mode=0
+        (nearest) and integer scaling, this matches REPEAT exactly along the
+        first two dims (REP0=sw, REP1=sh, REP2=REP3=1).
+        """
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        mode = int(node.op_params[0]) & 0xFF
+        if mode != 0:                                # nearest only
+            return False
+        src_id = node.src[0]
+        if src_id == 0:
+            return False
+        src_t = by_id.get(src_id)
+        if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+            return False
+        src_ne = tuple(src_t.ne)
+        dst_ne = tuple(node.ne)
+        if any(s <= 0 or d <= 0 for s, d in zip(src_ne, dst_ne)):
+            return False
+        # Only spatial upscaling (channel/batch identical).
+        if dst_ne[2] != src_ne[2] or dst_ne[3] != src_ne[3]:
+            return False
+        if dst_ne[0] % src_ne[0] != 0 or dst_ne[1] % src_ne[1] != 0:
+            return False
+        src_total = src_ne[0] * src_ne[1] * src_ne[2] * src_ne[3] * 2
+        dst_total = dst_ne[0] * dst_ne[1] * dst_ne[2] * dst_ne[3] * 2
+        if src_total > 0x80000 or dst_total > 0x80000:
+            return False
+
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        src_bytes = bytes(sb.data[so:so + src_total])
+        try:
+            log.info("[%s] node 0x%x UPSCALE pyspike route (via REPEAT): src=%s dst=%s",
+                     self.addr, node.id, src_ne, dst_ne)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["repeat_fp16"](
+                src_bytes, src_ne, dst_ne)
+        except Exception as e:
+            log.warning("[%s] upscale pyspike failed (%s) → NumPy fallback",
                         self.addr, e)
             return False
         dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
@@ -926,6 +972,8 @@ class RpcSession:
             return self._try_arange_pyspike(node, dev)
         if node.op == opr.GGML_OP_REPEAT:
             return self._try_repeat_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_UPSCALE:
+            return self._try_upscale_pyspike(node, by_id, dev)
         if node.op == opr.GGML_OP_PAD:
             return self._try_pad_pyspike(node, by_id, dev)
         if node.op == opr.GGML_OP_CONCAT:
