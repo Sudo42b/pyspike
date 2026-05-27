@@ -106,6 +106,13 @@ def _build_kernel(c_src_text: str, cache_key: str) -> Path:
     src_path = src_dir / f"{cache_key}.c"
     src_path.write_text(c_src_text)
 
+    # Stage shared template headers (e.g. gtx_kernel.h for the CUDA-style
+    # launch macro) next to the source so the compiler resolves them without
+    # extending the build script's include search path.
+    import shutil
+    for header in TEMPLATES_DIR.glob("*.h"):
+        shutil.copy(header, src_dir / header.name)
+
     try:
         script = _build_script()
         gfw = _resolve_firmware_root()

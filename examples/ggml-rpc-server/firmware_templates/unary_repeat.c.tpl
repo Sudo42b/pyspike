@@ -1,23 +1,13 @@
 //==================================================================
-// {{OP_NAME}} (generated) — ggml REPEAT (arbitrary 4D broadcast)
-// dst[i3, i2, i1, i0] = src[i3 % S3, i2 % S2, i1 % S1, i0 % S0]
-//
-// Vendor n1s16_repeat.c hard-codes one specific 2x2 tile factor. This
-// template generalises to any (SRC_NE, DST_NE) where each DST_NEx is an
-// integer multiple of SRC_NEx, by walking the dst index space and DMA-
-// copying source rows REP0 times along the innermost (col) dim.
-//
-// Single-NEST shared section only — no SPU ALU is needed; all work is DMA.
-// Caller must pre-check SRC_BYTES <= 0x80000 and DST_BYTES <= 0x80000
-// (per-pool L2 budget); larger shapes need host-side tiling.
+// {{OP_NAME}} (generated) — 4D broadcast tile via GTX_LAUNCH<<<1, 0>>>.
+// dst[i3, i2, i1, i0] = src[i3 % S3, i2 % S2, i1 % S1, i0 % S0].
+// Shared-only kernel: pure DMA, no per-SPU work. Each DST_NEx must be an
+// integer multiple of SRC_NEx; both src and dst must fit a 512KB L2 pool.
 //==================================================================
 
-#include "intrin.h"
-#include "gtx/address.h"
-#include <stdint.h>
+#include "gtx_kernel.h"
 
-#define NEST_NUM            1
-#define SPU_NUM_PER_NEST    16
+#define NESTS               1
 #define DTYPE               2
 
 #define SRC_NE0             {{SRC_NE0}}
@@ -55,55 +45,48 @@
 #error "repeat requires each DST_NEx % SRC_NEx == 0"
 #endif
 
+GTX_KERNEL_BODY(
+    /* SHARED_BODY */ {
+        // Stage src into L2 as a flat stream of SRC_TOTAL_ROWS rows.
+        __load(GTX_MAIN_ADDR(BASE_DDR_A), L2_A,
+            (uint32_t)SRC_ROW_BYTES,
+            (uint16_t)SRC_ROW_BYTES,
+            (uint16_t)SRC_TOTAL_ROWS,
+            (uint16_t)SRC_ROW_BYTES);
 
-int main(void) {
-    uint8_t nest_id = 0;
-
-    __split();
-    {
-        __start_plan(nest_id);
-            __start_shared();
-                // Stage src into L2 as a flat stream of SRC_TOTAL_ROWS rows.
-                __load(GTX_MAIN_ADDR(BASE_DDR_A), L2_A,
-                    (uint32_t)SRC_ROW_BYTES,
-                    (uint16_t)SRC_ROW_BYTES,
-                    (uint16_t)SRC_TOTAL_ROWS,
-                    (uint16_t)SRC_ROW_BYTES);
-
-                // Walk the dst index space; for each (i3, i2, i1) tile,
-                // copy the corresponding src row REP0 times along the inner
-                // (col) dim to fill that dst row.
-                for (uint32_t i3 = 0; i3 < DST_NE3; i3++) {
-                    uint32_t s3 = i3 % SRC_NE3;
-                    for (uint32_t i2 = 0; i2 < DST_NE2; i2++) {
-                        uint32_t s2 = i2 % SRC_NE2;
-                        for (uint32_t i1 = 0; i1 < DST_NE1; i1++) {
-                            uint32_t s1 = i1 % SRC_NE1;
-                            uint32_t src_off = ((s3 * SRC_NE2 + s2) * SRC_NE1 + s1)
-                                                * SRC_ROW_BYTES;
-                            uint32_t dst_off = ((i3 * DST_NE2 + i2) * DST_NE1 + i1)
-                                                * DST_ROW_BYTES;
-                            for (uint32_t r0 = 0; r0 < REP0; r0++) {
-                                __copy(L2_A + src_off,
-                                    L2_RESULT + dst_off + r0 * SRC_ROW_BYTES,
-                                    (uint32_t)SRC_ROW_BYTES,
-                                    (uint16_t)SRC_ROW_BYTES, 1,
-                                    (uint16_t)SRC_ROW_BYTES);
-                            }
-                        }
+        // Walk the dst index space; per (i3, i2, i1) tile, copy the
+        // matching src row REP0 times along the inner (col) dim.
+        for (uint32_t i3 = 0; i3 < DST_NE3; i3++) {
+            uint32_t s3 = i3 % SRC_NE3;
+            for (uint32_t i2 = 0; i2 < DST_NE2; i2++) {
+                uint32_t s2 = i2 % SRC_NE2;
+                for (uint32_t i1 = 0; i1 < DST_NE1; i1++) {
+                    uint32_t s1 = i1 % SRC_NE1;
+                    uint32_t src_off = ((s3 * SRC_NE2 + s2) * SRC_NE1 + s1)
+                                        * SRC_ROW_BYTES;
+                    uint32_t dst_off = ((i3 * DST_NE2 + i2) * DST_NE1 + i1)
+                                        * DST_ROW_BYTES;
+                    for (uint32_t r0 = 0; r0 < REP0; r0++) {
+                        __copy(L2_A + src_off,
+                            L2_RESULT + dst_off + r0 * SRC_ROW_BYTES,
+                            (uint32_t)SRC_ROW_BYTES,
+                            (uint16_t)SRC_ROW_BYTES, 1,
+                            (uint16_t)SRC_ROW_BYTES);
                     }
                 }
+            }
+        }
 
-                // Drain the staged dst back to DDR.
-                __store(L2_RESULT, GTX_MAIN_ADDR(BASE_DDR_R),
-                    (uint32_t)DST_ROW_BYTES,
-                    (uint16_t)DST_ROW_BYTES,
-                    (uint16_t)DST_TOTAL_ROWS,
-                    (uint16_t)DST_ROW_BYTES);
-            __end_shared();
-        __end_plan(nest_id);
-    }
-    __join();
+        __store(L2_RESULT, GTX_MAIN_ADDR(BASE_DDR_R),
+            (uint32_t)DST_ROW_BYTES,
+            (uint16_t)DST_ROW_BYTES,
+            (uint16_t)DST_TOTAL_ROWS,
+            (uint16_t)DST_ROW_BYTES);
+    },
+    /* THREAD_BODY */ { /* shared-only */ }
+)
 
+int main(void) {
+    GTX_LAUNCH_SHARED(NESTS);
     return 0;
 }
