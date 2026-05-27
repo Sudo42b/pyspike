@@ -686,6 +686,36 @@ def run_repeat_fp16(input_bytes: bytes,
                         dump_size=dst_total)
 
 
+def run_conv_2d_fp16(kernel_bytes: bytes, input_bytes: bytes,
+                     in_h: int, in_w: int,
+                     k_h: int, k_w: int) -> bytes:
+    """CONV_2D PoC: vendor n1s16_conv_2d.c (IC=1, OC=1, stride=1, pad=0).
+    Kernel goes to DDR_A=0x1000000, input goes to DDR_B=0x2000000. Result is
+    (OH, OW) FP16 written to 0xf000000. Caller must pre-check the ggml
+    op_params (stride 1, pad 0, IC=1, OC=1) before routing.
+    """
+    if k_h <= 0 or k_w <= 0 or in_h < k_h or in_w < k_w:
+        raise ValueError(f"conv shape invalid: in=({in_h},{in_w}) k=({k_h},{k_w})")
+    expected_kern = k_h * k_w * DTYPE_BYTES
+    expected_in = in_h * in_w * DTYPE_BYTES
+    if len(kernel_bytes) != expected_kern:
+        raise ValueError(f"kernel bytes {len(kernel_bytes)} != {expected_kern}")
+    if len(input_bytes) != expected_in:
+        raise ValueError(f"input bytes {len(input_bytes)} != {expected_in}")
+    src = _render_template("unary_conv_2d",
+                            OP_NAME="unary_conv_2d",
+                            IN_H=in_h, IN_W=in_w, K_H=k_h, K_W=k_w)
+    elf = _build_kernel(src, _cache_key("unary_conv_2d", "f16",
+                                          (in_h, in_w, k_h, k_w)))
+    out_h = in_h - k_h + 1
+    out_w = in_w - k_w + 1
+    dst_bytes = out_h * out_w * DTYPE_BYTES
+    return _run_pyspike(elf,
+                        [(DEFAULT_INPUT_OFFSET, kernel_bytes),
+                         (DEFAULT_INPUT_B_OFFSET, input_bytes)],
+                        dump_size=dst_bytes)
+
+
 def run_im2col_fp16(input_bytes: bytes,
                     in_h: int, in_w: int,
                     k_h: int, k_w: int,
@@ -869,4 +899,5 @@ SUPPORTED_PYSPIKE_OPS = {
     "concat_fp16":        run_concat_fp16,
     "pool_2d_avg_fp16":   run_pool_2d_avg_fp16,
     "im2col_fp16":        run_im2col_fp16,
+    "conv_2d_fp16":       run_conv_2d_fp16,
 }

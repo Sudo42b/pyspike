@@ -163,6 +163,12 @@ OP_MANIFEST: dict[str, OpManifest] = {
         placeholders=["SRC_COLS", "ROWS"],
         header_comment="concat axis=0: dst row = [src0 row | src1 row]; 2 inputs",
     ),
+    "conv_2d": OpManifest(
+        source_dir="CONV_2D",
+        source_stem="conv_2d",
+        placeholders=["IN_W", "IN_H", "K_W", "K_H"],
+        header_comment="2D conv direct: IC=1, OC=1, stride=1, padding=0",
+    ),
     "im2col": OpManifest(
         source_dir="IM2COL",
         source_stem="im2col",

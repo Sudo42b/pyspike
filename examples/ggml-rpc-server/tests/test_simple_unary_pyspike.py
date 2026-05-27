@@ -197,6 +197,24 @@ def case_pool_2d_avg(rng) -> tuple[str, float, float]:
     return ("POOL_2D_AVG", _max_diff(ref, got), 0.05)
 
 
+def case_conv_2d(rng) -> tuple[str, float, float]:
+    # IC=1 OC=1 conv: input (5, 5), kernel (3, 3), stride 1, pad 0 → output (3, 3).
+    input_x = rng.uniform(-1.0, 1.0, (5, 5)).astype(np.float16)
+    kernel = rng.uniform(-1.0, 1.0, (3, 3)).astype(np.float16)
+    out = psr.run_conv_2d_fp16(kernel.tobytes(), input_x.tobytes(),
+                                in_h=5, in_w=5, k_h=3, k_w=3)
+    got = _from_fp16(out, (3, 3))
+    # Reference: direct 2D convolution (correlation), single channel.
+    xf = input_x.astype(np.float32)
+    kf = kernel.astype(np.float32)
+    ref = np.zeros((3, 3), dtype=np.float32)
+    for oh in range(3):
+        for ow in range(3):
+            ref[oh, ow] = (xf[oh:oh + 3, ow:ow + 3] * kf).sum()
+    ref = ref.astype(np.float16)
+    return ("CONV_2D", _max_diff(ref, got), 0.05)
+
+
 def case_im2col(rng) -> tuple[str, float, float]:
     # Single-channel im2col: input (5, 5) with 3x3 kernel, stride 1.
     # Output: (OH*OW, KH*KW) = (3*3, 9) = (9, 9).
@@ -231,6 +249,7 @@ CASES = {
     "concat":     case_concat,
     "pool_2d_avg": case_pool_2d_avg,
     "im2col":     case_im2col,
+    "conv_2d":    case_conv_2d,
 }
 
 

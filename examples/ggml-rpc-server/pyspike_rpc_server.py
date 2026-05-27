@@ -643,6 +643,57 @@ class RpcSession:
         dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
         return True
 
+    def _try_conv_2d_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """CONV_2D PoC: vendor kernel handles IC=1, OC=1, stride=1, pad=0,
+        dilation=1 only. ggml CONV_2D op_params: [s0, s1, p0, p1, d0, d1].
+        src[0] = kernel, src[1] = input. Anything else goes to NumPy.
+        """
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        s0 = int(node.op_params[0]); s1 = int(node.op_params[1])
+        p0 = int(node.op_params[2]); p1 = int(node.op_params[3])
+        d0 = int(node.op_params[4]); d1 = int(node.op_params[5])
+        if s0 != 1 or s1 != 1 or p0 != 0 or p1 != 0 or d0 != 1 or d1 != 1:
+            return False
+        kernel_id, input_id = node.src[0], node.src[1]
+        if kernel_id == 0 or input_id == 0:
+            return False
+        kt = by_id.get(kernel_id)
+        it = by_id.get(input_id)
+        if kt is None or it is None:
+            return False
+        if kt.type != ddr.GGML_TYPE_F16 or it.type != ddr.GGML_TYPE_F16:
+            return False
+        # Vendor: IC=1, OC=1, single batch. ggml kernel layout (W, H, IC, OC),
+        # input (W, H, IC, B). Trailing-1 dims required.
+        if kt.ne[2] != 1 or kt.ne[3] != 1:
+            return False
+        if it.ne[2] != 1 or it.ne[3] != 1:
+            return False
+        k_w, k_h = kt.ne[0], kt.ne[1]
+        in_w, in_h = it.ne[0], it.ne[1]
+        if k_w <= 0 or k_h <= 0 or in_w < k_w or in_h < k_h:
+            return False
+
+        kb, ko = dev.buffer_for_data_addr(kt.data)
+        ib, io = dev.buffer_for_data_addr(it.data)
+        nk = ddr.tensor_nbytes(kt)
+        ni = ddr.tensor_nbytes(it)
+        kernel_bytes = bytes(kb.data[ko:ko + nk])
+        input_bytes = bytes(ib.data[io:io + ni])
+        try:
+            log.info("[%s] node 0x%x CONV_2D pyspike route: in=(%d,%d) k=(%d,%d)",
+                     self.addr, node.id, in_h, in_w, k_h, k_w)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["conv_2d_fp16"](
+                kernel_bytes, input_bytes, in_h, in_w, k_h, k_w)
+        except Exception as e:
+            log.warning("[%s] conv_2d pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
     def _try_im2col_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
         """IM2COL 2D: vendor kernel supports single-channel inputs with equal
         strides, zero padding, dilation=1. Anything richer goes to NumPy.
@@ -883,6 +934,8 @@ class RpcSession:
             return self._try_pool_2d_pyspike(node, by_id, dev)
         if node.op == opr.GGML_OP_IM2COL:
             return self._try_im2col_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_CONV_2D:
+            return self._try_conv_2d_pyspike(node, by_id, dev)
         if node.op in self._SIMPLE_UNARY_DISPATCH:
             return self._try_simple_unary_pyspike(node, by_id, dev)
         if (node.op == opr.GGML_OP_UNARY
