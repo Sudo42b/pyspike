@@ -68,11 +68,18 @@ def numpy_conv2d_reference(x: np.ndarray, w: np.ndarray,
 
 def host_conv2d_pyspike(x: np.ndarray, w: np.ndarray,
                         sh: int = 1, sw: int = 1,
-                        ph: int = 0, pw: int = 0) -> np.ndarray:
+                        ph: int = 0, pw: int = 0,
+                        kpad: bool = True) -> np.ndarray:
     """ggml-style conv expansion: NumPy IM2COL on host + pyspike MUL_MAT_tiled.
 
     x: (B, IC, IH, IW) fp16, w: (OC, IC, KH, KW) fp16.
     Returns (B, OC, OH, OW) fp16.
+
+    `kpad=True` (default): when K = IC*KH*KW isn't a multiple of 8, zero-pad
+    both A's right edge and B's right edge to the next K%8==0 boundary. Since
+    A_pad[:, K:] = 0 and B_pad[:, K:] = 0, the additional partial products are
+    all 0 and the GEMM result is mathematically identical. This unlocks the
+    YOLOv8 first layer (IC=3 → K=27) for the pyspike fast path.
     """
     B, IC, IH, IW = x.shape
     OC, _, KH, KW = w.shape
@@ -81,24 +88,30 @@ def host_conv2d_pyspike(x: np.ndarray, w: np.ndarray,
 
     # IM2COL: (B, OH, OW, IC*KH*KW)
     patches = numpy_im2col(x, KH, KW, sh, sw, ph, pw)
-    # Flatten batch + spatial into one matrix row.
     a = patches.reshape(B * OH * OW, IC * KH * KW)
-    # Weight reshape to (OC, IC*KH*KW)
     b = w.reshape(OC, IC * KH * KW)
-    # GEMM via pyspike: A @ B^T = (M, K) @ (N, K)^T = (M, N).
-    # pyspike's MUL_MAT_tiled expects A:(M,K) row-major + B:(N,K) row-major
-    # and returns (M, N) row-major — which matches our reshape directly.
+
     M, K = a.shape
     N = b.shape[0]
-    if K % 8 != 0:
-        raise ValueError(f"pyspike MUL_MAT requires K%8==0, got K={K}")
+    K_padded = ((K + 7) // 8) * 8
+
+    if K_padded != K:
+        if not kpad:
+            raise ValueError(f"pyspike MUL_MAT requires K%8==0, got K={K}")
+        # Pad K with zeros — products against 0 columns contribute 0 to the
+        # final sum, so the GEMM result is unchanged.
+        a_p = np.zeros((M, K_padded), dtype=np.float16)
+        a_p[:, :K] = a
+        b_p = np.zeros((N, K_padded), dtype=np.float16)
+        b_p[:, :K] = b
+    else:
+        a_p = a.astype(np.float16)
+        b_p = b.astype(np.float16)
 
     out_bytes = psr.SUPPORTED_PYSPIKE_OPS["mul_mat_tiled_fp16"](
-        a.astype(np.float16).tobytes(),
-        b.astype(np.float16).tobytes(),
-        M=M, K=K, N=N)
+        a_p.tobytes(), b_p.tobytes(),
+        M=M, K=K_padded, N=N)
     mm = np.frombuffer(out_bytes, dtype=np.float16).reshape(M, N)
-    # Reshape (B*OH*OW, OC) → (B, OH, OW, OC) → (B, OC, OH, OW)
     return mm.reshape(B, OH, OW, OC).transpose(0, 3, 1, 2).copy()
 
 
@@ -146,6 +159,17 @@ def main() -> int:
     x3 = rng.uniform(-0.2, 0.2, (1, 16, 8, 8)).astype(np.float16)
     w3 = rng.uniform(-0.2, 0.2, (8, 16, 3, 3)).astype(np.float16)
     results.append(("3x3 IC=16 OC=8 (K=144)",) + run_case("Case 3: 3x3 IC=16", x3, w3, tol=0.2))
+
+    # Case 4: YOLOv8 first layer flavour — IC=3 → K=27, needs zero-padding to
+    # K_padded=32 to satisfy the MUL_MAT K%8==0 constraint.
+    x4 = rng.uniform(-0.3, 0.3, (1, 3, 8, 8)).astype(np.float16)
+    w4 = rng.uniform(-0.3, 0.3, (4, 3, 3, 3)).astype(np.float16)
+    results.append(("3x3 IC=3 OC=4 (K=27→32 zero-pad)",) + run_case("Case 4: IC=3 (K-pad)", x4, w4, tol=0.05))
+
+    # Case 5: IC=3 + bigger output channels (YOLOv8 stem variant).
+    x5 = rng.uniform(-0.2, 0.2, (1, 3, 16, 16)).astype(np.float16)
+    w5 = rng.uniform(-0.2, 0.2, (32, 3, 3, 3)).astype(np.float16)
+    results.append(("3x3 IC=3 OC=32 (K=27→32 zero-pad)",) + run_case("Case 5: IC=3 OC=32 stem", x5, w5, tol=0.1))
 
     print("\n" + "=" * 60)
     n_pass = sum(1 for _, ok, _ in results if ok)
