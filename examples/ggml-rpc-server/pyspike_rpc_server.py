@@ -290,6 +290,7 @@ class RpcSession:
         nop = 0
         unsupported = 0
         errored = 0
+        spike_routed = 0
 
         for node_id in node_ids:
             node = by_id.get(node_id)
@@ -303,6 +304,7 @@ class RpcSession:
                 # Opt-in pyspike route first; falls through to NumPy on miss.
                 if USE_PYSPIKE and self._try_pyspike(node, by_id, dev):
                     ok += 1
+                    spike_routed += 1
                     continue
                 srcs = self._resolve_srcs(node, by_id, dev)
                 result = gc.compute(node, srcs)
@@ -321,9 +323,9 @@ class RpcSession:
                 errored += 1
 
         log.info("[%s] GRAPH_COMPUTE device=%d nodes=%d "
-                 "ok=%d nop=%d unsupported=%d err=%d",
+                 "ok=%d nop=%d unsupported=%d err=%d spike_routed=%d",
                  self.addr, device, len(node_ids),
-                 ok, nop, unsupported, errored)
+                 ok, nop, unsupported, errored, spike_routed)
 
     def _resolve_srcs(self, node: wp.RpcTensor, by_id: dict, dev) -> list:
         """Build numpy views for each non-zero src tensor of `node`."""
@@ -398,6 +400,66 @@ class RpcSession:
         opr.GGML_UNARY_OP_CEIL:  ("CEIL",  "ceil_fp16"),
         opr.GGML_UNARY_OP_EXPM1: ("EXPM1", "expm1_fp16"),
     }
+
+    # Chunk size for unary/elementwise-binary spike route.
+    # firmware unary_intrin1.c.tpl has MAX_SHARED_DMA_BYTES=65535 — single DMA
+    # load above ~4095 rows trips an assertion. 2048 rows × 8 fp16 × 2B = 32 KiB
+    # per call keeps us well inside the safe window AND yields one cached .elf
+    # per op (cache_key = unary_<op>_f16_2048) that all chunks reuse.
+    _CHUNK_FP16 = 16384  # 2048 rows × 8 fp16
+
+    @staticmethod
+    def _is_castable_fp(ttype) -> bool:
+        return ttype in (ddr.GGML_TYPE_F16, ddr.GGML_TYPE_F32)
+
+    @classmethod
+    def _runner_chunked(cls, runner, src_bytes_list):
+        """Run a unary/elementwise-binary runner in fixed-size chunks. Concats
+        outputs back. Last chunk may be shorter (triggers one extra cached
+        .elf for that residual height).
+        """
+        chunk_bytes = cls._CHUNK_FP16 * 2
+        n = len(src_bytes_list[0])
+        if n <= chunk_bytes:
+            return runner(*src_bytes_list)
+        parts = []
+        for off in range(0, n, chunk_bytes):
+            slices = [b[off:off + chunk_bytes] for b in src_bytes_list]
+            parts.append(runner(*slices))
+        return b"".join(parts)
+
+    @staticmethod
+    def _read_src_as_f16(src_t, dev):
+        """Read src tensor as F16 bytes. Cast F32 → F16 on the fly.
+
+        Returns (bytes, len) or (None, 0) for unsupported dtypes.
+        """
+        import numpy as np
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        n = ddr.tensor_nbytes(src_t)
+        raw = bytes(sb.data[so:so + n])
+        if src_t.type == ddr.GGML_TYPE_F16:
+            return raw, n
+        if src_t.type == ddr.GGML_TYPE_F32:
+            arr = np.frombuffer(raw, dtype=np.float32).astype(np.float16)
+            b = arr.tobytes()
+            return b, len(b)
+        return None, 0
+
+    @staticmethod
+    def _write_dst_from_f16(node, dev, out_bytes_f16):
+        """Write F16 out_bytes to node.data. If node.type=F32, cast back."""
+        import numpy as np
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        if node.type == ddr.GGML_TYPE_F16:
+            dst_buf.data[dst_off:dst_off + len(out_bytes_f16)] = out_bytes_f16
+            return
+        if node.type == ddr.GGML_TYPE_F32:
+            arr = np.frombuffer(out_bytes_f16, dtype=np.float16).astype(np.float32)
+            b = arr.tobytes()
+            dst_buf.data[dst_off:dst_off + len(b)] = b
+            return
+        raise ValueError(f"unsupported dst ttype {node.type}")
 
     def _try_simple_unary_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
         """Dispatch SQR/SUM_ROWS/GROUP_NORM/NORM/SCALE through the shape-
@@ -917,7 +979,7 @@ class RpcSession:
         ggml shape: src0 ne=(K,M), src1 ne=(K,N); dst is (M,N).
         Higher-rank (batched) shapes and non-fp16 fall back to NumPy.
         """
-        if node.type != ddr.GGML_TYPE_F16:
+        if not self._is_castable_fp(node.type):
             return False
         src0_id, src1_id = node.src[0], node.src[1]
         if src0_id == 0 or src1_id == 0:
@@ -925,7 +987,7 @@ class RpcSession:
         s0 = by_id.get(src0_id); s1 = by_id.get(src1_id)
         if s0 is None or s1 is None:
             return False
-        if s0.type != ddr.GGML_TYPE_F16 or s1.type != ddr.GGML_TYPE_F16:
+        if not self._is_castable_fp(s0.type) or not self._is_castable_fp(s1.type):
             return False
         # 2D only (batched matmul not supported by this kernel)
         if s0.ne[2] != 1 or s0.ne[3] != 1 or s1.ne[2] != 1 or s1.ne[3] != 1:
@@ -938,27 +1000,35 @@ class RpcSession:
         if K % 8 != 0:
             return False
 
-        b0, o0 = dev.buffer_for_data_addr(s0.data)
-        b1, o1 = dev.buffer_for_data_addr(s1.data)
-        nbytes0 = ddr.tensor_nbytes(s0); nbytes1 = ddr.tensor_nbytes(s1)
-        src0_bytes = bytes(b0.data[o0:o0 + nbytes0])
-        src1_bytes = bytes(b1.data[o1:o1 + nbytes1])
+        src0_bytes, _ = self._read_src_as_f16(s0, dev)
+        src1_bytes, _ = self._read_src_as_f16(s1, dev)
+        if src0_bytes is None or src1_bytes is None:
+            return False
 
         # tiled wrapper handles arbitrary M/N via host-side splits (firmware
         # call stays bounded to MUL_MAT_TILE_M × tile_n). K is firmware-tiled.
         runner = psr.SUPPORTED_PYSPIKE_OPS["mul_mat_tiled_fp16"]
         try:
             log.info("[%s] node 0x%x MUL_MAT pyspike route: M=%d K=%d N=%d "
-                     "(tile=%dx%d)",
+                     "(tile=%dx%d) dst=%s",
                      self.addr, node.id, M, K, N,
-                     psr.MUL_MAT_TILE_M, psr.MUL_MAT_TILE_N)
+                     psr.MUL_MAT_TILE_M, psr.MUL_MAT_TILE_N,
+                     "F32cast" if node.type == ddr.GGML_TYPE_F32 else "F16")
             out_bytes = runner(src0_bytes, src1_bytes, M=M, K=K, N=N)
         except Exception as e:
             log.warning("[%s] mul_mat pyspike failed (%s) → NumPy fallback",
                         self.addr, e)
             return False
-        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
-        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+
+        # Layout fix: spike returns (M, N) row-major bytes (m outer, n inner).
+        # ggml dst.ne = (M, N, 1, 1) with ne[0]=M as the inner contiguous dim,
+        # so the dst buffer expects (N, M) row-major bytes. Transpose before
+        # writing — otherwise graph nodes downstream see spike[i,j] at dst[j,i].
+        import numpy as _np
+        out_arr = _np.frombuffer(out_bytes, dtype=_np.float16).reshape(M, N)
+        out_bytes = out_arr.T.copy().tobytes()
+
+        self._write_dst_from_f16(node, dev, out_bytes)
         return True
 
     def _try_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
@@ -1002,10 +1072,10 @@ class RpcSession:
             kernel = entry
         if kernel is None:
             return False
-        if node.type != ddr.GGML_TYPE_F16:
+        if not self._is_castable_fp(node.type):
             return False
 
-        # Resolve source tensor bytes (skip numpy conversion).
+        # Resolve source tensor bytes, casting F32 → F16 on the fly.
         needed = 2 if kind == "binary" else 1
         src_bytes = []
         nbytes = 0
@@ -1014,29 +1084,30 @@ class RpcSession:
             if src_id == 0:
                 return False
             src_t = by_id.get(src_id)
-            if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+            if src_t is None or not self._is_castable_fp(src_t.type):
                 return False
-            sb, so = dev.buffer_for_data_addr(src_t.data)
-            n = ddr.tensor_nbytes(src_t)
-            if n == 0 or n % psr.ROW_BYTES != 0:
+            b, n = self._read_src_as_f16(src_t, dev)
+            if b is None or n == 0 or n % psr.ROW_BYTES != 0:
                 return False
             if i == 0:
                 nbytes = n
             elif n != nbytes:
                 return False  # binary inputs must match
-            src_bytes.append(bytes(sb.data[so:so + n]))
+            src_bytes.append(b)
 
         kernel_name, runner = runner_entry
         try:
-            log.info("[%s] node 0x%x %s pyspike route: %d bytes (%d fp16) kind=%s",
-                     self.addr, node.id, kernel_name, nbytes, nbytes // 2, kind)
-            out_bytes = runner(*src_bytes)
+            n_chunks = (nbytes + self._CHUNK_FP16 * 2 - 1) // (self._CHUNK_FP16 * 2)
+            log.info("[%s] node 0x%x %s pyspike route: %d bytes (%d fp16) kind=%s "
+                     "chunks=%d dst=%s",
+                     self.addr, node.id, kernel_name, nbytes, nbytes // 2, kind,
+                     n_chunks, "F32cast" if node.type == ddr.GGML_TYPE_F32 else "F16")
+            out_bytes = self._runner_chunked(runner, src_bytes)
         except Exception as e:
             log.warning("[%s] pyspike route failed (%s) → NumPy fallback", self.addr, e)
             return False
 
-        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
-        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        self._write_dst_from_f16(node, dev, out_bytes)
         return True
 
     def _h_graph_recompute(self, _payload: bytes) -> None:
