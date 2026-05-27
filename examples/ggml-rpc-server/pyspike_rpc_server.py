@@ -346,40 +346,390 @@ class RpcSession:
 
     # sub-op id → (kernel name for log, pyspike runner fn). Extend by adding
     # a firmware template under firmware_templates/ + a runner in pyspike_runner.
+    # All entries below resolve to a single shared unary_intrin1.c.tpl skeleton
+    # with the op's intrinsic call swapped in (see psr._UNARY_INTRIN1_CALLS).
     _UNARY_PYSPIKE_KERNELS = {
-        opr.GGML_UNARY_OP_ABS:  ("ABS",  psr.run_unary_abs_fp16),
-        opr.GGML_UNARY_OP_SILU: ("SILU", psr.run_unary_silu_fp16),
+        opr.GGML_UNARY_OP_ABS:      ("ABS",      psr.SUPPORTED_PYSPIKE_OPS["unary_abs_fp16"]),
+        opr.GGML_UNARY_OP_NEG:      ("NEG",      psr.SUPPORTED_PYSPIKE_OPS["unary_neg_fp16"]),
+        opr.GGML_UNARY_OP_SGN:      ("SGN",      psr.SUPPORTED_PYSPIKE_OPS["unary_sgn_fp16"]),
+        opr.GGML_UNARY_OP_STEP:     ("STEP",     psr.SUPPORTED_PYSPIKE_OPS["unary_step_fp16"]),
+        opr.GGML_UNARY_OP_RELU:     ("RELU",     psr.SUPPORTED_PYSPIKE_OPS["unary_relu_fp16"]),
+        opr.GGML_UNARY_OP_SIGMOID:  ("SIGMOID",  psr.SUPPORTED_PYSPIKE_OPS["unary_sigmoid_fp16"]),
+        opr.GGML_UNARY_OP_TANH:     ("TANH",     psr.SUPPORTED_PYSPIKE_OPS["unary_tanh_fp16"]),
+        opr.GGML_UNARY_OP_GELU:     ("GELU",     psr.SUPPORTED_PYSPIKE_OPS["unary_gelu_fp16"]),
+        opr.GGML_UNARY_OP_GELU_ERF: ("GELU_ERF", psr.SUPPORTED_PYSPIKE_OPS["unary_gelu_erf_fp16"]),
+        opr.GGML_UNARY_OP_EXP:      ("EXP",      psr.SUPPORTED_PYSPIKE_OPS["unary_exp_fp16"]),
+        opr.GGML_UNARY_OP_SILU:     ("SILU",     psr.SUPPORTED_PYSPIKE_OPS["unary_silu_fp16"]),
+        opr.GGML_UNARY_OP_FLOOR:    ("FLOOR",    psr.SUPPORTED_PYSPIKE_OPS["unary_floor_fp16"]),
+        opr.GGML_UNARY_OP_TRUNC:    ("TRUNC",    psr.SUPPORTED_PYSPIKE_OPS["unary_trunc_fp16"]),
+    }
+    # main op (not under GGML_OP_UNARY) → pyspike runner fn. 'kind' is 'unary'
+    # for 1-input runners or 'binary' for 2-input runners; the dispatcher
+    # below resolves srcs accordingly.
+    _MAIN_OP_PYSPIKE_KERNELS = {
+        opr.GGML_OP_SQRT: ("SQRT", "unary",  psr.SUPPORTED_PYSPIKE_OPS["unary_sqrt_fp16"]),
+        opr.GGML_OP_ADD:  ("ADD",  "binary", psr.SUPPORTED_PYSPIKE_OPS["binary_add_fp16"]),
+        opr.GGML_OP_SUB:  ("SUB",  "binary", psr.SUPPORTED_PYSPIKE_OPS["binary_sub_fp16"]),
+        opr.GGML_OP_MUL:  ("MUL",  "binary", psr.SUPPORTED_PYSPIKE_OPS["binary_mul_fp16"]),
+        opr.GGML_OP_DIV:  ("DIV",  "binary", psr.SUPPORTED_PYSPIKE_OPS["binary_div_fp16"]),
+        opr.GGML_OP_ACC:  ("ACC",  "binary", psr.SUPPORTED_PYSPIKE_OPS["binary_acc_fp16"]),
     }
 
-    def _try_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
-        """If `node` matches a pattern we have a pyspike kernel for, run it
-        and write the result. Returns True on success, False to signal NumPy
-        fallback. Any pyspike error is logged and also returns False.
+    # main op (no GGML_OP_UNARY sub-id) → custom dispatcher methods that need
+    # shape + op_params handling that doesn't fit the elementwise pattern.
+    # Order matters in `_try_pyspike` — checked before the generic table.
+    _SIMPLE_UNARY_DISPATCH = {
+        opr.GGML_OP_SQR,
+        opr.GGML_OP_SUM_ROWS,
+        opr.GGML_OP_GROUP_NORM,
+        opr.GGML_OP_NORM,
+        opr.GGML_OP_SCALE,
+        opr.GGML_OP_CLAMP,
+        opr.GGML_OP_MEAN,
+        opr.GGML_OP_SUM,
+        opr.GGML_OP_TRI,
+    }
+
+    # GGML_OP_UNARY sub-op ids that route through the shape-parameterised
+    # simple-unary path instead of `_UNARY_PYSPIKE_KERNELS`. These need
+    # WIDTH/HEIGHT from the source tensor's ne rather than the unary_intrin1
+    # 8-wide row pattern.
+    _SIMPLE_UNARY_SUBOP_KERNELS = {
+        opr.GGML_UNARY_OP_CEIL:  ("CEIL",  "ceil_fp16"),
+        opr.GGML_UNARY_OP_EXPM1: ("EXPM1", "expm1_fp16"),
+    }
+
+    def _try_simple_unary_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """Dispatch SQR/SUM_ROWS/GROUP_NORM/NORM/SCALE through the shape-
+        parameterised template runners. Each kernel takes the input tensor's
+        innermost dim as WIDTH and packs all remaining elements into HEIGHT.
+        Returns False on any guard miss → caller falls back to NumPy.
         """
-        if node.op != opr.GGML_OP_UNARY:
-            return False
-        kernel = self._UNARY_PYSPIKE_KERNELS.get(node.op_params[0])
-        if kernel is None:
-            return False
+        import numpy as np
         if node.type != ddr.GGML_TYPE_F16:
             return False
-        # Resolve the single source tensor's raw bytes (skip numpy conversion).
         src_id = node.src[0]
         if src_id == 0:
             return False
         src_t = by_id.get(src_id)
         if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
             return False
-        src_buf, src_off = dev.buffer_for_data_addr(src_t.data)
-        nbytes = ddr.tensor_nbytes(src_t)
-        if nbytes == 0 or nbytes % psr.ROW_BYTES != 0:
+        width = src_t.ne[0]
+        height = src_t.ne[1] * src_t.ne[2] * src_t.ne[3]
+        total = width * height
+        if width <= 0 or total <= 0:
             return False
 
-        kernel_name, runner = kernel
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        nbytes = ddr.tensor_nbytes(src_t)
+        src_bytes = bytes(sb.data[so:so + nbytes])
+
+        op = node.op
         try:
-            log.info("[%s] node 0x%x %s pyspike route: %d bytes (%d fp16)",
-                     self.addr, node.id, kernel_name, nbytes, nbytes // 2)
-            out_bytes = runner(bytes(src_buf.data[src_off:src_off + nbytes]))
+            if op == opr.GGML_OP_SQR:
+                kernel_name = "SQR"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["sqr_fp16"]
+                out_bytes = runner(src_bytes, width)
+            elif op == opr.GGML_OP_SUM_ROWS:
+                kernel_name = "SUM_ROWS"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["sum_rows_fp16"]
+                out_bytes = runner(src_bytes, width)
+            elif op == opr.GGML_OP_NORM:
+                eps = np.frombuffer(
+                    np.array(node.op_params[0], dtype=np.int32).tobytes(),
+                    dtype=np.float32)[0]
+                kernel_name = "NORM"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["norm_fp16"]
+                out_bytes = runner(src_bytes, width, float(eps))
+            elif op == opr.GGML_OP_GROUP_NORM:
+                n_groups = int(node.op_params[0])
+                if n_groups != 1:
+                    return False  # firmware kernel only handles num_groups=1
+                eps = np.frombuffer(
+                    np.array(node.op_params[1], dtype=np.int32).tobytes(),
+                    dtype=np.float32)[0]
+                kernel_name = "GROUP_NORM"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["group_norm_fp16"]
+                out_bytes = runner(src_bytes, width, float(eps))
+            elif op == opr.GGML_OP_SCALE:
+                scale = np.frombuffer(
+                    np.array(node.op_params[0], dtype=np.int32).tobytes(),
+                    dtype=np.float32)[0]
+                bias = np.frombuffer(
+                    np.array(node.op_params[1], dtype=np.int32).tobytes(),
+                    dtype=np.float32)[0]
+                if bias != 0.0:
+                    return False  # NumPy fallback applies the bias term
+                # SCALE firmware loops over 16-elem SVR chunks distributed
+                # across 16 SPUs — under ~256 elements some SPUs would skip
+                # the final store_cr and hang the credit wait.
+                if total < 256:
+                    return False
+                kernel_name = "SCALE"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["scale_fp16"]
+                out_bytes = runner(src_bytes, width, float(scale))
+            elif op == opr.GGML_OP_CLAMP:
+                min_v = np.frombuffer(
+                    np.array(node.op_params[0], dtype=np.int32).tobytes(),
+                    dtype=np.float32)[0]
+                max_v = np.frombuffer(
+                    np.array(node.op_params[1], dtype=np.int32).tobytes(),
+                    dtype=np.float32)[0]
+                kernel_name = "CLAMP"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["clamp_fp16"]
+                out_bytes = runner(src_bytes, width,
+                                   float(min_v), float(max_v))
+            elif op == opr.GGML_OP_MEAN:
+                # firmware splits HEIGHT evenly across 16 SPUs — needs % 16 == 0
+                if height % 16 != 0:
+                    return False
+                kernel_name = "MEAN"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["mean_fp16"]
+                out_bytes = runner(src_bytes, width)
+            elif op == opr.GGML_OP_SUM:
+                kernel_name = "SUM"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["sum_fp16"]
+                out_bytes = runner(src_bytes, width)
+            elif op == opr.GGML_OP_TRI:
+                tri_type = int(node.op_params[0])
+                if tri_type < 0 or tri_type > 3:
+                    return False
+                kernel_name = "TRI"
+                runner = psr.SUPPORTED_PYSPIKE_OPS["tri_fp16"]
+                out_bytes = runner(src_bytes, width, tri_type)
+            else:
+                return False
+            log.info("[%s] node 0x%x %s pyspike route: W=%d H=%d (%d fp16)",
+                     self.addr, node.id, kernel_name, width, height, total)
+        except Exception as e:
+            log.warning("[%s] simple-unary pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_repeat_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """REPEAT: dst.ne / src.ne tile factors along each of 4 dims. Both
+        src and dst must fit in their 512KB L2 pool. ggml op_params is not
+        used — the broadcast shape comes from node.ne."""
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        src_id = node.src[0]
+        if src_id == 0:
+            return False
+        src_t = by_id.get(src_id)
+        if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+            return False
+        src_ne = tuple(src_t.ne)
+        dst_ne = tuple(node.ne)
+        if any(s <= 0 or d <= 0 for s, d in zip(src_ne, dst_ne)):
+            return False
+        if any(d % s != 0 for s, d in zip(src_ne, dst_ne)):
+            return False
+        src_total = src_ne[0] * src_ne[1] * src_ne[2] * src_ne[3] * 2
+        dst_total = dst_ne[0] * dst_ne[1] * dst_ne[2] * dst_ne[3] * 2
+        if src_total > 0x80000 or dst_total > 0x80000:
+            return False  # host-side tiling not implemented yet
+
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        src_bytes = bytes(sb.data[so:so + src_total])
+        try:
+            log.info("[%s] node 0x%x REPEAT pyspike route: src_ne=%s dst_ne=%s",
+                     self.addr, node.id, src_ne, dst_ne)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["repeat_fp16"](
+                src_bytes, src_ne, dst_ne)
+        except Exception as e:
+            log.warning("[%s] repeat pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_arange_pyspike(self, node: wp.RpcTensor, dev) -> bool:
+        """ARANGE has no input tensor — output length is in node.ne[0], and
+        op_params[0..2] carry (start, stop, step) as float32-in-int32 bits.
+        Firmware only handles start=0, step=1, so we route just that case
+        (which is the dominant ggml use)."""
+        import numpy as np
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        if node.ne[1] != 1 or node.ne[2] != 1 or node.ne[3] != 1:
+            return False
+        n = node.ne[0]
+        if n <= 0 or n % 8 != 0:
+            return False
+        start = float(np.frombuffer(
+            np.array(node.op_params[0], dtype=np.int32).tobytes(),
+            dtype=np.float32)[0])
+        step = float(np.frombuffer(
+            np.array(node.op_params[2], dtype=np.int32).tobytes(),
+            dtype=np.float32)[0])
+        if start != 0.0 or step != 1.0:
+            return False
+        try:
+            log.info("[%s] node 0x%x ARANGE pyspike route: N=%d",
+                     self.addr, node.id, n)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["arange_fp16"](n)
+        except Exception as e:
+            log.warning("[%s] arange pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_simple_unary_subop_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """GGML_OP_UNARY sub-ops (CEIL, EXPM1, ...) that need W/H from the
+        source tensor's ne instead of the generic 8-wide unary_intrin1 row
+        pattern. Returns False on guard miss → caller falls back to NumPy.
+        """
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        sub_op = node.op_params[0]
+        entry = self._SIMPLE_UNARY_SUBOP_KERNELS.get(sub_op)
+        if entry is None:
+            return False
+        src_id = node.src[0]
+        if src_id == 0:
+            return False
+        src_t = by_id.get(src_id)
+        if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+            return False
+        width = src_t.ne[0]
+        height = src_t.ne[1] * src_t.ne[2] * src_t.ne[3]
+        if width <= 0 or width * height <= 0:
+            return False
+
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        nbytes = ddr.tensor_nbytes(src_t)
+        src_bytes = bytes(sb.data[so:so + nbytes])
+
+        kernel_name, runner_key = entry
+        runner = psr.SUPPORTED_PYSPIKE_OPS[runner_key]
+        try:
+            log.info("[%s] node 0x%x %s pyspike route: W=%d H=%d (%d fp16)",
+                     self.addr, node.id, kernel_name, width, height,
+                     width * height)
+            out_bytes = runner(src_bytes, width)
+        except Exception as e:
+            log.warning("[%s] simple-unary-subop pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_mul_mat_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """MUL_MAT pyspike route — 2D contiguous fp16 only.
+        ggml shape: src0 ne=(K,M), src1 ne=(K,N); dst is (M,N).
+        Higher-rank (batched) shapes and non-fp16 fall back to NumPy.
+        """
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        src0_id, src1_id = node.src[0], node.src[1]
+        if src0_id == 0 or src1_id == 0:
+            return False
+        s0 = by_id.get(src0_id); s1 = by_id.get(src1_id)
+        if s0 is None or s1 is None:
+            return False
+        if s0.type != ddr.GGML_TYPE_F16 or s1.type != ddr.GGML_TYPE_F16:
+            return False
+        # 2D only (batched matmul not supported by this kernel)
+        if s0.ne[2] != 1 or s0.ne[3] != 1 or s1.ne[2] != 1 or s1.ne[3] != 1:
+            return False
+        K, M = s0.ne[0], s0.ne[1]
+        if s1.ne[0] != K:
+            return False
+        N = s1.ne[1]
+        # Each row must be bus-word aligned (kernel assumes WIDTH=8 fp16 cols).
+        if K % 8 != 0:
+            return False
+
+        b0, o0 = dev.buffer_for_data_addr(s0.data)
+        b1, o1 = dev.buffer_for_data_addr(s1.data)
+        nbytes0 = ddr.tensor_nbytes(s0); nbytes1 = ddr.tensor_nbytes(s1)
+        src0_bytes = bytes(b0.data[o0:o0 + nbytes0])
+        src1_bytes = bytes(b1.data[o1:o1 + nbytes1])
+
+        # tiled wrapper handles arbitrary M/N via host-side splits (firmware
+        # call stays bounded to MUL_MAT_TILE_M × tile_n). K is firmware-tiled.
+        runner = psr.SUPPORTED_PYSPIKE_OPS["mul_mat_tiled_fp16"]
+        try:
+            log.info("[%s] node 0x%x MUL_MAT pyspike route: M=%d K=%d N=%d "
+                     "(tile=%dx%d)",
+                     self.addr, node.id, M, K, N,
+                     psr.MUL_MAT_TILE_M, psr.MUL_MAT_TILE_N)
+            out_bytes = runner(src0_bytes, src1_bytes, M=M, K=K, N=N)
+        except Exception as e:
+            log.warning("[%s] mul_mat pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """If `node` matches a pattern we have a pyspike kernel for, run it
+        and write the result. Returns True on success, False to signal NumPy
+        fallback. Any pyspike error is logged and also returns False.
+        """
+        if node.op == opr.GGML_OP_MUL_MAT:
+            return self._try_mul_mat_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_ARANGE:
+            return self._try_arange_pyspike(node, dev)
+        if node.op == opr.GGML_OP_REPEAT:
+            return self._try_repeat_pyspike(node, by_id, dev)
+        if node.op in self._SIMPLE_UNARY_DISPATCH:
+            return self._try_simple_unary_pyspike(node, by_id, dev)
+        if (node.op == opr.GGML_OP_UNARY
+                and node.op_params[0] in self._SIMPLE_UNARY_SUBOP_KERNELS):
+            return self._try_simple_unary_subop_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_UNARY:
+            kernel = self._UNARY_PYSPIKE_KERNELS.get(node.op_params[0])
+            kind = "unary"
+            runner_entry = kernel  # 2-tuple (name, runner)
+        else:
+            entry = self._MAIN_OP_PYSPIKE_KERNELS.get(node.op)
+            if entry is None:
+                return False
+            kernel_name, kind, runner = entry
+            runner_entry = (kernel_name, runner)
+            kernel = entry
+        if kernel is None:
+            return False
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+
+        # Resolve source tensor bytes (skip numpy conversion).
+        needed = 2 if kind == "binary" else 1
+        src_bytes = []
+        nbytes = 0
+        for i in range(needed):
+            src_id = node.src[i]
+            if src_id == 0:
+                return False
+            src_t = by_id.get(src_id)
+            if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+                return False
+            sb, so = dev.buffer_for_data_addr(src_t.data)
+            n = ddr.tensor_nbytes(src_t)
+            if n == 0 or n % psr.ROW_BYTES != 0:
+                return False
+            if i == 0:
+                nbytes = n
+            elif n != nbytes:
+                return False  # binary inputs must match
+            src_bytes.append(bytes(sb.data[so:so + n]))
+
+        kernel_name, runner = runner_entry
+        try:
+            log.info("[%s] node 0x%x %s pyspike route: %d bytes (%d fp16) kind=%s",
+                     self.addr, node.id, kernel_name, nbytes, nbytes // 2, kind)
+            out_bytes = runner(*src_bytes)
         except Exception as e:
             log.warning("[%s] pyspike route failed (%s) → NumPy fallback", self.addr, e)
             return False
