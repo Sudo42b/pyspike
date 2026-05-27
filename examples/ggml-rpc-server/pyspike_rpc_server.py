@@ -510,6 +510,198 @@ class RpcSession:
         dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
         return True
 
+    def _try_pad_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """PAD: append zeros along right (ne[0]) and bottom (ne[1]). Kernel
+        does not support channel/batch padding nor left/top — those go to
+        NumPy fallback."""
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        src_id = node.src[0]
+        if src_id == 0:
+            return False
+        src_t = by_id.get(src_id)
+        if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+            return False
+        # ggml PAD op_params: [pad_after_dim0, pad_after_dim1, pad_after_dim2, pad_after_dim3]
+        pad_w = int(node.op_params[0])
+        pad_h = int(node.op_params[1])
+        pad_c = int(node.op_params[2])
+        pad_b = int(node.op_params[3])
+        if pad_c != 0 or pad_b != 0:
+            return False
+        if src_t.ne[2] != 1 or src_t.ne[3] != 1:
+            return False
+        src_cols = src_t.ne[0]
+        src_rows = src_t.ne[1]
+        if src_cols <= 0 or src_rows <= 0:
+            return False
+
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        nbytes = ddr.tensor_nbytes(src_t)
+        src_bytes = bytes(sb.data[so:so + nbytes])
+        try:
+            log.info("[%s] node 0x%x PAD pyspike route: src=(%d,%d) pad=(R=%d,B=%d)",
+                     self.addr, node.id, src_rows, src_cols, pad_w, pad_h)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["pad_fp16"](
+                src_bytes, src_rows, src_cols, pad_w, pad_h)
+        except Exception as e:
+            log.warning("[%s] pad pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_concat_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """CONCAT axis=0 (innermost dim) with equal src col counts. Other
+        axes / unequal cols go to NumPy fallback."""
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        axis = int(node.op_params[0])
+        if axis != 0:
+            return False
+        src0_id = node.src[0]
+        src1_id = node.src[1]
+        if src0_id == 0 or src1_id == 0:
+            return False
+        s0 = by_id.get(src0_id)
+        s1 = by_id.get(src1_id)
+        if s0 is None or s1 is None:
+            return False
+        if s0.type != ddr.GGML_TYPE_F16 or s1.type != ddr.GGML_TYPE_F16:
+            return False
+        if s0.ne[2] != 1 or s0.ne[3] != 1 or s1.ne[2] != 1 or s1.ne[3] != 1:
+            return False
+        # Kernel assumes equal SRC_COLS for both sides.
+        if s0.ne[0] != s1.ne[0]:
+            return False
+        if s0.ne[1] != s1.ne[1]:
+            return False
+        cols = s0.ne[0]
+        rows = s0.ne[1]
+        if cols <= 0 or rows <= 0:
+            return False
+
+        b0, o0 = dev.buffer_for_data_addr(s0.data)
+        b1, o1 = dev.buffer_for_data_addr(s1.data)
+        n0 = ddr.tensor_nbytes(s0)
+        n1 = ddr.tensor_nbytes(s1)
+        src0_bytes = bytes(b0.data[o0:o0 + n0])
+        src1_bytes = bytes(b1.data[o1:o1 + n1])
+        try:
+            log.info("[%s] node 0x%x CONCAT pyspike route: 2x(%d,%d) axis=0",
+                     self.addr, node.id, rows, cols)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["concat_fp16"](
+                src0_bytes, src1_bytes, cols, cols, rows)
+        except Exception as e:
+            log.warning("[%s] concat pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_pool_2d_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """POOL_2D: pyspike kernel supports AVG with zero padding only.
+        MAX and any non-zero padding go to NumPy fallback."""
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        pool_op = int(node.op_params[0])
+        if pool_op != 1:                              # 0=MAX, 1=AVG; AVG only
+            return False
+        k0, k1 = int(node.op_params[1]), int(node.op_params[2])
+        s0, s1 = int(node.op_params[3]), int(node.op_params[4])
+        p0, p1 = int(node.op_params[5]), int(node.op_params[6])
+        if p0 != 0 or p1 != 0:
+            return False
+        src_id = node.src[0]
+        if src_id == 0:
+            return False
+        src_t = by_id.get(src_id)
+        if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+            return False
+        # Only single-channel single-batch shapes for now.
+        if src_t.ne[2] != 1 or src_t.ne[3] != 1:
+            return False
+        in_w, in_h = src_t.ne[0], src_t.ne[1]
+        if in_w <= 0 or in_h <= 0:
+            return False
+
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        nbytes = ddr.tensor_nbytes(src_t)
+        src_bytes = bytes(sb.data[so:so + nbytes])
+        try:
+            log.info("[%s] node 0x%x POOL_2D AVG pyspike route: in=(%d,%d) k=(%d,%d) s=(%d,%d)",
+                     self.addr, node.id, in_h, in_w, k1, k0, s1, s0)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["pool_2d_avg_fp16"](
+                src_bytes, in_h, in_w, k1, k0, s1, s0)
+        except Exception as e:
+            log.warning("[%s] pool_2d pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
+    def _try_im2col_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """IM2COL 2D: vendor kernel supports single-channel inputs with equal
+        strides, zero padding, dilation=1. Anything richer goes to NumPy.
+        ggml IM2COL op_params: [s0, s1, p0, p1, d0, d1, is_2D].
+        src[0] = kernel (shape only), src[1] = input.
+        """
+        if node.type != ddr.GGML_TYPE_F16:
+            return False
+        # ggml IM2COL is_2D flag
+        if int(node.op_params[6]) != 1:
+            return False
+        s0 = int(node.op_params[0])
+        s1 = int(node.op_params[1])
+        p0 = int(node.op_params[2])
+        p1 = int(node.op_params[3])
+        d0 = int(node.op_params[4])
+        d1 = int(node.op_params[5])
+        if s0 != s1 or s0 <= 0:
+            return False
+        if p0 != 0 or p1 != 0:
+            return False
+        if d0 != 1 or d1 != 1:
+            return False
+        kernel_id = node.src[0]
+        input_id = node.src[1]
+        if kernel_id == 0 or input_id == 0:
+            return False
+        kernel_t = by_id.get(kernel_id)
+        input_t = by_id.get(input_id)
+        if kernel_t is None or input_t is None:
+            return False
+        if input_t.type != ddr.GGML_TYPE_F16:
+            return False
+        # Vendor kernel: single channel only (kernel ne[2]=1).
+        if kernel_t.ne[2] != 1 or kernel_t.ne[3] != 1:
+            return False
+        if input_t.ne[2] != 1 or input_t.ne[3] != 1:
+            return False
+        in_w, in_h = input_t.ne[0], input_t.ne[1]
+        k_w, k_h = kernel_t.ne[0], kernel_t.ne[1]
+        if in_w <= 0 or in_h <= 0 or k_w <= 0 or k_h <= 0:
+            return False
+
+        ib, io = dev.buffer_for_data_addr(input_t.data)
+        n_in = ddr.tensor_nbytes(input_t)
+        input_bytes = bytes(ib.data[io:io + n_in])
+        try:
+            log.info("[%s] node 0x%x IM2COL pyspike route: in=(%d,%d) k=(%d,%d) s=%d",
+                     self.addr, node.id, in_h, in_w, k_h, k_w, s0)
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["im2col_fp16"](
+                input_bytes, in_h, in_w, k_h, k_w, s0)
+        except Exception as e:
+            log.warning("[%s] im2col pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
     def _try_repeat_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
         """REPEAT: dst.ne / src.ne tile factors along each of 4 dims. Both
         src and dst must fit in their 512KB L2 pool. ggml op_params is not
@@ -683,6 +875,14 @@ class RpcSession:
             return self._try_arange_pyspike(node, dev)
         if node.op == opr.GGML_OP_REPEAT:
             return self._try_repeat_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_PAD:
+            return self._try_pad_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_CONCAT:
+            return self._try_concat_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_POOL_2D:
+            return self._try_pool_2d_pyspike(node, by_id, dev)
+        if node.op == opr.GGML_OP_IM2COL:
+            return self._try_im2col_pyspike(node, by_id, dev)
         if node.op in self._SIMPLE_UNARY_DISPATCH:
             return self._try_simple_unary_pyspike(node, by_id, dev)
         if (node.op == opr.GGML_OP_UNARY

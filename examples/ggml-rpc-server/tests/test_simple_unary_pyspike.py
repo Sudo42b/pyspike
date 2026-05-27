@@ -162,6 +162,57 @@ def case_repeat(rng) -> tuple[str, float, float]:
     return ("REPEAT", _max_diff(ref, got), 0.0)
 
 
+def case_pad(rng) -> tuple[str, float, float]:
+    # 4x8 src, pad +1 col / +1 row → 5x9 dst with zeros on right + bottom.
+    x = rng.uniform(-2.0, 2.0, (4, 8)).astype(np.float16)
+    pad_right, pad_bottom = 1, 1
+    out = psr.run_pad_fp16(x.tobytes(), src_rows=4, src_cols=8,
+                            pad_right=pad_right, pad_bottom=pad_bottom)
+    got = _from_fp16(out, (4 + pad_bottom, 8 + pad_right))
+    ref = np.pad(x, ((0, pad_bottom), (0, pad_right)),
+                 mode="constant", constant_values=0)
+    return ("PAD", _max_diff(ref, got), 0.0)
+
+
+def case_concat(rng) -> tuple[str, float, float]:
+    # Two (4, 8) FP16 tensors → (4, 16) along axis=0 (innermost dim).
+    a = rng.uniform(-1.0, 1.0, (4, 8)).astype(np.float16)
+    b = rng.uniform(-1.0, 1.0, (4, 8)).astype(np.float16)
+    out = psr.run_concat_fp16(a.tobytes(), b.tobytes(),
+                               src0_cols=8, src1_cols=8, rows=4)
+    got = _from_fp16(out, (4, 16))
+    ref = np.concatenate([a, b], axis=-1)
+    return ("CONCAT", _max_diff(ref, got), 0.0)
+
+
+def case_pool_2d_avg(rng) -> tuple[str, float, float]:
+    # AvgPool 2x2 stride 2: input (8, 8) → output (4, 4).
+    x = rng.uniform(-1.0, 1.0, (8, 8)).astype(np.float16)
+    out = psr.run_pool_2d_avg_fp16(x.tobytes(), in_h=8, in_w=8,
+                                    k_h=2, k_w=2, s_h=2, s_w=2)
+    got = _from_fp16(out, (4, 4))
+    # Reference: numpy mean over 2x2 windows.
+    xf = x.astype(np.float32).reshape(4, 2, 4, 2).mean(axis=(1, 3))
+    ref = xf.astype(np.float16)
+    return ("POOL_2D_AVG", _max_diff(ref, got), 0.05)
+
+
+def case_im2col(rng) -> tuple[str, float, float]:
+    # Single-channel im2col: input (5, 5) with 3x3 kernel, stride 1.
+    # Output: (OH*OW, KH*KW) = (3*3, 9) = (9, 9).
+    x = rng.uniform(-1.0, 1.0, (5, 5)).astype(np.float16)
+    out = psr.run_im2col_fp16(x.tobytes(), in_h=5, in_w=5,
+                               k_h=3, k_w=3, stride=1)
+    got = _from_fp16(out, (9, 9))
+    # Reference: collect 3x3 patches with stride 1.
+    ref = np.zeros((9, 9), dtype=np.float16)
+    for oh in range(3):
+        for ow in range(3):
+            patch = x[oh:oh + 3, ow:ow + 3]
+            ref[oh * 3 + ow] = patch.flatten()
+    return ("IM2COL", _max_diff(ref, got), 0.0)
+
+
 CASES = {
     "sqr":        case_sqr,
     "sum_rows":   case_sum_rows,
@@ -176,6 +227,10 @@ CASES = {
     "arange":     case_arange,
     "tri":        case_tri,
     "repeat":     case_repeat,
+    "pad":        case_pad,
+    "concat":     case_concat,
+    "pool_2d_avg": case_pool_2d_avg,
+    "im2col":     case_im2col,
 }
 
 

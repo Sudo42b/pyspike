@@ -151,6 +151,38 @@ OP_MANIFEST: dict[str, OpManifest] = {
         ],
         header_comment="triangular mask; W/H/tri_type dynamic, copy+fill only",
     ),
+    "pad": OpManifest(
+        source_dir="PAD",
+        source_stem="pad",
+        placeholders=["SRC_ROWS", "SRC_COLS", "PAD_RIGHT", "PAD_BOTTOM"],
+        header_comment="pad with zeros along right/bottom; CHANNELS=1",
+    ),
+    "concat": OpManifest(
+        source_dir="CONCAT",
+        source_stem="concat",
+        placeholders=["SRC_COLS", "ROWS"],
+        header_comment="concat axis=0: dst row = [src0 row | src1 row]; 2 inputs",
+    ),
+    "im2col": OpManifest(
+        source_dir="IM2COL",
+        source_stem="im2col",
+        placeholders=["IN_W", "IN_H", "K_W", "K_H", "STRIDE"],
+        header_comment="im2col 2D: input → (OH*OW, KH*KW) patches; stride/IC=1 only",
+    ),
+    "pool_2d_avg": OpManifest(
+        source_dir="POOL_2D",
+        source_stem="pool_2d",
+        placeholders=["IN_H", "IN_W", "OUT_H", "OUT_W", "K_H", "K_W", "S_H", "S_W"],
+        # FP16_QUARTER (= 1/(KH*KW) fp16) is hard-coded for k=2x2; rename to
+        # FP16_INV_K and let the runner inject the actual reciprocal bits.
+        extra_replacements=[
+            (r"#define\s+FP16_QUARTER\s+0x[0-9A-Fa-f]+[^\n]*",
+             "#define FP16_INV_K          {{INV_K_FP16}}"),
+            (r"\bFP16_QUARTER\b", "FP16_INV_K"),
+        ],
+        template_name="unary_pool_2d_avg",
+        header_comment="average pool 2d; dynamic shape + inv(K_H*K_W) fp16 fill",
+    ),
 }
 
 

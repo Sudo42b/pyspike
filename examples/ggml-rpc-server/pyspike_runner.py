@@ -679,6 +679,126 @@ def run_repeat_fp16(input_bytes: bytes,
                         dump_size=dst_total)
 
 
+def run_im2col_fp16(input_bytes: bytes,
+                    in_h: int, in_w: int,
+                    k_h: int, k_w: int,
+                    stride: int) -> bytes:
+    """IM2COL 2D: rearrange input into per-patch rows for matmul-based conv.
+    Vendor kernel assumes single channel (IC=1), zero padding, dilation=1,
+    and equal s0=s1=stride. Caller must pre-check the ggml op_params.
+
+    Output layout: (OH*OW) patches × (KH*KW) fp16 elements each.
+    The input is placed at BASE_DDR_INPUT=0x2000000 (not the usual 0x1000000)
+    because the vendor IM2COL kernel reads input from DDR_B.
+    """
+    expected = in_h * in_w * DTYPE_BYTES
+    if len(input_bytes) != expected:
+        raise ValueError(
+            f"im2col input bytes {len(input_bytes)} != {in_h}*{in_w}*{DTYPE_BYTES}")
+    if k_h <= 0 or k_w <= 0 or stride <= 0:
+        raise ValueError("im2col kernel/stride must be positive")
+    out_h = (in_h - k_h) // stride + 1
+    out_w = (in_w - k_w) // stride + 1
+    if out_h <= 0 or out_w <= 0:
+        raise ValueError(f"im2col output non-positive: out_h={out_h} out_w={out_w}")
+    src_c = _render_template("unary_im2col",
+                             OP_NAME="unary_im2col",
+                             IN_H=in_h, IN_W=in_w,
+                             K_H=k_h, K_W=k_w, STRIDE=stride)
+    elf = _build_kernel(src_c, _cache_key("unary_im2col", "f16",
+                                          (in_h, in_w, k_h, k_w, stride)))
+    dst_bytes = out_h * out_w * k_h * k_w * DTYPE_BYTES
+    return _run_pyspike(elf,
+                        [(DEFAULT_INPUT_B_OFFSET, input_bytes)],
+                        dump_size=dst_bytes)
+
+
+def run_pad_fp16(input_bytes: bytes,
+                 src_rows: int, src_cols: int,
+                 pad_right: int, pad_bottom: int) -> bytes:
+    """PAD: append `pad_right` zero columns and `pad_bottom` zero rows.
+    Only the right/bottom layout the vendor `__pad` kernel implements; ggml
+    op_params carry per-dim pad widths and the server pre-checks left/top=0.
+    """
+    expected = src_rows * src_cols * DTYPE_BYTES
+    if len(input_bytes) != expected:
+        raise ValueError(
+            f"pad src bytes {len(input_bytes)} != {src_rows}*{src_cols}*{DTYPE_BYTES}")
+    if pad_right < 0 or pad_bottom < 0:
+        raise ValueError("pad amounts must be non-negative")
+    src = _render_template("unary_pad",
+                           OP_NAME="unary_pad",
+                           SRC_ROWS=src_rows, SRC_COLS=src_cols,
+                           PAD_RIGHT=pad_right, PAD_BOTTOM=pad_bottom)
+    elf = _build_kernel(src, _cache_key("unary_pad", "f16",
+                                        (src_rows, src_cols, pad_right, pad_bottom)))
+    dst_rows = src_rows + pad_bottom
+    dst_cols = src_cols + pad_right
+    dst_bytes = dst_rows * dst_cols * DTYPE_BYTES
+    return _run_pyspike(elf, [(DEFAULT_INPUT_OFFSET, input_bytes)],
+                        dump_size=dst_bytes)
+
+
+def run_concat_fp16(src0: bytes, src1: bytes,
+                    src0_cols: int, src1_cols: int,
+                    rows: int) -> bytes:
+    """CONCAT axis=0: dst row = [src0 row | src1 row]. Both srcs must have
+    the same number of rows; the vendor kernel currently assumes equal col
+    counts (it copies `SRC_COLS` from each side), so the runner enforces it.
+    """
+    if src0_cols != src1_cols:
+        raise ValueError(
+            f"concat kernel only supports equal col counts: "
+            f"src0={src0_cols}, src1={src1_cols}")
+    expected = src0_cols * rows * DTYPE_BYTES
+    if len(src0) != expected or len(src1) != expected:
+        raise ValueError(
+            f"concat input size mismatch: src0={len(src0)} src1={len(src1)} "
+            f"expected={expected}")
+    src_c = _render_template("unary_concat",
+                             OP_NAME="unary_concat",
+                             SRC_COLS=src0_cols, ROWS=rows)
+    elf = _build_kernel(src_c, _cache_key("unary_concat", "f16",
+                                          (src0_cols, rows)))
+    dst_bytes = 2 * src0_cols * rows * DTYPE_BYTES
+    return _run_pyspike(elf,
+                        [(DEFAULT_INPUT_OFFSET, src0),
+                         (DEFAULT_INPUT_B_OFFSET, src1)],
+                        dump_size=dst_bytes)
+
+
+def run_pool_2d_avg_fp16(input_bytes: bytes,
+                         in_h: int, in_w: int,
+                         k_h: int, k_w: int,
+                         s_h: int, s_w: int) -> bytes:
+    """POOL_2D average. Output size derived from input + kernel + stride;
+    padding 0 (the vendor `__pool_a` kernel assumes no padding). Reciprocal
+    1/(K_H*K_W) is injected into the kernel as an fp16 constant.
+    """
+    expected = in_h * in_w * DTYPE_BYTES
+    if len(input_bytes) != expected:
+        raise ValueError(
+            f"pool input bytes {len(input_bytes)} != {in_h}*{in_w}*{DTYPE_BYTES}")
+    if k_h <= 0 or k_w <= 0 or s_h <= 0 or s_w <= 0:
+        raise ValueError("pool kernel/stride must be positive")
+    out_h = (in_h - k_h) // s_h + 1
+    out_w = (in_w - k_w) // s_w + 1
+    if out_h <= 0 or out_w <= 0:
+        raise ValueError(f"pool output size non-positive: out_h={out_h} out_w={out_w}")
+    inv_k_bits = _f32_to_fp16_bits(1.0 / (k_h * k_w))
+    src_c = _render_template("unary_pool_2d_avg",
+                             OP_NAME="unary_pool_2d_avg",
+                             IN_H=in_h, IN_W=in_w,
+                             OUT_H=out_h, OUT_W=out_w,
+                             K_H=k_h, K_W=k_w, S_H=s_h, S_W=s_w,
+                             INV_K_FP16=f"0x{inv_k_bits:04X}")
+    elf = _build_kernel(src_c, _cache_key("unary_pool_2d_avg", "f16",
+                                          (in_h, in_w, k_h, k_w, s_h, s_w)))
+    dst_bytes = out_h * out_w * DTYPE_BYTES
+    return _run_pyspike(elf, [(DEFAULT_INPUT_OFFSET, input_bytes)],
+                        dump_size=dst_bytes)
+
+
 def run_tri_fp16(input_bytes: bytes, width: int, tri_type: int) -> bytes:
     """TRI: copy src into dst then zero one triangle. tri_type encodes which
     triangle is kept vs zeroed (0=upper_diag, 1=upper, 2=lower_diag, 3=lower
@@ -738,4 +858,8 @@ SUPPORTED_PYSPIKE_OPS = {
     "arange_fp16":        run_arange_fp16,
     "tri_fp16":           run_tri_fp16,
     "repeat_fp16":        run_repeat_fp16,
+    "pad_fp16":           run_pad_fp16,
+    "concat_fp16":        run_concat_fp16,
+    "pool_2d_avg_fp16":   run_pool_2d_avg_fp16,
+    "im2col_fp16":        run_im2col_fp16,
 }
