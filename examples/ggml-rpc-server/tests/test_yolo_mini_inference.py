@@ -107,9 +107,8 @@ def _numpy_upsample_nearest(x, factor):
 # --- pyspike-first wrappers -------------------------------------------------
 
 def conv2d(x: np.ndarray, w: np.ndarray, *, layer: str) -> np.ndarray:
-    """Pyspike accelerated Conv2d (host IM2COL + MUL_MAT_tiled, K-padded).
-    Falls back to NumPy if any pyspike step raises.
-    """
+    """Conv2d via pyspike: multi-IC IM2COL kernel + MUL_MAT_tiled (K-padded).
+    Layout reshapes are pure metadata (`reshape`/`transpose`) — no NumPy compute."""
     t0 = time.time()
     B, IC, IH, IW = x.shape
     OC, _, KH, KW = w.shape
@@ -117,23 +116,30 @@ def conv2d(x: np.ndarray, w: np.ndarray, *, layer: str) -> np.ndarray:
     OW = IW - KW + 1
 
     try:
-        patches = _numpy_im2col(x, KH, KW)
-        a = patches.reshape(B * OH * OW, IC * KH * KW)
-        b = w.reshape(OC, IC * KH * KW)
-        M, K = a.shape
-        N = b.shape[0]
+        if B != 1:
+            raise ValueError(f"conv2d expects batch=1, got {B}")
+        im2col_bytes = psr.SUPPORTED_PYSPIKE_OPS["im2col_multich_fp16"](
+            x[0].astype(np.float16).tobytes(),
+            ic=IC, in_h=IH, in_w=IW, k_h=KH, k_w=KW, stride=1)
+        K = IC * KH * KW
+        patches = np.frombuffer(im2col_bytes, dtype=np.float16).reshape(OH * OW, K)
+
+        weights = w.reshape(OC, K)
+        M = OH * OW
+        N = OC
         K_pad = ((K + 7) // 8) * 8
         if K_pad != K:
             a_p = np.zeros((M, K_pad), dtype=np.float16)
-            a_p[:, :K] = a
+            a_p[:, :K] = patches
             b_p = np.zeros((N, K_pad), dtype=np.float16)
-            b_p[:, :K] = b
+            b_p[:, :K] = weights
         else:
-            a_p = a.astype(np.float16)
-            b_p = b.astype(np.float16)
-        out_bytes = psr.SUPPORTED_PYSPIKE_OPS["mul_mat_tiled_fp16"](
+            a_p = patches.astype(np.float16)
+            b_p = weights.astype(np.float16)
+
+        mm_bytes = psr.SUPPORTED_PYSPIKE_OPS["mul_mat_tiled_fp16"](
             a_p.tobytes(), b_p.tobytes(), M=M, K=K_pad, N=N)
-        mm = np.frombuffer(out_bytes, dtype=np.float16).reshape(M, N)
+        mm = np.frombuffer(mm_bytes, dtype=np.float16).reshape(M, N)
         result = mm.reshape(B, OH, OW, OC).transpose(0, 3, 1, 2).copy()
         _log("Conv2d", layer, "pyspike", t0)
         return result
@@ -226,16 +232,25 @@ def upsample_nearest(x: np.ndarray, factor: int, *, layer: str) -> np.ndarray:
 
 
 def concat_channel(a: np.ndarray, b: np.ndarray, *, layer: str) -> np.ndarray:
-    """Concat along channel dim (NCHW axis=1, ggml axis=2). No vendor pyspike
-    kernel covers this yet — composed via per-channel pyspike memcpy through
-    the binary_add path is heavier than just letting NumPy stitch the buffers,
-    so we mark this op as the remaining NumPy fallback in the chain. A native
-    pyspike channel-concat kernel is the next step.
-    """
+    """Channel concat via pyspike unary_concat_channel.c.tpl (ggml axis=2)."""
     t0 = time.time()
-    result = np.concatenate([a, b], axis=1)
-    _log("Concat", layer, "numpy(TODO)", t0)
-    return result
+    try:
+        if a.shape[0] != b.shape[0] or a.shape[2:] != b.shape[2:]:
+            raise ValueError(f"concat shape mismatch: a={a.shape} b={b.shape}")
+        B, A_CH, H, W = a.shape
+        _, B_CH, _, _ = b.shape
+        out_bytes = psr.SUPPORTED_PYSPIKE_OPS["concat_channel_fp16"](
+            a.astype(np.float16).tobytes(), b.astype(np.float16).tobytes(),
+            a_ch=A_CH, b_ch=B_CH, h=H, w=W, batch=B)
+        result = np.frombuffer(out_bytes, dtype=np.float16).reshape(
+            B, A_CH + B_CH, H, W).copy()
+        _log("Concat", layer, "pyspike", t0)
+        return result
+    except Exception as e:
+        print(f"  [Concat {layer}] pyspike failed ({e}) → NumPy")
+        result = np.concatenate([a, b], axis=1)
+        _log("Concat", layer, "numpy", t0)
+        return result
 
 
 # --- YOLOv8 mini block ------------------------------------------------------

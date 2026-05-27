@@ -716,6 +716,34 @@ def run_conv_2d_fp16(kernel_bytes: bytes, input_bytes: bytes,
                         dump_size=dst_bytes)
 
 
+def run_im2col_multich_fp16(input_bytes: bytes,
+                            ic: int, in_h: int, in_w: int,
+                            k_h: int, k_w: int, stride: int = 1) -> bytes:
+    """multi-channel IM2COL: (IC, IN_H, IN_W) → (OH*OW, IC*K_H*K_W) fp16.
+    Vendor IC=1 kernel generalised by sweeping IC×K_H load rows per patch.
+    Caller pre-checks stride/pad/dilation guards on the ggml op_params.
+    """
+    if ic <= 0 or in_h <= 0 or in_w <= 0 or k_h <= 0 or k_w <= 0 or stride <= 0:
+        raise ValueError(f"im2col multich invalid: ic={ic} in=({in_h},{in_w}) k=({k_h},{k_w}) s={stride}")
+    expected = ic * in_h * in_w * DTYPE_BYTES
+    if len(input_bytes) != expected:
+        raise ValueError(f"im2col input bytes {len(input_bytes)} != {expected}")
+    out_h = (in_h - k_h) // stride + 1
+    out_w = (in_w - k_w) // stride + 1
+    if out_h <= 0 or out_w <= 0:
+        raise ValueError(f"im2col output non-positive: out_h={out_h} out_w={out_w}")
+    src_c = _render_template("unary_im2col_multich",
+                              OP_NAME="unary_im2col_multich",
+                              IC=ic, IN_H=in_h, IN_W=in_w,
+                              K_H=k_h, K_W=k_w, STRIDE=stride)
+    elf = _build_kernel(src_c, _cache_key("unary_im2col_multich", "f16",
+                                           (ic, in_h, in_w, k_h, k_w, stride)))
+    dst_bytes = out_h * out_w * ic * k_h * k_w * DTYPE_BYTES
+    return _run_pyspike(elf,
+                        [(DEFAULT_INPUT_B_OFFSET, input_bytes)],
+                        dump_size=dst_bytes)
+
+
 def run_im2col_fp16(input_bytes: bytes,
                     in_h: int, in_w: int,
                     k_h: int, k_w: int,
@@ -773,6 +801,32 @@ def run_pad_fp16(input_bytes: bytes,
     dst_cols = src_cols + pad_right
     dst_bytes = dst_rows * dst_cols * DTYPE_BYTES
     return _run_pyspike(elf, [(DEFAULT_INPUT_OFFSET, input_bytes)],
+                        dump_size=dst_bytes)
+
+
+def run_concat_channel_fp16(src0: bytes, src1: bytes,
+                            a_ch: int, b_ch: int,
+                            h: int, w: int, batch: int = 1) -> bytes:
+    """CONCAT along ggml axis=2 (channel): two (W, H, *, BATCH) tensors
+    glued along the channel dim. Pure DDR→DDR memcpy in the shared section."""
+    if a_ch <= 0 or b_ch <= 0 or h <= 0 or w <= 0 or batch <= 0:
+        raise ValueError(f"concat_channel needs positive dims: "
+                         f"a_ch={a_ch} b_ch={b_ch} h={h} w={w} batch={batch}")
+    expected_a = batch * a_ch * h * w * DTYPE_BYTES
+    expected_b = batch * b_ch * h * w * DTYPE_BYTES
+    if len(src0) != expected_a:
+        raise ValueError(f"src0 bytes {len(src0)} != {expected_a}")
+    if len(src1) != expected_b:
+        raise ValueError(f"src1 bytes {len(src1)} != {expected_b}")
+    src_c = _render_template("unary_concat_channel",
+                              OP_NAME="unary_concat_channel",
+                              W=w, H=h, A_CH=a_ch, B_CH=b_ch, BATCH=batch)
+    elf = _build_kernel(src_c, _cache_key("unary_concat_channel", "f16",
+                                           (batch, a_ch, b_ch, h, w)))
+    dst_bytes = batch * (a_ch + b_ch) * h * w * DTYPE_BYTES
+    return _run_pyspike(elf,
+                        [(DEFAULT_INPUT_OFFSET, src0),
+                         (DEFAULT_INPUT_B_OFFSET, src1)],
                         dump_size=dst_bytes)
 
 
@@ -926,8 +980,10 @@ SUPPORTED_PYSPIKE_OPS = {
     "repeat_fp16":        run_repeat_fp16,
     "pad_fp16":           run_pad_fp16,
     "concat_fp16":        run_concat_fp16,
+    "concat_channel_fp16": run_concat_channel_fp16,
     "pool_2d_avg_fp16":   run_pool_2d_avg_fp16,
     "pool_2d_max_fp16":   run_pool_2d_max_fp16,
     "im2col_fp16":        run_im2col_fp16,
+    "im2col_multich_fp16": run_im2col_multich_fp16,
     "conv_2d_fp16":       run_conv_2d_fp16,
 }
