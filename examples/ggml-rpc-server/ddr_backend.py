@@ -95,23 +95,27 @@ def view_tensor(t: RpcTensor, host_buf: bytearray, base_off: int) -> np.ndarray:
     # might touch — that's the maximum reachable byte = sum((ne[d]-1)*nb[d]) + elem_size.
     elem_size = dtype.itemsize
     reach = sum((t.ne[d] - 1) * t.nb[d] for d in range(ndim)) + elem_size
-    raw = np.frombuffer(host_buf, dtype=np.uint8, count=reach, offset=base_off)
-    # as_strided needs a 0-d typed view to anchor strides; cast via .view(dtype)
-    # only works for aligned, contiguous source — so re-wrap with as_strided
-    # using uint8 buffer + byte-strides, then view as target dtype.
-    arr = as_strided(raw, shape=shape, strides=strides)
-    # arr is uint8 with custom strides covering byte layout; need dtype-cast.
-    # The contiguous-respecting safe path: copy out into a dtype array of `shape`.
-    # But ggml tensors are mostly contiguous, so we shortcut when nb matches
-    # the canonical contiguous layout — then a direct frombuffer view works.
+
+    # Contiguous fast path — direct frombuffer view.
     if _is_contiguous(t, ndim, elem_size):
         n_elems = 1
         for d in range(ndim):
             n_elems *= t.ne[d]
         return np.frombuffer(host_buf, dtype=dtype, count=n_elems,
                              offset=base_off).reshape(shape)
-    # Non-contiguous: take a copy through the strided uint8 view, then dtype-cast.
-    return arr.copy().view(dtype).reshape(shape)
+
+    # Non-contiguous (PERMUTE/TRANSPOSE/VIEW): build a typed strided view, then
+    # copy into a contiguous shape-correct array.
+    # numpy's as_strided takes BYTE strides regardless of source dtype, so the
+    # ggml nb[] values (byte strides) plug in directly when we start from a
+    # dtype-typed `raw`. The earlier uint8-based path scaled the byte count
+    # incorrectly (copy yields prod(shape) uint8 bytes → view(fp16) halves
+    # element count → reshape mismatch on every non-contiguous yolov10+ view).
+    raw_typed = np.frombuffer(host_buf, dtype=dtype,
+                              count=(reach + elem_size - 1) // elem_size,
+                              offset=base_off)
+    arr = as_strided(raw_typed, shape=shape, strides=strides)
+    return arr.copy()
 
 
 def _is_contiguous(t: RpcTensor, ndim: int, elem_size: int) -> bool:
