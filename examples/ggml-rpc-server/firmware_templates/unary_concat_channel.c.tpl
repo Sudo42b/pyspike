@@ -31,8 +31,11 @@
 #if HW_BYTES_RAW == 0
 #error "concat_channel needs non-zero H*W"
 #endif
-#if A_BATCH_BYTES_RAW > 16777215 || B_BATCH_BYTES_RAW > 16777215
-#error "concat_channel per-batch chunk exceeds 24-bit DMA length cap"
+#if HW_BYTES_RAW > 65535
+#error "concat_channel per-channel HW*DTYPE exceeds 16-bit DMA length cap"
+#endif
+#if A_CH > 65535 || B_CH > 65535
+#error "concat_channel channel count exceeds 16-bit DMA height cap"
 #endif
 
 #define HW_BYTES            ((uint32_t)HW_BYTES_RAW)
@@ -48,24 +51,26 @@ GTX_KERNEL_BODY(
             uint32_t dst_off   = batch * DST_BATCH_BYTES;
 
             // a[batch] → dst[batch][:A_CH]
+            // length=HW_BYTES (per-channel plane), height=A_CH (channel count).
+            // Total transferred = length * height = A_BATCH_BYTES.
             __copy_mem(
                 GTX_MAIN_ADDR(BASE_DDR_A) + src_a_off,
                 GTX_MAIN_ADDR(BASE_DDR_RESULT) + dst_off,
-                A_BATCH_BYTES,
-                (uint16_t)A_BATCH_BYTES,
-                1,
-                (uint16_t)A_BATCH_BYTES,
-                (uint16_t)(A_BATCH_BYTES >> 16));
+                HW_BYTES,
+                (uint16_t)HW_BYTES,
+                (uint16_t)A_CH,
+                (uint16_t)HW_BYTES,
+                0);
 
             // b[batch] → dst[batch][A_CH:A_CH+B_CH]
             __copy_mem(
                 GTX_MAIN_ADDR(BASE_DDR_B) + src_b_off,
                 GTX_MAIN_ADDR(BASE_DDR_RESULT) + dst_off + A_BATCH_BYTES,
-                B_BATCH_BYTES,
-                (uint16_t)B_BATCH_BYTES,
-                1,
-                (uint16_t)B_BATCH_BYTES,
-                (uint16_t)(B_BATCH_BYTES >> 16));
+                HW_BYTES,
+                (uint16_t)HW_BYTES,
+                (uint16_t)B_CH,
+                (uint16_t)HW_BYTES,
+                0);
         }
     },
     /* THREAD_BODY */ { /* shared-only */ }

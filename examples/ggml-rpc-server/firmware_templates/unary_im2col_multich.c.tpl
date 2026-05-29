@@ -43,6 +43,13 @@
 #define PATCH_BYTES         (IC * PATCH_KH_BYTES)         // IC*K_H*K_W*2
 #define OUTPUT_BYTES        (NUM_PATCHES * PATCH_BYTES)
 
+#if PATCH_BYTES > 65535
+#error "im2col_multich PATCH_BYTES exceeds 16-bit DMA length cap"
+#endif
+#if NUM_PATCHES > 65535
+#error "im2col_multich NUM_PATCHES exceeds 16-bit DMA height cap"
+#endif
+
 #define BASE_DDR_INPUT      0x2000000
 #define BASE_DDR_RESULT     0xf000000
 
@@ -74,10 +81,13 @@ int main(void) {
 
                 __credit_chk(ACTIVE_TID_MASK);
 
+                // length=PATCH_BYTES (per-patch row), height=NUM_PATCHES.
+                // OUTPUT_BYTES > 65535 in YOLO shapes, so we split the store
+                // along patches instead of one big contiguous transfer.
                 __store_cr(
                     L2_RESULT, GTX_MAIN_ADDR(BASE_DDR_RESULT),
-                    OUTPUT_BYTES, (uint16_t) OUTPUT_BYTES,
-                    1, OUTPUT_BYTES,
+                    PATCH_BYTES, (uint16_t) PATCH_BYTES,
+                    (uint16_t) NUM_PATCHES, PATCH_BYTES,
                     1, ACTIVE_TID_MASK
                 );
             __end_shared();

@@ -615,13 +615,13 @@ class RpcSession:
         return True
 
     def _try_concat_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
-        """CONCAT axis=0 (innermost dim) with equal src col counts. Other
-        axes / unequal cols go to NumPy fallback."""
-        if node.type != ddr.GGML_TYPE_F16:
+        """CONCAT: axis=0 (innermost) and axis=2 (channel, ggml convention)
+        are supported. Width/height direction (axis=1) and 4D batched concat
+        fall through to NumPy.
+        """
+        if not self._is_castable_fp(node.type):
             return False
         axis = int(node.op_params[0])
-        if axis != 0:
-            return False
         src0_id = node.src[0]
         src1_id = node.src[1]
         if src0_id == 0 or src1_id == 0:
@@ -630,37 +630,49 @@ class RpcSession:
         s1 = by_id.get(src1_id)
         if s0 is None or s1 is None:
             return False
-        if s0.type != ddr.GGML_TYPE_F16 or s1.type != ddr.GGML_TYPE_F16:
-            return False
-        if s0.ne[2] != 1 or s0.ne[3] != 1 or s1.ne[2] != 1 or s1.ne[3] != 1:
-            return False
-        # Kernel assumes equal SRC_COLS for both sides.
-        if s0.ne[0] != s1.ne[0]:
-            return False
-        if s0.ne[1] != s1.ne[1]:
-            return False
-        cols = s0.ne[0]
-        rows = s0.ne[1]
-        if cols <= 0 or rows <= 0:
+        if not self._is_castable_fp(s0.type) or not self._is_castable_fp(s1.type):
             return False
 
-        b0, o0 = dev.buffer_for_data_addr(s0.data)
-        b1, o1 = dev.buffer_for_data_addr(s1.data)
-        n0 = ddr.tensor_nbytes(s0)
-        n1 = ddr.tensor_nbytes(s1)
-        src0_bytes = bytes(b0.data[o0:o0 + n0])
-        src1_bytes = bytes(b1.data[o1:o1 + n1])
+        s0_bytes, _ = self._read_src_as_f16(s0, dev)
+        s1_bytes, _ = self._read_src_as_f16(s1, dev)
+        if s0_bytes is None or s1_bytes is None:
+            return False
+
+        cast_tag = "F32cast" if node.type == ddr.GGML_TYPE_F32 else "F16"
         try:
-            log.info("[%s] node 0x%x CONCAT pyspike route: 2x(%d,%d) axis=0",
-                     self.addr, node.id, rows, cols)
-            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["concat_fp16"](
-                src0_bytes, src1_bytes, cols, cols, rows)
+            if axis == 0:
+                if s0.ne[2] != 1 or s0.ne[3] != 1 or s1.ne[2] != 1 or s1.ne[3] != 1:
+                    return False
+                if s0.ne[0] != s1.ne[0] or s0.ne[1] != s1.ne[1]:
+                    return False
+                cols, rows = s0.ne[0], s0.ne[1]
+                if cols <= 0 or rows <= 0:
+                    return False
+                log.info("[%s] node 0x%x CONCAT pyspike route: 2x(%d,%d) axis=0 dst=%s",
+                         self.addr, node.id, rows, cols, cast_tag)
+                out_bytes = psr.SUPPORTED_PYSPIKE_OPS["concat_fp16"](
+                    s0_bytes, s1_bytes, cols, cols, rows)
+            elif axis == 2:
+                # Channel-direction concat — ggml ne=(w, h, ch, batch).
+                if s0.ne[3] != 1 or s1.ne[3] != 1:
+                    return False
+                if s0.ne[0] != s1.ne[0] or s0.ne[1] != s1.ne[1]:
+                    return False
+                w, h = s0.ne[0], s0.ne[1]
+                a_ch, b_ch = s0.ne[2], s1.ne[2]
+                if w <= 0 or h <= 0 or a_ch <= 0 or b_ch <= 0:
+                    return False
+                log.info("[%s] node 0x%x CONCAT pyspike route: (%d,%d) + (%d,%d) axis=2 ch=%d+%d dst=%s",
+                         self.addr, node.id, h, w, h, w, a_ch, b_ch, cast_tag)
+                out_bytes = psr.SUPPORTED_PYSPIKE_OPS["concat_channel_fp16"](
+                    s0_bytes, s1_bytes, a_ch, b_ch, h, w, 1)
+            else:
+                return False
         except Exception as e:
             log.warning("[%s] concat pyspike failed (%s) → NumPy fallback",
                         self.addr, e)
             return False
-        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
-        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        self._write_dst_from_f16(node, dev, out_bytes)
         return True
 
     def _try_pool_2d_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
@@ -757,14 +769,14 @@ class RpcSession:
         return True
 
     def _try_im2col_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
-        """IM2COL 2D: vendor kernel supports single-channel inputs with equal
-        strides, zero padding, dilation=1. Anything richer goes to NumPy.
+        """IM2COL 2D: vendor kernel + multich generalisation. Supports equal
+        strides, zero padding, dilation=1, single batch. IC≥1 → multich runner,
+        IC=1 → original single-channel runner.
         ggml IM2COL op_params: [s0, s1, p0, p1, d0, d1, is_2D].
         src[0] = kernel (shape only), src[1] = input.
         """
-        if node.type != ddr.GGML_TYPE_F16:
+        if not self._is_castable_fp(node.type):
             return False
-        # ggml IM2COL is_2D flag
         if int(node.op_params[6]) != 1:
             return False
         s0 = int(node.op_params[0])
@@ -787,32 +799,41 @@ class RpcSession:
         input_t = by_id.get(input_id)
         if kernel_t is None or input_t is None:
             return False
-        if input_t.type != ddr.GGML_TYPE_F16:
+        if not self._is_castable_fp(input_t.type):
             return False
-        # Vendor kernel: single channel only (kernel ne[2]=1).
-        if kernel_t.ne[2] != 1 or kernel_t.ne[3] != 1:
+        # Single batch only — ggml IM2COL puts IC at ne[2], batch at ne[3].
+        if input_t.ne[3] != 1 or kernel_t.ne[3] != 1:
             return False
-        if input_t.ne[2] != 1 or input_t.ne[3] != 1:
+        # Kernel ne layout: (k_w, k_h, ic, oc). Input ne: (w, h, ic, batch).
+        ic = input_t.ne[2]
+        if ic <= 0 or kernel_t.ne[2] != ic:
             return False
         in_w, in_h = input_t.ne[0], input_t.ne[1]
         k_w, k_h = kernel_t.ne[0], kernel_t.ne[1]
         if in_w <= 0 or in_h <= 0 or k_w <= 0 or k_h <= 0:
             return False
 
-        ib, io = dev.buffer_for_data_addr(input_t.data)
-        n_in = ddr.tensor_nbytes(input_t)
-        input_bytes = bytes(ib.data[io:io + n_in])
+        input_bytes, _ = self._read_src_as_f16(input_t, dev)
+        if input_bytes is None:
+            return False
         try:
-            log.info("[%s] node 0x%x IM2COL pyspike route: in=(%d,%d) k=(%d,%d) s=%d",
-                     self.addr, node.id, in_h, in_w, k_h, k_w, s0)
-            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["im2col_fp16"](
-                input_bytes, in_h, in_w, k_h, k_w, s0)
+            if ic == 1:
+                log.info("[%s] node 0x%x IM2COL pyspike route: in=(%d,%d) k=(%d,%d) s=%d ic=1 dst=%s",
+                         self.addr, node.id, in_h, in_w, k_h, k_w, s0,
+                         "F32cast" if node.type == ddr.GGML_TYPE_F32 else "F16")
+                out_bytes = psr.SUPPORTED_PYSPIKE_OPS["im2col_fp16"](
+                    input_bytes, in_h, in_w, k_h, k_w, s0)
+            else:
+                log.info("[%s] node 0x%x IM2COL pyspike route: in=(%d,%d) k=(%d,%d) s=%d ic=%d dst=%s",
+                         self.addr, node.id, in_h, in_w, k_h, k_w, s0, ic,
+                         "F32cast" if node.type == ddr.GGML_TYPE_F32 else "F16")
+                out_bytes = psr.SUPPORTED_PYSPIKE_OPS["im2col_multich_fp16"](
+                    input_bytes, ic, in_h, in_w, k_h, k_w, s0)
         except Exception as e:
             log.warning("[%s] im2col pyspike failed (%s) → NumPy fallback",
                         self.addr, e)
             return False
-        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
-        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        self._write_dst_from_f16(node, dev, out_bytes)
         return True
 
     def _try_upscale_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
