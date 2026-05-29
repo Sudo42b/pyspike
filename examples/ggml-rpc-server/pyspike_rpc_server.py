@@ -461,6 +461,25 @@ class RpcSession:
             return
         raise ValueError(f"unsupported dst ttype {node.type}")
 
+    @staticmethod
+    def _broadcast_src_to(s0_t, s1_t, s1_bytes_f16):
+        """Expand s1 (F16 bytes) to s0's shape via numpy broadcast. Returns
+        the expanded bytes or None if shapes aren't broadcast-compatible.
+        Covers ggml's common scalar/row/col/channel-bias patterns (any dim
+        where s1.ne[d] == 1 broadcasts up to s0.ne[d]).
+        """
+        import numpy as np
+        shape0 = (s0_t.ne[3], s0_t.ne[2], s0_t.ne[1], s0_t.ne[0])
+        shape1 = (s1_t.ne[3], s1_t.ne[2], s1_t.ne[1], s1_t.ne[0])
+        for a, b in zip(shape0, shape1):
+            if b != a and b != 1:
+                return None
+        expected = int(np.prod(shape1)) * 2
+        if len(s1_bytes_f16) != expected:
+            return None
+        arr = np.frombuffer(s1_bytes_f16, dtype=np.float16).reshape(shape1)
+        return np.ascontiguousarray(np.broadcast_to(arr, shape0)).tobytes()
+
     def _try_simple_unary_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
         """Dispatch SQR/SUM_ROWS/GROUP_NORM/NORM/SCALE through the shape-
         parameterised template runners. Each kernel takes the input tensor's
@@ -1096,10 +1115,12 @@ class RpcSession:
         if not self._is_castable_fp(node.type):
             return False
 
-        # Resolve source tensor bytes, casting F32 → F16 on the fly.
+        # Resolve source tensor bytes, casting F32 → F16 on the fly. For
+        # binary ops we additionally allow numpy-broadcastable src1 → host
+        # expand to src0 shape (scalar/row/col/bias patterns common in YOLO).
         needed = 2 if kind == "binary" else 1
+        src_tensors = []
         src_bytes = []
-        nbytes = 0
         for i in range(needed):
             src_id = node.src[i]
             if src_id == 0:
@@ -1108,13 +1129,22 @@ class RpcSession:
             if src_t is None or not self._is_castable_fp(src_t.type):
                 return False
             b, n = self._read_src_as_f16(src_t, dev)
-            if b is None or n == 0 or n % psr.ROW_BYTES != 0:
+            if b is None or n == 0:
                 return False
-            if i == 0:
-                nbytes = n
-            elif n != nbytes:
-                return False  # binary inputs must match
+            src_tensors.append(src_t)
             src_bytes.append(b)
+
+        if kind == "binary" and len(src_bytes[0]) != len(src_bytes[1]):
+            expanded = self._broadcast_src_to(
+                src_tensors[0], src_tensors[1], src_bytes[1])
+            if expanded is None:
+                return False
+            src_bytes[1] = expanded
+        nbytes = len(src_bytes[0])
+        if nbytes % psr.ROW_BYTES != 0:
+            return False
+        if kind == "binary" and len(src_bytes[1]) != nbytes:
+            return False
 
         kernel_name, runner = runner_entry
         try:
