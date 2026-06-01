@@ -44,18 +44,22 @@ int main(void) {
             __start_shared();
                 uint32_t nest_off = (uint32_t)nest_id * ROWS_PER_NEST * ROW_BYTES;
 
+                // SMM_ISA v2.0.0d (fp32): ROWS_PER_NEST*ROW_BYTES = 69632 B
+                // overflows the u16 DMA `length` field (would truncate to 4096),
+                // so transfer as a 2D block — length=ROW_BYTES (≤u16) per row,
+                // height=ROWS_PER_NEST, contiguous strides — not one flat run.
                 __load_cr(GTX_MAIN_ADDR(BASE_DDR_A) + nest_off, L2_A,
-                    (uint32_t)(ROWS_PER_NEST * ROW_BYTES),
-                    (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
-                    1, (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
+                    ROW_BYTES,
+                    (uint16_t)ROW_BYTES,
+                    (uint16_t)ROWS_PER_NEST, ROW_BYTES,
                     1, ACTIVE_SPU_MASK, 0xBEEF);
 
                 __credit_chk(ACTIVE_SPU_MASK);
 
                 __store_cr(L2_RESULT, GTX_MAIN_ADDR(BASE_DDR_RESULT) + nest_off,
-                    (uint32_t)(ROWS_PER_NEST * ROW_BYTES),
-                    (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
-                    1, (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
+                    ROW_BYTES,
+                    (uint16_t)ROW_BYTES,
+                    (uint16_t)ROWS_PER_NEST, ROW_BYTES,
                     1, ACTIVE_SPU_MASK);
             __end_shared();
 
