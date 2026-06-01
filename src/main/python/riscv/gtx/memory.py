@@ -15,6 +15,7 @@ from .config_params import (
     SPU_NUM,
     DEVICE,
     MX_IO_DTYPE,
+    MX_EXT_BYTES,
 )
 from .context.exec_st import CXT
 
@@ -23,16 +24,19 @@ from .context.exec_st import CXT
 # disagree on the convention, so the mode is env-selectable:
 #   'byte' (default): full byte reversal (vendor "rightmost byte -> mem[0]"; the
 #                     test/ corpus, big-endian hex).
-#   'elem'          : reverse the fp16 element order only, keeping each element's
-#                     two bytes (the GTX_ISS / ggml_ops_c corpus — little-endian
-#                     fp16, no per-element byteswap; proven by ARANGE/abs goldens).
+#   'elem'          : reverse the element order only, keeping each element's
+#                     bytes intact (the GTX_ISS / ggml_ops_c corpus — little-endian,
+#                     no per-element byteswap; proven by ARANGE/abs goldens). The
+#                     lane width is MX_EXT_BYTES (fp32 ⇒ 8 lanes / 32-byte bus
+#                     word, fp16 ⇒ 16), so it tracks the unified hierarchy dtype.
 _DDR_REVERSE_MODE = os.environ.get("GTX_DDR_REVERSE_MODE", "byte").lower()
 
 
 def _reverse_bus_word(chunk: bytes) -> bytes:
     """Reverse one (<=32-byte) bus word per GTX_DDR_REVERSE_MODE (see above)."""
-    if _DDR_REVERSE_MODE == "elem" and len(chunk) % 2 == 0:
-        return b"".join(chunk[i:i + 2] for i in range(len(chunk) - 2, -2, -2))
+    if _DDR_REVERSE_MODE == "elem" and len(chunk) % MX_EXT_BYTES == 0:
+        e = MX_EXT_BYTES
+        return b"".join(chunk[i:i + e] for i in range(len(chunk) - e, -e, -e))
     return chunk[::-1]
 
 """GTX memory hierarchy.

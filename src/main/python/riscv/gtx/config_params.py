@@ -22,6 +22,14 @@ _GSPR_RESET_DEFAULTS = {
 # NumPy backend is CPU-only; DEVICE kept as a sentinel for call-site compat.
 DEVICE: str = "cpu"
 
+# GTX ISA spec revision this backend targets (SMM_ISA_v2.0.0d.xlsx). 2.0.0d is
+# the FP32-native revision: matmul renamed mm/mmt/mmc/mmct (was mm.o/mm.v/...),
+# sum/dot moved from the matrix unit to the vector unit (sum.v/dot.vv/sum.i/
+# dot.ii), and the conversion family re-encoded one op per (funct7, funct3) slot
+# (scvt.qs/hq/is/bi/sn/bs/hs/hf/si). Bump this whenever the decode tables track a
+# new SMM_ISA spreadsheet revision.
+GTX_ISA_VERSION: str = "2.0.0d"
+
 
 # NEST x SPU topology
 NEST_NUM: int = 4
@@ -54,11 +62,12 @@ MX_IO_DTYPE: type = (
 )
 MX_IO_BYTES: int = np.finfo(MX_IO_DTYPE).bits // 8
 
-# External numeric width in DDR/L2 (the interchange / golden format — vendor
-# FP16). The T-loop L2↔L1 DMA converts between this and MX_IO_DTYPE so on-chip
-# (L1/L0) data is the wider compute dtype while DDR I/O stays vendor-exact.
-# When MX_EXT_DTYPE == MX_IO_DTYPE the DMA degrades to a raw byte copy.
-MX_EXT_DTYPE: type = np.float16
+# External numeric width in DDR/L2. SMM_ISA v2.0.0d unifies the whole hierarchy
+# to fp32 — DDR, L2, L1, L0 all carry MX_IO_DTYPE, so MX_EXT tracks MX_IO and the
+# T-loop L2↔L1 DMA is a raw byte copy (MX_EXT_DTYPE == MX_IO_DTYPE ⇒ no convert).
+# (Flipping MX_IO_DTYPE to float16 for vendor-parity carries DDR/L2 along, so the
+# two sides always match and the DMA never needs a width conversion.)
+MX_EXT_DTYPE: type = MX_IO_DTYPE
 MX_EXT_BYTES: int = np.finfo(MX_EXT_DTYPE).bits // 8
 
 # DDR (D-02: capped by DDR_SIZE env var; default below)

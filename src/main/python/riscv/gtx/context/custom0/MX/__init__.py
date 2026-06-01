@@ -3,16 +3,36 @@ from ....config_params import (
     DDR_BASE, L0_SIZE_BYTES, NEST_NUM, SPU_NUM, MX_IO_DTYPE, MX_IO_BYTES,
 )
 
+# Byte width per element for conversion source/dest decode. 'bf16' is carried as
+# a raw uint16 (truncated FP32); 'fp4' packs two elements per byte (handled
+# specially in type_cvt._format, so its nominal width is 1 byte per nibble pair).
 _BYTES_PER_ELEM = {'fp16': 2, 'fp32': 4, 'fp64': 8,
-                   'fp8': 1, 'int8': 1, 'int32': 4, 'io': MX_IO_BYTES}
+                   'fp8': 1, 'int8': 1, 'int32': 4, 'bf16': 2, 'fp4': 1,
+                   'io': MX_IO_BYTES}
 
 _CVT_DTYPE_IN = {'fp16': np.float16, 'fp32': np.float32, 'fp64': np.float64,
                  'fp8': np.uint8, 'int8': np.int8, 'int32': np.int32,
+                 'bf16': np.uint16, 'fp4': np.uint8,
                  'io': MX_IO_DTYPE}
 
 # =============================================================================
 # FP16 bit-pattern helpers + L0 block view + warp routing
 # =============================================================================
+def _fp32_low32(packed: int) -> np.ndarray:
+    """Decode bits[31:0] of an integer as an FP32 scalar (LE bit pattern).
+
+    Must use uint32, not int32: bit patterns >= 0x80000000 (negative FP32, e.g. a
+    -inf max-seed) overflow int32's [-2147483648, 2147483647] range and raise at tensor
+    construction (crashed SOFT_MAX/ESUM before this fix).
+    """
+    u32 = np.array([packed & 0xFFFFFFFF], dtype=np.uint32)
+    return u32.view(np.float32)[0]
+
+def _fp32_high32(packed: int) -> np.ndarray:
+    """Decode bits[63:32] of an integer as an FP32 scalar (LE bit pattern)."""
+    u32 = np.array([(packed >> 32) & 0xFFFFFFFF], dtype=np.uint32)
+    return u32.view(np.float32)[0]
+
 def _fp16_low16(packed: int) -> np.ndarray:
     """Decode bits[15:0] of an integer as an FP16 scalar (LE bit pattern).
 

@@ -28,7 +28,7 @@ from ... import _resolve_nest_spu, operand3
 # Shared MX I/O-width helpers (FP32 default / FP16 toggle) — the single
 # definitions live in the package __init__; numeric VV/II ops route through them.
 from . import (
-    _io_low, _io_high,
+    _io_low, _io_high, _fp32_low32,
     _l1_view_addr_io as _l1_view_addr,
     _l0_block_view_io as _l0_block_view,
     _l0_block_view_uint, _IO_UINT, _IO_MASK,
@@ -305,21 +305,6 @@ def _arith_ii(npu, proc, inst, sub: Arith) -> int:
     return 0
 
 
-# ----- FMADD (0x19) ----------------------------------------------------------
-def _fmadd_vvv(npu, proc, inst) -> int:
-    """L1 A*B + C → R, FP32 internal (vendor GTX_VEC_FMADD, gtx_npu_vec.cc:96
-    ``rd16(addr_a)*rd16(addr_b)+rd16(addr_c)``). The addend is the C bank
-    (SPM_ADDRC), NOT the R bank — __set_spm_addr's 2nd arg is ADDR_C."""
-    nest, spu, _rs1, _rs2, vsz = _prep(npu, proc, inst)
-    addr_a, addr_b, addr_r = _l1_addrs(npu, nest, spu)
-    addr_c = npu.lspr[nest][spu].get(LSPR['SPM_ADDRC'].address, 0)
-    va = _as_fp32(_l1_view_addr(npu, nest, spu, addr_a, vsz))
-    vb = _as_fp32(_l1_view_addr(npu, nest, spu, addr_b, vsz))
-    vc = _as_fp32(_l1_view_addr(npu, nest, spu, addr_c, vsz))
-    _l1_view_addr(npu, nest, spu, addr_r, vsz)[...] = (va * vb + vc).astype(MX_IO_DTYPE)
-    return 0
-
-
 def _fmadd_iii(npu, proc, inst) -> int:
     """L0 a*b + c on SVR regs. a=rs1[4:0], b=rs2[4:0], c=rs2[9:5], r=OPERAND3."""
     nest, spu, rs1, rs2, _vsz = _prep(npu, proc, inst)
@@ -412,8 +397,83 @@ def div_vv(npu, proc, inst, cxt) -> int:
 
 @inst_register.custom0(name='fmadd.vvv', funct7=0b0011001, funct3=0b000)
 def fmadd_vvv(npu, proc, inst, cxt) -> int:
-    return _fmadd_vvv(npu, proc, inst)
+    """L1 A*B + C → R, FP32 internal (vendor GTX_VEC_FMADD, gtx_npu_vec.cc:96
+    ``rd16(addr_a)*rd16(addr_b)+rd16(addr_c)``). The addend is the C bank
+    (SPM_ADDRC), NOT the R bank — __set_spm_addr's 2nd arg is ADDR_C."""
+    nest, spu, _rs1, _rs2, vsz = _prep(npu, proc, inst)
+    addr_a, addr_b, addr_r = _l1_addrs(npu, nest, spu)
+    addr_c = npu.lspr[nest][spu].get(LSPR['SPM_ADDRC'].address, 0)
+    va = _as_fp32(_l1_view_addr(npu, nest, spu, addr_a, vsz))
+    vb = _as_fp32(_l1_view_addr(npu, nest, spu, addr_b, vsz))
+    vc = _as_fp32(_l1_view_addr(npu, nest, spu, addr_c, vsz))
+    _l1_view_addr(npu, nest, spu, addr_r, vsz)[...] = (va * vb + vc).astype(MX_IO_DTYPE)
+    return 0
 
+# ----- Vector reductions (funct7=0x1A) ---------------------------------------
+# ISA v2.0.0d moved sum/dot off the matrix unit (the old mm.o/mm.v reduction
+# path) onto the vector unit. result[31:0] = reduce(A[, B]) + accumulated_data,
+# seeded by OPERAND2[31:0] (FP32) and written to the SVR slot staged in OPERAND3
+# (same result-SVR convention as scalar max.vs/min.vs). FP32 internal accumulate.
+def _reduce_write(npu, nest, spu, addr_r, value: np.ndarray) -> None:
+    """Write a single reduction scalar to the OPERAND3-staged SVR slot, element
+    0, rest of the 32-byte block zeroed (mirrors scalar.max_vs)."""
+    dst = _l0_block_view(npu, nest, spu, operand3(npu, addr_r) & 0x1F)
+    dst.fill(0)
+    dst[0] = value.astype(MX_IO_DTYPE)
+
+
+@inst_register.custom0(name='sum.v', funct7=0b0011010, funct3=0b000)
+def sum_v(npu, proc, inst, cxt) -> int:
+    """L1 sum(A) + accumulated_data -> result[31:0] at the OPERAND3 SVR slot."""
+    nest, spu, _rs1, rs2, vsz = _prep(npu, proc, inst)
+    addr_a, _addr_b, addr_r = _l1_addrs(npu, nest, spu)
+    va = _as_fp32(_l1_view_addr(npu, nest, spu, addr_a, vsz)).reshape(-1)
+    seed = np.float32(_fp32_low32(rs2))
+    _reduce_write(npu, nest, spu, addr_r, va.sum(dtype=np.float32) + seed)
+    return 0
+
+
+@inst_register.custom0(name='dot.vv', funct7=0b0011010, funct3=0b001)
+def dot_vv(npu, proc, inst, cxt) -> int:
+    """L1 dot(A, B) + accumulated_data -> result[31:0] at the OPERAND3 SVR slot.
+    B from SPM_ADDRB."""
+    nest, spu, _rs1, rs2, vsz = _prep(npu, proc, inst)
+    addr_a, addr_b, addr_r = _l1_addrs(npu, nest, spu)
+    va = _as_fp32(_l1_view_addr(npu, nest, spu, addr_a, vsz)).reshape(-1)
+    vb = _as_fp32(_l1_view_addr(npu, nest, spu, addr_b, vsz)).reshape(-1)
+    seed = np.float32(_fp32_low32(rs2))
+    _reduce_write(npu, nest, spu, addr_r,
+                  np.float32(np.dot(va, vb)) + seed)
+    return 0
+
+
+@inst_register.custom0(name='sum.i', funct7=0b0011010, funct3=0b100)
+def sum_i(npu, proc, inst, cxt) -> int:
+    """L0 sum(SVR_A) + SVR_ACC[0] -> result[31:0] at the OPERAND3 SVR slot.
+    A=rs1[4:0], ACC=rs2[9:5]."""
+    nest, spu, rs1, rs2, _vsz = _prep(npu, proc, inst)
+    va = _as_fp32(_l0_block_view(npu, nest, spu, rs1 & 0x1F)).reshape(-1)
+    acc = _as_fp32(_l0_block_view(npu, nest, spu, (rs2 >> 5) & 0x1F)).reshape(-1)
+    r_reg = operand3(npu, inst.rd) & 0x1F
+    dst = _l0_block_view(npu, nest, spu, r_reg)
+    dst.fill(0)
+    dst[0] = (va.sum(dtype=np.float32) + np.float32(acc[0])).astype(MX_IO_DTYPE)
+    return 0
+
+
+@inst_register.custom0(name='dot.ii', funct7=0b0011010, funct3=0b101)
+def dot_ii(npu, proc, inst, cxt) -> int:
+    """L0 dot(SVR_A, SVR_B) + SVR_ACC[0] -> result[31:0] at the OPERAND3 SVR
+    slot. A=rs1[4:0], B=rs2[4:0], ACC=rs2[9:5]."""
+    nest, spu, rs1, rs2, _vsz = _prep(npu, proc, inst)
+    va = _as_fp32(_l0_block_view(npu, nest, spu, rs1 & 0x1F)).reshape(-1)
+    vb = _as_fp32(_l0_block_view(npu, nest, spu, rs2 & 0x1F)).reshape(-1)
+    acc = _as_fp32(_l0_block_view(npu, nest, spu, (rs2 >> 5) & 0x1F)).reshape(-1)
+    r_reg = operand3(npu, inst.rd) & 0x1F
+    dst = _l0_block_view(npu, nest, spu, r_reg)
+    dst.fill(0)
+    dst[0] = (np.float32(np.dot(va, vb)) + np.float32(acc[0])).astype(MX_IO_DTYPE)
+    return 0
 
 @inst_register.custom0(name='sqrt.v', funct7=0b0011100, funct3=0b000)
 def sqrt_v(npu, proc, inst, cxt) -> int:

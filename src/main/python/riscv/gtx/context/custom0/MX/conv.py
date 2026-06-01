@@ -36,8 +36,8 @@ from ...inst_handler import inst_register
 from ....csr import GSPR, LSPR  # noqa: F401  (LSPR keys read via npu.lspr below)
 from ... import _resolve_nest_spu
 
-
-def _im2col(npu, proc, inst, *, is_depthwise: bool) -> int:
+@inst_register.custom0(name='im2col.n', funct7=0b0001000, funct3=0)
+def _im2col(npu, proc, inst) -> int:
     """Direct port of ``gtx_npu_custom0.cc:706-805`` firmware IM2COL path."""
     # Pitfall F: rs1 index 0 ⇒ firmware WRSPR/RDSPR alias, not im2col ⇒ NOP.
     if inst.rs1 == 0:
@@ -85,8 +85,8 @@ def _im2col(npu, proc, inst, *, is_depthwise: bool) -> int:
     l1 = npu.mem.l1_byte(nest, spu)            # raw byte view (endian-agnostic)
     l1_len = l1.shape[0]
 
-    addr_a = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0))  # dst
-    addr_r = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0))  # src
+    addr_a = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0))  # src
+    addr_r = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0))  # dst
 
     # Gather-index build, vectorised. Each source halfword offset is
     #   src = (row_A*col_A*i) + (col_A*j + k) + (dil*l*col_A + dil*m)
@@ -102,17 +102,11 @@ def _im2col(npu, proc, inst, *, is_depthwise: bool) -> int:
     chan = row_A * col_A * ii                                   # (nch,)
     spat_j = col_A * jj                                         # (out_h,)
     kern = dil * ll.view(ksz, 1) * col_A + dil * mm.view(1, ksz)  # (ksz, ksz)
-    if not is_depthwise:
-        # IM2COL_N order (j, k, i, l, m) → [out_h, out_w, nch, ksz, ksz].
-        idx = (chan.view(1, 1, nch, 1, 1)
-               + (spat_j.view(out_h, 1, 1, 1, 1) + kk.view(1, out_w, 1, 1, 1))
-               + kern.view(1, 1, 1, ksz, ksz))
-    else:
-        # IM2COL_D order (i, j, k, l, m) → [nch, out_h, out_w, ksz, ksz].
-        idx = (chan.view(nch, 1, 1, 1, 1)
-               + (spat_j.view(1, out_h, 1, 1, 1) + kk.view(1, 1, out_w, 1, 1))
-               + kern.view(1, 1, 1, ksz, ksz))
-
+    # IM2COL_N order (j, k, i, l, m) → [out_h, out_w, nch, ksz, ksz].
+    idx = (chan.view(1, 1, nch, 1, 1)
+            + (spat_j.view(out_h, 1, 1, 1, 1) + kk.view(1, out_w, 1, 1, 1))
+            + kern.view(1, 1, 1, ksz, ksz))
+    
     # src byte offset = addr_r + hw*2 ; dst byte offset = addr_a + t (t += 2).
     src_idx = idx.reshape(-1)
     if src_idx.size == 0:
@@ -132,13 +126,93 @@ def _im2col(npu, proc, inst, *, is_depthwise: bool) -> int:
     return 0
 
 
-@inst_register.custom0(name='im2col.n', funct7=0b0001000, funct3=0)
-def _im2col_n(npu, proc, inst, cxt) -> int:
-    """im2col for normal convolution."""
-    return _im2col(npu, proc, inst, is_depthwise=False)
-
-
 @inst_register.custom0(name='im2col.d', funct7=0b0001001, funct3=0)
-def _im2col_d(npu, proc, inst, cxt) -> int:
-    """im2col for depth-wise convolution."""
-    return _im2col(npu, proc, inst, is_depthwise=True)
+def _im2col(npu, proc, inst) -> int:
+    """Direct port of ``gtx_npu_custom0.cc:706-805`` firmware IM2COL path."""
+    # Pitfall F: rs1 index 0 ⇒ firmware WRSPR/RDSPR alias, not im2col ⇒ NOP.
+    if inst.rs1 == 0:
+        return 0
+
+    rs1_val = int(proc.state.XPR[inst.rs1])
+    rs2_val = int(proc.state.XPR[inst.rs2])
+
+    row_A = rs1_val & 0xFFFF
+    col_A = (rs1_val >> 16) & 0xFFFF
+    ksz = rs2_val & 0x1F
+    dil = (rs2_val >> 8) & 0x3
+    stride = (rs2_val >> 16) & 0xFFFF
+    nch = (rs2_val >> 32) & 0xFFFF
+
+    # Validate dilation (vendor: 0 → skip).
+    if dil == 0:
+        return 0
+
+    # Effective filter size with dilation (vendor switch).
+    if dil == 1:
+        filt_sz = ksz
+    elif dil == 2:
+        filt_sz = 5
+        if ksz != 3:
+            ksz = 3
+    elif dil == 3:
+        filt_sz = 7
+        if ksz != 3:
+            ksz = 3
+    else:
+        return 0  # dilation too big → skip
+
+    if stride == 0:
+        stride = 1
+    if nch == 0:
+        nch = 1
+
+    out_h = ((row_A - filt_sz) // stride + 1) if row_A >= filt_sz else 0
+    out_w = ((col_A - filt_sz) // stride + 1) if col_A >= filt_sz else 0
+    if out_h <= 0 or out_w <= 0:
+        return 0
+
+    nest, spu = _resolve_nest_spu(npu)
+    l1 = npu.mem.l1_byte(nest, spu)            # raw byte view (endian-agnostic)
+    l1_len = l1.shape[0]
+
+    addr_a = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0))  # src
+    addr_r = int(npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0))  # dst
+
+    # Gather-index build, vectorised. Each source halfword offset is
+    #   src = (row_A*col_A*i) + (col_A*j + k) + (dil*l*col_A + dil*m)
+    # emitted in the vendor's nested-loop order. Broadcasting over the loop
+    # axes and flattening row-major (last axis = m varies fastest) reproduces
+    # that order exactly — verified against the loop across stride/dilation/
+    # depthwise configs. j/k step by ``stride`` (out_h/out_w positions).
+    jj = np.arange(out_h, dtype=np.int64) * stride
+    kk = np.arange(out_w, dtype=np.int64) * stride
+    ii = np.arange(nch, dtype=np.int64)
+    ll = np.arange(ksz, dtype=np.int64)
+    mm = np.arange(ksz, dtype=np.int64)
+    chan = row_A * col_A * ii                                   # (nch,)
+    spat_j = col_A * jj                                         # (out_h,)
+    kern = dil * ll.view(ksz, 1) * col_A + dil * mm.view(1, ksz)  # (ksz, ksz)
+    
+    # IM2COL_D order (i, j, k, l, m) → [nch, out_h, out_w, ksz, ksz].
+    idx = (chan.view(nch, 1, 1, 1, 1)
+            + (spat_j.view(1, out_h, 1, 1, 1) + kk.view(1, 1, out_w, 1, 1))
+            + kern.view(1, 1, 1, ksz, ksz))
+
+    # src byte offset = addr_r + hw*2 ; dst byte offset = addr_a + t (t += 2).
+    src_idx = idx.reshape(-1)
+    if src_idx.size == 0:
+        return 0
+    src_lo = (addr_r + src_idx * 2) % l1_len
+    src_hi = (src_lo + 1) % l1_len
+
+    n = src_idx.size
+    dst_lo = (addr_a + np.arange(n, dtype=np.int64) * 2) % l1_len
+    dst_hi = (dst_lo + 1) % l1_len
+
+    # Snapshot source bytes first (dst may overlap src for in-place layouts).
+    lo_vals = l1[src_lo].copy()
+    hi_vals = l1[src_hi].copy()
+    l1[dst_lo] = lo_vals
+    l1[dst_hi] = hi_vals
+    return 0
+

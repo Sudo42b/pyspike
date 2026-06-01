@@ -8,92 +8,135 @@ from ....csr import GSPR, LSPR, NSPR
 from ... import _resolve_nest_spu
 from . import _BYTES_PER_ELEM, _CVT_DTYPE_IN, _io_low, _io_high
 
-# ----- format_cvt handlers --------------------------------------------------
-# scvt.* convert between the MX native float ('io' = MX_IO_DTYPE: FP32 default /
-# FP16 toggle) and an explicit format (FP8 / FP16 / INT8 / INT32). Within a
-# bidirectional slot the direction is GSPR_OPCODE & 1. scale[31:0]/offset[63:32]
-# in OPERAND2 (width config-gated via _io_low/_io_high). fcvt.* below stay the
-# unscaled FP16<->FP32 / FP16<->FP64 register conversions (NSU path).
+# ----- format_cvt handlers (SMM_ISA v2.0.0d, sheet "conversion") ------------
+# Each scvt.* is ONE-directional and owns a distinct (funct7, funct3) slot — the
+# 2.0.0d re-encoding dropped the old OPCODE&1 bidirectional packing. The MX
+# native float is ``'io'`` = MX_IO_DTYPE (FP32 default / FP16 toggle). The scaled
+# transform is ``out = src*scale + offset`` with scale[31:0]/offset[63:32] in
+# OPERAND2 (width config-gated via _io_low/_io_high).
+#
+#   scvt.qs  0x20/0  io   -> fp8     (down-cast, fp32->fp8 quant)
+#   scvt.hq  0x20/1  fp8  -> fp16    (up-cast)
+#   scvt.is  0x21/0  io   -> int8    (quant)
+#   scvt.bi  0x21/1  int8 -> bf16    (dequant to bf16)
+#   scvt.sn  0x22/1  int32-> io      (int32 -> fp32 native)
+#   scvt.bs  0x23/0  io   -> bf16    (down-cast)
+#   scvt.hs  0x23/1  io   -> fp16    (down-cast)
+#   scvt.hf  0x23/2  fp4  -> fp16    (up-cast)
+#   scvt.si  0x23/3  int8 -> io      (dequant)
+# fcvt.* (0x24/0x25) stay the unscaled FP16<->FP32 / FP16<->FP64 register
+# conversions on the NSU path.
 
 @inst_register.custom0(name='scvt.qs', funct7=0b0100000, funct3=0)
 def _scvt_qs(npu, proc, inst, cxt) -> int:
-    """native(MX_IO) <-> FP8 (default native->fp8; OPCODE&1 -> fp8->native)."""
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    if sub_op & 1:
-        return _format(npu, proc, inst, src_kind='fp8', dst_kind='io')
+    """fp32(native) -> fp8."""
     return _format(npu, proc, inst, src_kind='io', dst_kind='fp8')
 
 
-@inst_register.custom0(name='scvt.hs', funct7=0b0100000, funct3=1)
-def _scvt_hs(npu, proc, inst, cxt) -> int:
-    """native(MX_IO) <-> FP16 (default native->fp16; OPCODE&1 -> fp16->native)."""
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    if sub_op & 1:
-        return _format(npu, proc, inst, src_kind='fp16', dst_kind='io')
-    return _format(npu, proc, inst, src_kind='io', dst_kind='fp16')
+@inst_register.custom0(name='scvt.hq', funct7=0b0100000, funct3=1)
+def _scvt_hq(npu, proc, inst, cxt) -> int:
+    """fp8 -> fp16."""
+    return _format(npu, proc, inst, src_kind='fp8', dst_kind='fp16')
 
 
 @inst_register.custom0(name='scvt.is', funct7=0b0100001, funct3=0)
 def _scvt_is(npu, proc, inst, cxt) -> int:
-    """native(MX_IO) <-> INT8 (default native->int8; OPCODE&1 -> int8->native)."""
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    if sub_op & 1:
-        return _format(npu, proc, inst, src_kind='int8', dst_kind='io')
+    """fp32(native) -> int8."""
     return _format(npu, proc, inst, src_kind='io', dst_kind='int8')
 
 
-@inst_register.custom0(name='scvt.si', funct7=0b0100001, funct3=1)
-def _scvt_si(npu, proc, inst, cxt) -> int:
-    """INT8 -> native(MX_IO)."""
-    return _format(npu, proc, inst, src_kind='int8', dst_kind='io')
+@inst_register.custom0(name='scvt.bi', funct7=0b0100001, funct3=1)
+def _scvt_bi(npu, proc, inst, cxt) -> int:
+    """int8 -> bf16."""
+    return _format(npu, proc, inst, src_kind='int8', dst_kind='bf16')
 
 
 @inst_register.custom0(name='scvt.sn', funct7=0b0100010, funct3=1)
 def _scvt_sn(npu, proc, inst, cxt) -> int:
-    """INT32 -> native(MX_IO)."""
+    """int32 -> fp32(native)."""
     return _format(npu, proc, inst, src_kind='int32', dst_kind='io')
 
 
+@inst_register.custom0(name='scvt.bs', funct7=0b0100011, funct3=0)
+def _scvt_bs(npu, proc, inst, cxt) -> int:
+    """fp32(native) -> bf16."""
+    return _format(npu, proc, inst, src_kind='io', dst_kind='bf16')
+
+
+@inst_register.custom0(name='scvt.hs', funct7=0b0100011, funct3=1)
+def _scvt_hs(npu, proc, inst, cxt) -> int:
+    """fp32(native) -> fp16."""
+    return _format(npu, proc, inst, src_kind='io', dst_kind='fp16')
+
+
+@inst_register.custom0(name='scvt.hf', funct7=0b0100011, funct3=0b010)
+def _scvt_hf(npu, proc, inst, cxt) -> int:
+    """fp4 -> fp16."""
+    return _format(npu, proc, inst, src_kind='fp4', dst_kind='fp16')
+
+
+@inst_register.custom0(name='scvt.si', funct7=0b0100011, funct3=0b011)
+def _scvt_si(npu, proc, inst, cxt) -> int:
+    """int8 -> fp32(native)."""
+    return _format(npu, proc, inst, src_kind='int8', dst_kind='io')
+
+
+# fcvt.* are NSU **scalar register** conversions (exec=nsu, one-directional per
+# v2.0.0d): input data in rs1[63:0], result returned to rd[63:0] (the handler's
+# return value becomes rd). Unscaled. Packed SIMD: widening fits 2/1 elements in
+# the 64-bit lane; narrowing the same back. NOT L1 memory (that path is scvt.*).
 @inst_register.custom0(name='fcvt.sh', funct7=0b0100100, funct3=0)
 def _fcvt_sh(npu, proc, inst, cxt) -> int:
-    # fcvt.sh: unscaled FP16<->FP32 register conversion (direction by OPCODE&1).
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    if sub_op & 1:
-        return _format(npu, proc, inst,
-                                src_kind='fp16', dst_kind='fp32')
-    return _format(npu, proc, inst,
-                            src_kind='fp32', dst_kind='fp16')
+    """fp16 -> fp32: rs1[31:0] = 2x fp16 -> rd[63:0] = 2x fp32."""
+    return _fcvt_reg(proc, inst, src=np.float16, dst=np.float32, n=2)
+
 
 @inst_register.custom0(name='fcvt.hs', funct7=0b0100100, funct3=1)
 def _fcvt_hs(npu, proc, inst, cxt) -> int:
-    # fcvt.hs: unscaled FP32->FP16 register conversion.
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    return 0
+    """fp32 -> fp16: rs1[63:0] = 2x fp32 -> rd[31:0] = 2x fp16."""
+    return _fcvt_reg(proc, inst, src=np.float32, dst=np.float16, n=2)
+
 
 @inst_register.custom0(name='fcvt.dh', funct7=0b0100101, funct3=0)
 def _fcvt_dh(npu, proc, inst, cxt) -> int:
-    # fcvt.dh: FP16<->FP64 register conversion (direction by OPCODE&1).
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    if sub_op & 1:
-        return _format(npu, proc, inst,
-                                src_kind='fp16', dst_kind='fp64')
-    return _format(npu, proc, inst,
-                            src_kind='fp64', dst_kind='fp16')
+    """fp16 -> fp64: rs1[15:0] = 1x fp16 -> rd[63:0] = 1x fp64."""
+    return _fcvt_reg(proc, inst, src=np.float16, dst=np.float64, n=1)
 
 
 @inst_register.custom0(name='fcvt.hd', funct7=0b0100101, funct3=1)
 def _fcvt_hd(npu, proc, inst, cxt) -> int:
-    # fcvt.hd: FP64->FP16 register conversion.
-    sub_op = int(npu.gspr.get(GSPR['GSPR_GTX_OPCODE'].address, 0)) & 0xFF
-    return 0
+    """fp64 -> fp16: rs1[63:0] = 1x fp64 -> rd[15:0] = 1x fp16."""
+    return _fcvt_reg(proc, inst, src=np.float64, dst=np.float16, n=1)
+
+
+def _fcvt_reg(proc, inst, *, src, dst, n: int) -> int:
+    """NSU register float conversion: decode ``n`` ``src`` elements from the low
+    bits of rs1, convert (unscaled) to ``dst``, return the packed little-endian
+    bit pattern for rd."""
+    raw = int(proc.state.XPR[inst.rs1]) & 0xFFFFFFFFFFFFFFFF
+    sbits = np.dtype(src).itemsize * 8
+    words = {16: np.uint16, 32: np.uint32, 64: np.uint64}[sbits]
+    in_arr = np.array(
+        [(raw >> (sbits * i)) & ((1 << sbits) - 1) for i in range(n)],
+        dtype=words,
+    ).view(src)
+    ob = np.ascontiguousarray(in_arr.astype(dst)).view(np.uint8)
+    res = 0
+    for i, byte in enumerate(ob.tolist()):
+        res |= int(byte) << (8 * i)
+    return res
 
 
 def _format(npu, proc, inst, *, src_kind: str, dst_kind: str) -> int:
-    """Direct port of ``gtx_npu_act.cc:222-372`` (``exec_format_cvt``).
+    """Port of ``gtx_npu_act.cc:222-372`` (``exec_format_cvt``) for the v2.0.0d
+    one-directional **scvt** set (SPU vector, scaled).
 
-    ``'io'`` resolves to the MX native float (``MX_IO_DTYPE``) for both byte
-    width and dtype, so the native side of every scaled conversion tracks the
-    config toggle.
+    Per SMM_ISA v2.0.0d (summary sheet: scvt ``in=R, res=A``) the input comes
+    from the **R bank** (SPM_ADDRR) and the result is written to the **A bank**
+    (SPM_ADDRA). The input array (``src_kind``) is decoded to FP32, the scaled
+    transform ``out = a*scale + offset`` is applied (scale[31:0]/offset[63:32]
+    from OPERAND2), then encoded to ``dst_kind``. ``'io'`` resolves to the MX
+    native float (``MX_IO_DTYPE`` = FP32 default).
     """
     nest, spu = _resolve_nest_spu(npu)
 
@@ -103,44 +146,97 @@ def _format(npu, proc, inst, *, src_kind: str, dst_kind: str) -> int:
 
     op2 = int(npu.gspr.get(GSPR['GSPR_GTX_OPERAND2'].address, 0))
     # scale/offset widen with MX_IO_DTYPE: FP16 [15:0]/[31:16], FP32 [31:0]/[63:32].
-    scale = _io_low(op2)
-    offset = _io_high(op2)
+    scale = np.float32(_io_low(op2))
+    offset = np.float32(_io_high(op2))
 
-    addr_a = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
-    addr_r = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
+    # v2.0.0d: scvt reads the R bank, writes the A bank (in=R, res=A).
+    addr_in = npu.lspr[nest][spu].get(LSPR['SPM_ADDRR'].address, 0)
+    addr_out = npu.lspr[nest][spu].get(LSPR['SPM_ADDRA'].address, 0)
 
     l1 = npu.mem.l1_byte(nest, spu)
-    in_size = length * _BYTES_PER_ELEM[src_kind]
-    in_bytes = l1[addr_a:addr_a + in_size].copy().copy()
-    in_arr = in_bytes.view(_CVT_DTYPE_IN[src_kind])
 
-    # scaled native(io) <-> {fp8, fp16, int8, int32}
-    if src_kind == 'io' and dst_kind == 'fp8':
-        out_arr = cvt_io_fp8(in_arr, scale, offset)
-    elif src_kind == 'io' and dst_kind == 'fp16':
-        out_arr = cvt_io_fp16(in_arr, scale, offset)
-    elif src_kind == 'io' and dst_kind == 'int8':
-        out_arr = cvt_io_int8(in_arr, scale, offset)
-    elif dst_kind == 'io':                       # fp8/fp16/int8/int32 -> native
-        out_arr = cvt_to_io(in_arr, scale, offset)
-    # unscaled fcvt register conversions
-    elif src_kind == 'fp32' and dst_kind == 'fp16':
-        out_arr = cvt_sh(in_arr)
-    elif src_kind == 'fp16' and dst_kind == 'fp32':
-        out_arr = cvt_hs(in_arr)
-    elif src_kind == 'fp64' and dst_kind == 'fp16':
-        out_arr = cvt_dh(in_arr)
-    elif src_kind == 'fp16' and dst_kind == 'fp64':
-        out_arr = cvt_hd(in_arr)
+    if src_kind == 'fp4':
+        # 4-bit floats pack two elements per byte (low nibble first).
+        in_size = (length + 1) // 2
+        in_bytes = l1[addr_in:addr_in + in_size].copy()
+        nibbles = np.empty(in_bytes.size * 2, dtype=np.uint8)
+        nibbles[0::2] = in_bytes & 0x0F
+        nibbles[1::2] = (in_bytes >> 4) & 0x0F
+        in_f32 = _fp4_to_fp32(nibbles[:length])
     else:
-        return 0
+        in_size = length * _BYTES_PER_ELEM[src_kind]
+        in_bytes = l1[addr_in:addr_in + in_size].copy()
+        in_arr = in_bytes.view(_CVT_DTYPE_IN[src_kind])
+        if src_kind == 'fp8':
+            in_f32 = _FP8_TO_FP16[in_arr].astype(np.float32)
+        elif src_kind == 'bf16':
+            in_f32 = _bf16_to_fp32(in_arr)
+        else:
+            in_f32 = in_arr.astype(np.float32)
 
-    out_bytes = out_arr.copy().view(np.uint8)
-    l1[addr_r:addr_r + out_bytes.size] = out_bytes
+    out_f32 = in_f32 * scale + offset
+    out_arr = _encode_from_fp32(out_f32, dst_kind)
+
+    out_bytes = np.ascontiguousarray(out_arr).view(np.uint8)
+    l1[addr_out:addr_out + out_bytes.size] = out_bytes
     return 0
 
+
+def _encode_from_fp32(f32: np.ndarray, dst_kind: str) -> np.ndarray:
+    """Encode an FP32 array to ``dst_kind`` (the conversion output format)."""
+    if dst_kind == 'io':
+        return f32.astype(MX_IO_DTYPE)
+    if dst_kind == 'fp16':
+        return f32.astype(np.float16)
+    if dst_kind == 'fp32':
+        return f32.astype(np.float32)
+    if dst_kind == 'fp64':
+        return f32.astype(np.float64)
+    if dst_kind == 'bf16':
+        return _fp32_to_bf16(f32)
+    if dst_kind == 'int8':
+        return np.clip(np.round(f32), -128, 127).astype(np.int8)
+    if dst_kind == 'int32':
+        return np.clip(np.round(f32), -(2**31), 2**31 - 1).astype(np.int32)
+    if dst_kind == 'fp8':
+        raise NotImplementedError(
+            "fp8 e4m3 encode unsupported on NumPy backend (no native float8) — "
+            "add a manual bit encoder if a kernel needs it")
+    raise ValueError(f"unknown conversion dst_kind {dst_kind!r}")
+
+
 # =============================================================================
-# 1. LUT builders + module-level tables
+# 1. bf16 / fp4 codecs (NumPy has no native bf16 or fp4)
+# =============================================================================
+def _fp32_to_bf16(f32: np.ndarray) -> np.ndarray:
+    """FP32 -> bf16 raw uint16 (round-to-nearest-even truncation of the low 16
+    mantissa bits)."""
+    u32 = np.ascontiguousarray(f32.astype(np.float32)).view(np.uint32).astype(np.uint64)
+    rounding = ((u32 >> 16) & np.uint64(1)) + np.uint64(0x7FFF)
+    return ((u32 + rounding) >> np.uint64(16)).astype(np.uint16)
+
+
+def _bf16_to_fp32(u16: np.ndarray) -> np.ndarray:
+    """bf16 raw uint16 -> FP32 (zero-extend the mantissa into the low 16 bits)."""
+    u32 = u16.astype(np.uint32) << np.uint32(16)
+    return u32.view(np.float32) if u32.flags['C_CONTIGUOUS'] else \
+        np.ascontiguousarray(u32).view(np.float32)
+
+
+# fp4 e2m1 (OCP MXFP4) magnitudes for the 8 unsigned codes.
+_FP4_E2M1_MAG = np.array(
+    [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=np.float32)
+
+
+def _fp4_to_fp32(nibbles: np.ndarray) -> np.ndarray:
+    """fp4 e2m1 nibbles (uint8 0..15) -> FP32 (bit3 = sign)."""
+    sign = (nibbles >> 3) & 0x1
+    mag = _FP4_E2M1_MAG[nibbles & 0x7]
+    return np.where(sign == 1, -mag, mag).astype(np.float32)
+
+
+# =============================================================================
+# 2. fp8 <-> fp16 LUTs (e4m3) — fp8 decode used by scvt.hq
 # =============================================================================
 def fp8_to_fp16_lut() -> np.ndarray:
     vals: list[float] = []
@@ -213,66 +309,5 @@ def fp16_to_fp8_lut() -> np.ndarray:
     return out
 
 
-# =============================================================================
-# 2. Format-conversion kernels
-# =============================================================================
-def fp8_e4m3_to_fp16(t_e4m3: np.ndarray) -> np.ndarray:
-    return t_e4m3.astype(np.float16)
-
-
-def fp16_to_fp8_e4m3(t_fp16: np.ndarray) -> np.ndarray:
-    raise NotImplementedError(
-        "fp8 e4m3 encode unsupported on NumPy backend (no native float8) — "
-        "add a manual bit encoder if a kernel needs it")
-
-
-# ----- native(MX_IO_DTYPE) <-> explicit format, scaled (out = a*scale + offset) -
-def cvt_to_io(arr: np.ndarray, scale, offset) -> np.ndarray:
-    """{FP8, FP16, INT8, INT32} -> native MX_IO_DTYPE."""
-    a = arr.astype(np.float32)
-    s = np.asarray(scale, dtype=np.float32)
-    o = np.asarray(offset, dtype=np.float32)
-    return (a * s + o).astype(MX_IO_DTYPE)
-
-
-def cvt_io_fp8(arr: np.ndarray, scale, offset) -> np.ndarray:
-    """native -> FP8 (e4m3)."""
-    raise NotImplementedError(
-        "fp8 e4m3 encode unsupported on NumPy backend (no native float8)")
-
-
-def cvt_io_fp16(arr: np.ndarray, scale, offset) -> np.ndarray:
-    """native -> FP16."""
-    a = arr.astype(np.float32)
-    s = np.asarray(scale, dtype=np.float32)
-    o = np.asarray(offset, dtype=np.float32)
-    return (a * s + o).astype(np.float16)
-
-
-def cvt_io_int8(arr: np.ndarray, scale, offset) -> np.ndarray:
-    """native -> INT8 saturating in [-128, 127]."""
-    a = arr.astype(np.float32)
-    s = np.asarray(scale, dtype=np.float32)
-    o = np.asarray(offset, dtype=np.float32)
-    return np.clip(np.round(a * s + o), -128, 127).astype(np.int8)
-
-
-# ----- unscaled fcvt register conversions -----------------------------------
-def cvt_sh(arr_f32: np.ndarray) -> np.ndarray:
-    """FP32 -> FP16 (bit-pattern preserving)."""
-    return arr_f32.astype(np.float16)
-
-
-def cvt_hs(arr_f16: np.ndarray) -> np.ndarray:
-    """FP16 -> FP32 (bit-pattern preserving)."""
-    return arr_f16.astype(np.float32)
-
-
-def cvt_dh(arr_f64: np.ndarray) -> np.ndarray:
-    """FP64 -> FP16 (single rounding)."""
-    return arr_f64.astype(np.float16)
-
-
-def cvt_hd(arr_f16: np.ndarray) -> np.ndarray:
-    """FP16 -> FP64 (bit-exact widening)."""
-    return arr_f16.astype(np.float64)
+# Module-level fp8 decode LUT (indexed by the raw uint8 fp8 byte).
+_FP8_TO_FP16: np.ndarray = fp8_to_fp16_lut()
