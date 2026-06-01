@@ -39,15 +39,22 @@
 #define ROWS_REMAINDER      (ROWS_PER_NEST % SPU_NUM_PER_NEST)
 
 
-// FP16 constants for range reduction
-#define FP16_TWO_PI         0x40C90000  // 2*pi ≈ 6.2832
-#define FP16_INV_2PI        0x3E230000  // 1/(2*pi) ≈ 0.15915
+// Range reduction to [-pi/2, pi/2] (mirrors n1s16_sin): n = round(x/pi),
+// x_red = x - n*pi, then cos(x) = (-1)^n * cos(x_red). The 4-term Taylor is
+// only accurate near 0, so reducing to [-pi/2,pi/2] (not [-pi,pi]) is required.
+// Full FP32 precision (not fp16-widened) — a coarse pi propagates ~1e-3 through
+// the range-reduction x - n*pi, which alone exceeds tolerance near x = ±pi/2.
+#define FP16_PI             0x40490FDB  // pi   = 3.14159274
+#define FP16_INV_PI         0x3EA2F983  // 1/pi = 0.318309873
+#define FP16_HALF           0x3F000000  // 0.5
+#define FP16_TWO            0x40000000  // 2.0
 
-// FP16 Taylor coefficients for cosine (Horner form)
+// FP32 Taylor coefficients for cosine (Horner form, even powers)
 #define FP16_C0             0x3F800000  // 1.0
 #define FP16_C1             0xBF000000  // -0.5
-#define FP16_C2             0x3D2AA000  // 1/24 ≈ 0.04167
-#define FP16_C3             0xBAB68000  // -1/720 ≈ -0.001389
+#define FP16_C2             0x3D2AAAAB  // 1/24    = 0.0416666679
+#define FP16_C3             0xBAB60B61  // -1/720  = -0.00138888892
+#define FP16_C4             0x37D00D01  // 1/40320 = 2.48015876e-5 (5th term: z=pi/2 err 9e-4→2.5e-5)
 
 int main(void) {
 
@@ -99,36 +106,34 @@ int main(void) {
                         // (only first 8 are valid, rest are garbage but harmless)
                         __load_svr(BANK_A, 0);              // SVR[0] = x
 
-                        // Range reduction: n = round to nearest(x / (2*pi)), x_red = x - n * 2*pi
-                        __mul_is(0, FP16_INV_2PI, 1, 0);   // SVR[1] = x / (2*pi)
-                        __rne_i(1, 2);                      // SVR[2] = round to nearest(x/(2*pi))
-                        __mul_is(2, FP16_TWO_PI, 3, 0);    // SVR[3] = n * 2*pi
-                        __sub_ii(0, 3, 4);                  // SVR[4] = x_red
+                        // Range reduction to [-pi/2, pi/2]: n = round(x/pi), x_red = x - n*pi
+                        __mul_is(0, FP16_INV_PI, 1, 0);     // SVR[1] = x / pi
+                        __rne_i(1, 1);                      // SVR[1] = n = round(x/pi)
+                        __mul_is(1, FP16_PI, 2, 0);         // SVR[2] = n * pi
+                        __sub_ii(0, 2, 3);                  // SVR[3] = x_red ∈ [-pi/2, pi/2]
 
-                        // Horner form: cos(x) = 1 + x²*(c1 + x²*(c2 + x²*c3))
-                        // Step 1: x²
-                        __mul_ii(4, 4, 5);                  // SVR[5] = x_red²
+                        // Sign correction: cos(x) = (-1)^n * cos(x_red)
+                        // (-1)^n via parity of n: n - 2*ceil(n/2) ∈ {0,-1}, then *2+1.
+                        __mul_is(1, FP16_HALF, 4, 0);       // SVR[4] = n/2
+                        __ceil_i(4, 4);                     // SVR[4] = ceil(n/2)
+                        __mul_is(4, FP16_TWO, 4, 0);        // SVR[4] = 2*ceil(n/2)
+                        __sub_ii(1, 4, 4);                  // SVR[4] = n - 2*ceil(n/2) ∈ {0,-1}
+                        __fmadd_iss(4, FP16_TWO, FP16_C0, 4, 0); // SVR[4] = (-1)^n (C0 = 1.0)
 
-                        // Step 2: innermost — x²*c3
-                        __mul_is(5, FP16_C3, 6, 0);        // SVR[6] = x² * c3
-
-                        // Step 3: c2 + x²*c3
-                        __add_is(6, FP16_C2, 7, 0);        // SVR[7] = c2 + x²*c3
-
-                        // Step 4: x² * (c2 + x²*c3)
-                        __mul_ii(5, 7, 8);                  // SVR[8] = x²*(c2 + x²*c3)
-
-                        // Step 5: c1 + x²*(c2 + x²*c3)
-                        __add_is(8, FP16_C1, 9, 0);        // SVR[9] = c1 + x²*(c2 + x²*c3)
-
-                        // Step 6: x² * (c1 + x²*(c2 + x²*c3))
-                        __mul_ii(5, 9, 10);                 // SVR[10] = x²*(c1 + ...)
-
-                        // Step 7: 1 + x²*(c1 + ...) = cos(x_red)
-                        __add_is(10, FP16_C0, 11, 0);      // SVR[11] = cos(x_red)
+                        // Horner on x_red: cos(z)=1+z²*(c1+z²*(c2+z²*(c3+z²*c4)))
+                        __mul_ii(3, 3, 5);                  // SVR[5] = z²
+                        __mul_is(5, FP16_C4, 6, 0);         // SVR[6] = z²*c4
+                        __add_is(6, FP16_C3, 6, 0);         // SVR[6] = c3 + z²*c4
+                        __mul_ii(6, 5, 6);                  // SVR[6] = z²*(c3 + z²*c4)
+                        __add_is(6, FP16_C2, 6, 0);         // SVR[6] = c2 + z²*(...)
+                        __mul_ii(6, 5, 6);                  // SVR[6] = z²*(c2 + ...)
+                        __add_is(6, FP16_C1, 6, 0);         // SVR[6] = c1 + z²*(...)
+                        __mul_ii(6, 5, 6);                  // SVR[6] = z²*(c1 + ...)
+                        __add_is(6, FP16_C0, 6, 0);         // SVR[6] = cos(z)
+                        __mul_ii(6, 4, 6);                  // SVR[6] = (-1)^n * cos(z) = cos(x)
 
                         // Store result SVR to Bank R
-                        __store_svr(BANK_R, 11);
+                        __store_svr(BANK_R, 6);
 
                         // L1 -> L2: result from Bank R
                         if (r == rows_for_tid - 1) {
