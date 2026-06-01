@@ -17,7 +17,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 #define WIDTH               8
 #define HEIGHT              512
@@ -40,14 +40,14 @@
 
 
 // FP16 constants for range reduction
-#define FP16_TWO_PI         0x4648  // 2*pi ≈ 6.2832
-#define FP16_INV_2PI        0x3118  // 1/(2*pi) ≈ 0.15915
+#define FP16_TWO_PI         0x40C90000  // 2*pi ≈ 6.2832
+#define FP16_INV_2PI        0x3E230000  // 1/(2*pi) ≈ 0.15915
 
 // FP16 Taylor coefficients for cosine (Horner form)
-#define FP16_C0             0x3C00  // 1.0
-#define FP16_C1             0xB800  // -0.5
-#define FP16_C2             0x2955  // 1/24 ≈ 0.04167
-#define FP16_C3             0x95B4  // -1/720 ≈ -0.001389
+#define FP16_C0             0x3F800000  // 1.0
+#define FP16_C1             0xBF000000  // -0.5
+#define FP16_C2             0x3D2AA000  // 1/24 ≈ 0.04167
+#define FP16_C3             0xBAB68000  // -1/720 ≈ -0.001389
 
 int main(void) {
 

@@ -9,7 +9,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 #define WIDTH               251
 #define HEIGHT              127
@@ -25,8 +25,8 @@
 #define BANK_C              0x30000
 #define BANK_R              0x50000
 
-#define FP16_ZERO           0x0000
-#define FP16_NEG_SLOPE      0x3000  // 0.125, matching generate_data ggml_leaky_relu
+#define FP16_ZERO           0x00000000
+#define FP16_NEG_SLOPE      0x3E000000  // 0.125, matching generate_data ggml_leaky_relu
 
 #define ROW_BYTES           (WIDTH * DTYPE)
 #define ROWS_PER_NEST       (HEIGHT / NEST_NUM)

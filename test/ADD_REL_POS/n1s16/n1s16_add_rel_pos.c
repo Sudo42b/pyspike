@@ -28,7 +28,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2
+#define DTYPE               4
 
 #define SIDE                8
 #define HEADS               95

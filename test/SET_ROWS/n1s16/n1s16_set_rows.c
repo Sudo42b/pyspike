@@ -19,7 +19,7 @@
 
 #define NEST_TARGET_ID      0               // Target nest ID
 #define SPU_NUM_PER_NEST    16              // SPU num per nest
-#define DTYPE               2               // FP16
+#define DTYPE               4               // FP16
 #define INT32_DTYPE         4
 #define USE_BANK_SIZE       64 * 1024       // 64 KB
 

@@ -43,7 +43,7 @@
 // Hardware
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 // Dimensions
 #define WIDTH_IN            32      // input elements per row (gate + value)

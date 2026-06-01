@@ -7,7 +7,7 @@
 #include "intrin.h"
 #include "gtx/address.h"
 
-#define DTYPE               2
+#define DTYPE               4
 
 #define WIDTH               257
 #define HEIGHT              127
@@ -27,7 +27,7 @@
 #define ACTIVE_SPU_MASK     0x0001
 
 // DEFAULT_EPS in generate_data.cpp is 1e-5; nearest FP16 encoding is 0x00A8.
-#define FP16_EPS_1E_5       0x00A8
+#define FP16_EPS_1E_5       0x37280000
 
 int main(void) {
     __split();

@@ -11,7 +11,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 #define WIDTH               16
 #define HEIGHT              80
@@ -31,8 +31,8 @@
 #define ROWS_PER_NEST       (HEIGHT / NEST_NUM)
 #define ROWS_PER_SPU        (ROWS_PER_NEST / SPU_NUM_PER_NEST)
 
-#define FP16_ZERO           0x0000
-#define FP16_ONE            0x3C00
+#define FP16_ZERO           0x00000000
+#define FP16_ONE            0x3F800000
 
 
 int main(void) {

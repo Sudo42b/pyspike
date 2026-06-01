@@ -10,7 +10,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 #define WIDTH               127
 #define HEIGHT              31

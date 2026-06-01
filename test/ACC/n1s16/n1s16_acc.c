@@ -12,7 +12,7 @@
 
 #define TARGET_NEST_ID        0
 #define SPU_NUM_PER_NEST      16
-#define DTYPE                 2
+#define DTYPE                 4
 #define SHARED_READY_TOKEN    0xBEEF
 
 #define WIDTH                 4095

@@ -18,7 +18,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2
+#define DTYPE               4
 
 #define IN_H                50
 #define IN_W                66
@@ -47,7 +47,7 @@
 #define BANK_R              0x50000
 
 // FP16 0.25, the reciprocal of K_H * K_W for average pooling.
-#define FP16_QUARTER        0x3400
+#define FP16_QUARTER        0x3E800000
 
 int main(void) {
     uint8_t nest_id = 0;

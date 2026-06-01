@@ -10,7 +10,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP32 (SMM_ISA v2.0.0d: all I/O fp32)
 
 #define WIDTH               8
 #define HEIGHT              393217

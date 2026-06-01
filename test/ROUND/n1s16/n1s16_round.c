@@ -10,7 +10,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 #define WIDTH               64
 #define HEIGHT              256
@@ -34,9 +34,9 @@
 #define CHUNK_BYTES         (CHUNK_ELEMS * DTYPE)
 #define CHUNKS_PER_ROW      (WIDTH / CHUNK_ELEMS)
 
-#define FP16_HALF           0x3800
-#define FP16_NEG_HALF       0xB800
-#define FP16_NEG_PREV_HALF  0xB7FF  // -0.499755859375, largest FP16 value below -0.5 by magnitude
+#define FP16_HALF           0x3F000000
+#define FP16_NEG_HALF       0xBF000000
+#define FP16_NEG_PREV_HALF  0xBEFFE000  // -0.499755859375, largest FP16 value below -0.5 by magnitude
 
 
 int main(void) {
@@ -52,18 +52,22 @@ int main(void) {
             __start_shared();
                 uint32_t nest_off = (uint32_t)nest_id * ROWS_PER_NEST * ROW_BYTES;
 
+                // SMM_ISA v2.0.0d (fp32): ROWS_PER_NEST*ROW_BYTES = 65536 B
+                // overflows the u16 DMA `length` field, so transfer as a 2D
+                // block — length=ROW_BYTES (≤u16) per row, height=ROWS_PER_NEST,
+                // contiguous strides — instead of one flat run.
                 __load_cr(GTX_MAIN_ADDR(BASE_DDR_A) + nest_off, L2_A,
-                    (uint32_t)(ROWS_PER_NEST * ROW_BYTES),
-                    (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
-                    1, (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
+                    ROW_BYTES,
+                    (uint16_t)ROW_BYTES,
+                    (uint16_t)ROWS_PER_NEST, ROW_BYTES,
                     1, 0xFFFF, 0xBEEF);
 
                 __credit_chk(0xFFFF);
 
                 __store_cr(L2_RESULT, GTX_MAIN_ADDR(BASE_DDR_RESULT) + nest_off,
-                    (uint32_t)(ROWS_PER_NEST * ROW_BYTES),
-                    (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
-                    1, (uint16_t)(ROWS_PER_NEST * ROW_BYTES),
+                    ROW_BYTES,
+                    (uint16_t)ROW_BYTES,
+                    (uint16_t)ROWS_PER_NEST, ROW_BYTES,
                     1, 0xFFFF);
             __end_shared();
 

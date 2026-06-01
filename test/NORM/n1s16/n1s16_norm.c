@@ -10,7 +10,7 @@
 
 #define NEST_NUM             1
 #define SPU_NUM_PER_NEST     16
-#define DTYPE                2       // FP16
+#define DTYPE                4       // FP16
 
 #define WIDTH                32
 #define HEIGHT               257
@@ -33,7 +33,7 @@
 #define NEST_DATA_BYTES      (ROWS_PER_NEST * ROW_BYTES)
 
 // generate_data.cpp uses DEFAULT_EPS = 1e-5f for ggml_norm.
-#define FP16_EPS_1E_NEG_5    0x00A8
+#define FP16_EPS_1E_NEG_5    0x37280000
 
 int main(void) {
     uint8_t nest_id = 0;

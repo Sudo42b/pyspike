@@ -17,7 +17,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2
+#define DTYPE               4
 
 #define INPUT_LEN           4096
 #define OUTPUT_LEN          2048
@@ -44,7 +44,7 @@
 #define BANK_R              0x50000
 
 // FP16 0.5, the reciprocal of K_SIZE=2, used by pool.a for averaging.
-#define FP16_HALF           0x3800
+#define FP16_HALF           0x3F000000
 
 int main(void) {
     uint8_t nest_id = 0;

@@ -48,7 +48,7 @@
 // Hardware
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 // Dimensions
 #define WIDTH_IN            256     // input elements per row (gate + value)
@@ -80,7 +80,7 @@
 // Stack (required for multi-NEST)
 
 // FP16 constant: 1.702 = 0x3ED1
-#define FP16_1_702          0x3ED1
+#define FP16_1_702          0x3FDA2000
 
 int main(void) {
 

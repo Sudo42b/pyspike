@@ -31,7 +31,7 @@
 #define FP16_B              2
 #define F32_B               4
 
-#define FP16_SCALE          0x3800  // 1 / sqrt(4)
+#define FP16_SCALE          0x3F000000  // 1 / sqrt(4)
 
 #define VEC_ELEMS           S
 #define VEC_BYTES           (VEC_ELEMS * FP16_B)

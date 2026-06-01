@@ -9,7 +9,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 #define WIDTH               64
 #define HEIGHT              127
@@ -25,7 +25,7 @@
 #define BANK_C              0x30000
 #define BANK_R              0x50000
 
-#define FP16_QNAN           0xFE00
+#define FP16_QNAN           0xFFC00000
 
 #define ROW_BYTES           (WIDTH * DTYPE)
 #define ROWS_PER_NEST       (HEIGHT / NEST_NUM)

@@ -44,7 +44,7 @@
 // Tensor dimensions
 #define WIDTH               16
 #define HEIGHT              80
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 #define ROW_BYTES           (WIDTH * DTYPE)             // 16
 #define OUT_BYTES_PER_NEST  (ROWS_PER_NEST * DTYPE)     // 128
 
@@ -63,7 +63,7 @@
 #define BANK_R              0x50000
 
 // SVR / FP16 constants
-#define FP16_INV8           0x2C00      // 1/16 = 0.0625 in FP16
+#define FP16_INV8           0x3D800000      // 1/16 = 0.0625 in FP16
 #define FP16_B              2
 
 // Stack (required for multi-NEST)

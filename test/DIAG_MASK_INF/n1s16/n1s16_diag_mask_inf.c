@@ -80,7 +80,7 @@
 #define NEST_BYTES          (ROWS_PER_NEST * ROW_BYTES)     // 256
 
 // FP16 -inf = 0xFC00
-#define FP16_NEG_INF        0xFC00
+#define FP16_NEG_INF        0xFF800000
 
 // Stack (required for multi-NEST)
 

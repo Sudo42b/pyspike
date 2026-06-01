@@ -13,7 +13,7 @@
 #include "gtx/address.h"
 
 #define NEST_ID             0
-#define DTYPE               2
+#define DTYPE               4
 
 #define WIDTH               511
 #define HEIGHT              64

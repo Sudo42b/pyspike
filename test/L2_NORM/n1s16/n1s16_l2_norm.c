@@ -10,7 +10,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2
+#define DTYPE               4
 
 #define WIDTH               8
 #define HEIGHT              512
@@ -34,7 +34,7 @@
 #define SVR_ADDR            0x800
 #define SVR_WORD_ADDR(svr, word) (SVR_ADDR + (uint32_t)(svr) * 4u + (uint32_t)(word))
 
-#define FP16_EPS            0x00A8      // fp16(1e-5), matches generate_data DEFAULT_EPS
+#define FP16_EPS            0x37280000      // fp16(1e-5), matches generate_data DEFAULT_EPS
 #define FP16_ONE_PAIR       0x3C003C003C003C00ULL
 
 

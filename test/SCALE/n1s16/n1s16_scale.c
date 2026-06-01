@@ -14,7 +14,7 @@
 
 #define NEST_NUM            1
 #define SPU_NUM_PER_NEST    16
-#define DTYPE               2       // FP16
+#define DTYPE               4       // FP16
 
 #define WIDTH               64
 #define HEIGHT              64
@@ -34,7 +34,7 @@
 #define ROW_BYTES           (WIDTH * DTYPE)
 #define TOTAL_ELEMS         (WIDTH * HEIGHT)
 #define TOTAL_BYTES         (TOTAL_ELEMS * DTYPE)
-#define SVR_ELEMS           16
+#define SVR_ELEMS           (32u / DTYPE)
 #define SVR_BYTES           (SVR_ELEMS * DTYPE)
 #define TOTAL_CHUNKS        ((TOTAL_ELEMS + SVR_ELEMS - 1) / SVR_ELEMS)
 #define CHUNKS_PER_SPU      (TOTAL_CHUNKS / SPU_NUM_PER_NEST)

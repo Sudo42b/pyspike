@@ -16,7 +16,7 @@
 
 #define WIDTH               4
 #define HEIGHT              256
-#define DTYPE               2
+#define DTYPE               4
 
 #define BASE_DDR_SRC        0x1000000
 #define BASE_DDR_POS        0x2000000
@@ -35,26 +35,26 @@
 #define ROWS_PER_SPU        (HEIGHT / SPU_NUM_PER_NEST)
 #define SVR_ADDR            0x800
 
-#define FP16_ONE            0x3C00
-#define FP16_INV_2PI        0x3118
-#define FP16_TWO_PI         0x4648
-#define FP16_TWO_PI_LO      0x3488
-#define FP16_INV_PI         0x3518
-#define FP16_PI             0x4248
-#define FP16_HALF           0x3800
-#define FP16_TWO            0x4000
-#define FP16_SIX            0x4600
-#define FP16_NEG_HALF       0xB800
-#define FP16_INV24          0x2955
-#define FP16_NEG_INV720     0x95B0
-#define FP16_INV40320       0x01A0
-#define FP16_NEG_INV6       0xB155
-#define FP16_INV120         0x2044
-#define FP16_NEG_INV5040    0x8A80
-#define FP16_INV362880      0x002E
-#define FP16_NEG_INV3628800 0x8003
-#define FP16_NEG_INV39916800 0x8002
-#define FP16_SCALE_001      0x211F
+#define FP16_ONE            0x3F800000
+#define FP16_INV_2PI        0x3E230000
+#define FP16_TWO_PI         0x40C90000
+#define FP16_TWO_PI_LO      0x3E910000
+#define FP16_INV_PI         0x3EA30000
+#define FP16_PI             0x40490000
+#define FP16_HALF           0x3F000000
+#define FP16_TWO            0x40000000
+#define FP16_SIX            0x40C00000
+#define FP16_NEG_HALF       0xBF000000
+#define FP16_INV24          0x3D2AA000
+#define FP16_NEG_INV720     0xBAB60000
+#define FP16_INV40320       0x37D00000
+#define FP16_NEG_INV6       0xBE2AA000
+#define FP16_INV120         0x3C088000
+#define FP16_NEG_INV5040    0xB9500000
+#define FP16_INV362880      0x36380000
+#define FP16_NEG_INV3628800 0xB4400000
+#define FP16_NEG_INV39916800 0xB4000000
+#define FP16_SCALE_001      0x3C23E000
 
 // [1.0, 0.01, 1.0, 0.01], repeated lane group.
 #define THETA_SCALE_WORD    0x211F3C00211F3C00ULL
