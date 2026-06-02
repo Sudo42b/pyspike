@@ -856,12 +856,17 @@ class RpcSession:
         return True
 
     def _try_upscale_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
-        """UPSCALE (nearest, integer factor) → reuse the REPEAT pyspike kernel.
-        ggml semantics: dst[b, c, h, w] = src[b, c, h/sh, w/sw]. With mode=0
-        (nearest) and integer scaling, this matches REPEAT exactly along the
-        first two dims (REP0=sw, REP1=sh, REP2=REP3=1).
+        """UPSCALE (nearest, integer factor) — host np.repeat expand on the
+        spatial axes, then push the contiguous result through cont_fp16
+        firmware (DDR→DDR memcpy). ggml semantics: dst[b,c,h,w] = src[b,c,h/sh,w/sw].
+
+        NOTE: REPEAT (tile) is NOT equivalent — REPEAT gives [a,b,c,d, a,b,c,d]
+        whereas UPSCALE nearest gives [a,a,b,b,c,c,d,d]. Element repeat is what
+        ggml emits for upsample blocks; we expand on the host so the firmware
+        stays a single memcpy.
         """
-        if node.type != ddr.GGML_TYPE_F16:
+        import numpy as np
+        if not self._is_castable_fp(node.type):
             return False
         mode = int(node.op_params[0]) & 0xFF
         if mode != 0:                                # nearest only
@@ -870,7 +875,7 @@ class RpcSession:
         if src_id == 0:
             return False
         src_t = by_id.get(src_id)
-        if src_t is None or src_t.type != ddr.GGML_TYPE_F16:
+        if src_t is None or not self._is_castable_fp(src_t.type):
             return False
         src_ne = tuple(src_t.ne)
         dst_ne = tuple(node.ne)
@@ -881,24 +886,36 @@ class RpcSession:
             return False
         if dst_ne[0] % src_ne[0] != 0 or dst_ne[1] % src_ne[1] != 0:
             return False
-        src_total = src_ne[0] * src_ne[1] * src_ne[2] * src_ne[3] * 2
-        dst_total = dst_ne[0] * dst_ne[1] * dst_ne[2] * dst_ne[3] * 2
-        if src_total > 0x80000 or dst_total > 0x80000:
+        sw = dst_ne[0] // src_ne[0]
+        sh = dst_ne[1] // src_ne[1]
+        # cont_fp16 caps (16-bit DMA length/height).
+        row_bytes = dst_ne[0] * 2                    # fp16 row
+        n_rows = dst_ne[1] * dst_ne[2] * dst_ne[3]
+        if row_bytes <= 0 or n_rows <= 0:
+            return False
+        if row_bytes > 65535 or n_rows > 65535:
             return False
 
-        sb, so = dev.buffer_for_data_addr(src_t.data)
-        src_bytes = bytes(sb.data[so:so + src_total])
+        src_bytes_f16, _ = self._read_src_as_f16(src_t, dev)
+        if src_bytes_f16 is None:
+            return False
+        # numpy view is ggml ne reversed: (B, C, H, W).
+        src_arr = np.frombuffer(src_bytes_f16, dtype=np.float16).reshape(
+            src_ne[3], src_ne[2], src_ne[1], src_ne[0])
+        expanded = np.repeat(np.repeat(src_arr, sh, axis=-2), sw, axis=-1)
+        expanded_bytes = np.ascontiguousarray(expanded).tobytes()
+
         try:
-            log.info("[%s] node 0x%x UPSCALE pyspike route (via REPEAT): src=%s dst=%s",
-                     self.addr, node.id, src_ne, dst_ne)
-            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["repeat_fp16"](
-                src_bytes, src_ne, dst_ne)
+            log.info("[%s] node 0x%x UPSCALE pyspike route: src=%s dst=%s sh=%d sw=%d dst=%s",
+                     self.addr, node.id, src_ne, dst_ne, sh, sw,
+                     "F32cast" if node.type == ddr.GGML_TYPE_F32 else "F16")
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["cont_fp16"](
+                expanded_bytes, row_bytes, n_rows)
         except Exception as e:
             log.warning("[%s] upscale pyspike failed (%s) → NumPy fallback",
                         self.addr, e)
             return False
-        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
-        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        self._write_dst_from_f16(node, dev, out_bytes)
         return True
 
     def _try_repeat_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
