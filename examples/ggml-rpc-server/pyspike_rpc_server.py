@@ -1071,6 +1071,62 @@ class RpcSession:
         self._write_dst_from_f16(node, dev, out_bytes)
         return True
 
+    def _try_cont_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
+        """CONT/DUP same-dtype contiguous copy. Requires src and dst to be
+        bit-identical fp16 or fp32 with contiguous nb stride; non-contig
+        (transposed/permuted) views fall back to NumPy. Bytes are framed as
+        N_ROWS × ROW_BYTES so the firmware __copy_mem stays inside 16-bit
+        length/height caps.
+        """
+        if node.type not in (ddr.GGML_TYPE_F16, ddr.GGML_TYPE_F32):
+            return False
+        src_id = node.src[0]
+        if src_id == 0:
+            return False
+        src_t = by_id.get(src_id)
+        if src_t is None or src_t.type != node.type:
+            return False  # no dtype cast in pyspike CONT — host handles those
+        itemsize = 2 if node.type == ddr.GGML_TYPE_F16 else 4
+        # Both src and dst must be contiguous row-major.
+        for t in (src_t, node):
+            stride = itemsize
+            for d in range(4):
+                if t.nb[d] != stride:
+                    return False
+                stride *= t.ne[d]
+        # Shape match (CONT/DUP preserve ne).
+        for d in range(4):
+            if src_t.ne[d] != node.ne[d]:
+                return False
+        total_bytes = ddr.tensor_nbytes(node)
+        if total_bytes <= 0:
+            return False
+        # Pick ROW_BYTES = ne[0] * itemsize, N_ROWS = product(ne[1:]).
+        row_bytes = node.ne[0] * itemsize
+        n_rows = node.ne[1] * node.ne[2] * node.ne[3]
+        if row_bytes == 0 or n_rows == 0:
+            return False
+        # Firmware caps: length, height uint16.
+        if row_bytes > 65535 or n_rows > 65535:
+            return False
+
+        sb, so = dev.buffer_for_data_addr(src_t.data)
+        src_bytes = bytes(sb.data[so:so + total_bytes])
+        try:
+            log.info("[%s] node 0x%x CONT pyspike route: %d × %d = %d bytes (%s)",
+                     self.addr, node.id, n_rows, row_bytes, total_bytes,
+                     "F32" if node.type == ddr.GGML_TYPE_F32 else "F16")
+            out_bytes = psr.SUPPORTED_PYSPIKE_OPS["cont_fp16"](
+                src_bytes, row_bytes, n_rows)
+        except Exception as e:
+            log.warning("[%s] cont pyspike failed (%s) → NumPy fallback",
+                        self.addr, e)
+            return False
+
+        dst_buf, dst_off = dev.buffer_for_data_addr(node.data)
+        dst_buf.data[dst_off:dst_off + len(out_bytes)] = out_bytes
+        return True
+
     def _try_pyspike(self, node: wp.RpcTensor, by_id: dict, dev) -> bool:
         """If `node` matches a pattern we have a pyspike kernel for, run it
         and write the result. Returns True on success, False to signal NumPy
@@ -1086,6 +1142,8 @@ class RpcSession:
             return self._try_upscale_pyspike(node, by_id, dev)
         if node.op == opr.GGML_OP_PAD:
             return self._try_pad_pyspike(node, by_id, dev)
+        if node.op in (opr.GGML_OP_CONT, opr.GGML_OP_DUP):
+            return self._try_cont_pyspike(node, by_id, dev)
         if node.op == opr.GGML_OP_CONCAT:
             return self._try_concat_pyspike(node, by_id, dev)
         if node.op == opr.GGML_OP_POOL_2D:

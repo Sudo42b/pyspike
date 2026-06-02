@@ -804,6 +804,25 @@ def run_pad_fp16(input_bytes: bytes,
                         dump_size=dst_bytes)
 
 
+def run_cont_fp16(input_bytes: bytes, row_bytes: int, n_rows: int) -> bytes:
+    """CONT/DUP: same-dtype DDR→DDR memcpy. Caller passes raw fp16/fp32 bytes
+    laid out as (n_rows × row_bytes). Firmware issues a single __copy_mem with
+    length=row_bytes, height=n_rows. Output bytes == input bytes."""
+    if row_bytes <= 0 or n_rows <= 0:
+        raise ValueError(f"cont needs positive dims: row_bytes={row_bytes} n_rows={n_rows}")
+    expected = row_bytes * n_rows
+    if len(input_bytes) != expected:
+        raise ValueError(f"cont input bytes {len(input_bytes)} != {expected}")
+    src_c = _render_template("unary_cont",
+                              OP_NAME="unary_cont",
+                              ROW_BYTES=row_bytes, N_ROWS=n_rows)
+    elf = _build_kernel(src_c, _cache_key("unary_cont", "f16",
+                                           (row_bytes, n_rows)))
+    return _run_pyspike(elf,
+                        [(DEFAULT_INPUT_OFFSET, input_bytes)],
+                        dump_size=expected)
+
+
 def run_concat_channel_fp16(src0: bytes, src1: bytes,
                             a_ch: int, b_ch: int,
                             h: int, w: int, batch: int = 1) -> bytes:
@@ -979,6 +998,7 @@ SUPPORTED_PYSPIKE_OPS = {
     "tri_fp16":           run_tri_fp16,
     "repeat_fp16":        run_repeat_fp16,
     "pad_fp16":           run_pad_fp16,
+    "cont_fp16":          run_cont_fp16,
     "concat_fp16":        run_concat_fp16,
     "concat_channel_fp16": run_concat_channel_fp16,
     "pool_2d_avg_fp16":   run_pool_2d_avg_fp16,
