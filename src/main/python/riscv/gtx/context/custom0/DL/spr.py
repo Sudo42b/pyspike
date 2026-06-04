@@ -9,6 +9,7 @@ Loop flags (is_ploop/is_tloop) derive from npu.CONTEXT — see context.WarpState
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -27,6 +28,10 @@ _OPERAND3_ADDR = GSPR['GSPR_GTX_OPERAND3'].address & 0x3FF   # 0x003
 _OPERAND5_ADDR = GSPR['GSPR_GTX_OPERAND5'].address & 0x3FF   # 0x005
 
 
+# (addr, base, end) triple has a small distinct set (SPR areas are fixed,
+# addr is bounded by the SPR register count) — memoise so the rd/wr_spr hot
+# path avoids the 3-way compare on every read/write.
+@lru_cache(maxsize=512)
 def _in_range(addr: int, base: int, end: int) -> bool:
     return base <= addr <= end
 

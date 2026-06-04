@@ -42,6 +42,7 @@ Depends on ``npu.warp`` exposing ``current_nest`` / ``current_spu`` and
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -56,18 +57,20 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
-# rs1 dim decode
+# rs1 dim decode (hot path — memoised; rs1 value space is small per graph)
 # =============================================================================
-def decode_mm_args(rs1: int) -> dict:
-    """Decode packed ``rs1`` → ``{'row_A', 'col_A', 'col_B'}`` (0 ⇒ 0x10000)."""
+@lru_cache(maxsize=256)
+def decode_mm_args(rs1: int) -> tuple[int, int, int]:
+    """Decode packed ``rs1`` → ``(row_A, col_A, col_B)`` (0 ⇒ 0x10000).
+
+    Returns a tuple instead of a dict so the result is hashable / immutable and
+    the lru_cache entry doesn't outlive cheap dict allocation. Callers unpack
+    via ``M, K, N = decode_mm_args(rs1)``.
+    """
     def dim16(v: int) -> int:
         d = v & 0xFFFF
         return d if d != 0 else 0x10000
-    return {
-        'row_A': dim16(rs1),
-        'col_A': dim16(rs1 >> 16),
-        'col_B': dim16(rs1 >> 48),
-    }
+    return dim16(rs1), dim16(rs1 >> 16), dim16(rs1 >> 48)
 
 
 def _state_scope(cxt: CXT, ws) -> tuple:
@@ -87,8 +90,7 @@ def _state_scope(cxt: CXT, ws) -> tuple:
 def _mm_gemm(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
              accumulate: bool, transposed: bool, fp32_out: bool) -> int:
     ws = npu.warp
-    args = decode_mm_args(int(proc.state.XPR[inst.rs1]))
-    M, K, N = args['row_A'], args['col_A'], args['col_B']
+    M, K, N = decode_mm_args(int(proc.state.XPR[inst.rs1]))
 
     lspr = npu.lspr[ws.current_nest][ws.current_spu]
     a_hw = lspr.get('SPM_ADDRA', 0) // 2     # FP16 halfword offsets
@@ -135,8 +137,7 @@ def _mm_gemm(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
 def _mm_reduce(npu, proc, inst: Custom0_Insn, cxt: CXT, *,
                accumulate: bool, is_dot: bool) -> int:
     ws = npu.warp
-    args = decode_mm_args(int(proc.state.XPR[inst.rs1]))
-    vec = args['col_A']
+    _row, vec, _col_b = decode_mm_args(int(proc.state.XPR[inst.rs1]))
 
     lspr = npu.lspr[ws.current_nest][ws.current_spu]
     a_hw = lspr.get('SPM_ADDRA', 0) // 2

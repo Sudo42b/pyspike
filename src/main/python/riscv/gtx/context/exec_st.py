@@ -1,4 +1,5 @@
 from enum import Enum, auto
+from functools import cache
 
 class CXT(Enum):
     """GTX context state definitions & Valid Instructions."""
@@ -8,9 +9,16 @@ class CXT(Enum):
     C4 = auto()  # Plan inside only (inside START_P, outside S/T)
 
     @property
-    def valid_instructions(self) -> set:
-        """자신의 컨텍스트에서 실행 가능한 명령어 셋을 O(1)로 반환합니다."""
-        return _VALID_INSTRUCTIONS_MAP[self]
+    def valid_instructions(self) -> frozenset:
+        """자신의 컨텍스트에서 실행 가능한 명령어 셋을 O(1)로 반환합니다.
+        Returns a cached frozenset (immutable — safe to share across callers).
+        """
+        return _valid_instructions_for(self)
+
+
+@cache
+def _valid_instructions_for(cxt: 'CXT') -> frozenset:
+    return frozenset(_VALID_INSTRUCTIONS_MAP[cxt])
 
 """GTX context state definitions.
 

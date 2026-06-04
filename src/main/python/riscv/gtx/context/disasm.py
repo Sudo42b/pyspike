@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Tuple
 
 from .custom0 import CUSTOM0
@@ -19,17 +20,24 @@ class _PyDisasmInsn:
     __slots__ = ['name', 'match', 'mask', 'args']
     def __init__(self, name: str, match: int, mask: int, args: Tuple[Any, ...]):
         self.name, self.match, self.mask, self.args = name, match, mask, args
-        
+
+
+# xpr_name is a fixed table (32 entries) — memoise the lookup so the hot disasm
+# path doesn't re-index it every probe.
+@lru_cache(maxsize=32)
+def _xpr_name_cached(idx: int) -> str:
+    return _xpr_name[idx]
+
 
 @_isa.arg
-def gtx_xrd(insn): 
-    return _xpr_name[insn.rd]
+def gtx_xrd(insn):
+    return _xpr_name_cached(insn.rd)
 @_isa.arg
-def gtx_xrs1(insn): 
-    return _xpr_name[insn.rs1]
+def gtx_xrs1(insn):
+    return _xpr_name_cached(insn.rs1)
 @_isa.arg
-def gtx_xrs2(insn): 
-    return _xpr_name[insn.rs2]
+def gtx_xrs2(insn):
+    return _xpr_name_cached(insn.rs2)
 
 # RoCC rocc_insn_t bitfield: [funct7|rs2|rs1|xd|xs1|xs2|rd|opcode]
 #   opcode[6:0]  = 0x0b (custom-0)
@@ -145,19 +153,29 @@ per-context dispatch — see ORDER.md and npu_context.py.
 
 from .exec_st import CXT
 
+_HANDLER_MISS = object()  # sentinel for cached negative lookups
+
+
 class I_Handler:
     def __init__(self):
-        # Custom0 레지스트리: (context, funct7, funct3) -> handler
+        # Custom0 레지스트리: (funct7, funct3) -> handler (cxt currently
+        # ignored — see get_custom0_handler docstring for the dead-code note).
         self._c0_funcs: Dict[Tuple[int, int], Callable[[Custom0_Insn], None]] = {}
-        # Custom1 레지스트리: (context, funct3) -> handler
+        # Custom1 레지스트리: (funct3,) -> handler
         self._c1_funcs: Dict[Tuple[int], Callable[[Custom1_Insn], None]] = {}
         # (name, match, mask, type_flag_0_or_1)
         self._disasm_meta: List[Tuple[str, int, int, int]] = []  # (name, match, mask, args)
+        # Instance-level memo for the lookup helpers below (lru_cache on a
+        # method would pin `self` via the cache and leak across instances).
+        self._c0_lookup_cache: Dict[Tuple[Any, int, int], Any] = {}
+        self._c1_lookup_cache: Dict[Tuple[Any, int], Any] = {}
 
     def custom0(self, name:str, funct7: int, funct3: int = 0):
         def decorator(func: Callable):
             func.mnemonic = name
             self._c0_funcs[(funct7, funct3)] = func
+            # New registration invalidates any cached negative lookup.
+            self._c0_lookup_cache.clear()
             """R-type custom0 with funct3 sub-variant.
 
             match = (funct7 << 25) | (funct3 << 12) | 0x0b
@@ -175,7 +193,8 @@ class I_Handler:
     def custom1(self, name:str, funct3: int):
         def decorator(func: Callable):
             func.mnemonic = name
-            self._c1_funcs[(funct3)] = func
+            self._c1_funcs[funct3] = func
+            self._c1_lookup_cache.clear()
             match = (funct3 << 12) | CUSTOM1
             mask = (0x7 << 12) | 0x7f
             meta = (name, match, mask, 1)
@@ -185,10 +204,27 @@ class I_Handler:
         return decorator
 
     def get_custom0_handler(self, cxt: CXT, funct7: int, funct3: int):
-        return self._c0_funcs.get((cxt, funct7, funct3))
+        """Lookup custom0 handler. `cxt` is currently unused — registration
+        keys on (funct7, funct3) only, and npu.py's dispatch path calls
+        ``_c0_funcs.get((funct, funct3))`` directly. This helper is kept for
+        external introspection / future per-context dispatch."""
+        key = (cxt, funct7, funct3)
+        cached = self._c0_lookup_cache.get(key, _HANDLER_MISS)
+        if cached is not _HANDLER_MISS:
+            return cached
+        h = self._c0_funcs.get((funct7, funct3))
+        self._c0_lookup_cache[key] = h
+        return h
 
     def get_custom1_handler(self, cxt: CXT, funct3: int):
-        return self._c1_funcs.get((cxt, funct3))
+        """Custom1 counterpart — same dead-code note as get_custom0_handler."""
+        key = (cxt, funct3)
+        cached = self._c1_lookup_cache.get(key, _HANDLER_MISS)
+        if cached is not _HANDLER_MISS:
+            return cached
+        h = self._c1_funcs.get(funct3)
+        self._c1_lookup_cache[key] = h
+        return h
     
     def collect_disasms(self) -> List[disasm_insn_t]:
         """Collect disasm_insn_t entries for all registered instructions."""
