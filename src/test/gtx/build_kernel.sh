@@ -57,7 +57,7 @@ if [ "$RUN" -eq 1 ]; then
   GTX_DDR_SIZE=2G GTX_DDR_INIT="$INPUT" GTX_DDR_DUMP="$TMPOUT" \
     GTX_DDR_DUMP_ADDR=0x37f000000 GTX_DDR_DUMP_SIZE="$OSIZE" GTX_DDR_REVERSED=1 \
     UV_LINK_MODE=copy uv run --no-sync pyspike --extlib=riscv.gtx --extension=gtx \
-    --device=gtx_ddr,0x370000000 "$OUT"
+    --device=gtx_ddr,0x370000000 --device=gtx_spm,0x10000 "$OUT"
   grep -vE '^@' "$GOLDEN" > "${TMPOUT}.golden"
   if diff -q "$TMPOUT" "${TMPOUT}.golden" >/dev/null 2>&1; then
     echo "[PASS] $OUT matches golden"

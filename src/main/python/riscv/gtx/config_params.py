@@ -41,16 +41,17 @@ L1_SIZE_BYTES: int = 384 * 1024                # 384 KB per SPU
 L2_SIZE_BYTES: int = 16 * 1024 * 1024          # 16 MB per NEST
 
 # MX numeric I/O width at the L1/L0 read/write boundaries. Internal compute is
-# always FP32; widening the I/O to FP32 removes the FP16-cast precision loss at
-# the boundaries (a deliberate divergence from vendor). Set MX_IO_DTYPE to
-# np.float16 to restore vendor-exact FP16 I/O — every MX op routes its
-# operand decode / L1 / L0 / SVR access through these two constants.
-# Env override GTX_MX_IO_DTYPE=float16 selects vendor-exact FP16 I/O (the
-# baseline that matches the FP16 SystemC-ISS goldens, e.g. ggml_ops_c).
+# always FP32; the I/O dtype controls how operand decode / L1 / L0 / SVR
+# accesses interpret the underlying bytes.
+#
+# Default is FP16 — the vendor-exact I/O width matching the FP16 SystemC-ISS
+# goldens (ggml_ops_c corpus, fp16 kernels with DTYPE=2). Set the env
+# ``GTX_MX_IO_DTYPE=float32`` to widen I/O to FP32 (removes the FP16-cast
+# precision loss at the boundaries — used by FP32-migrated kernels).
 MX_IO_DTYPE: type = (
-    np.float16
-    if os.environ.get("GTX_MX_IO_DTYPE", "float32").lower() in ("float16", "fp16", "16")
-    else np.float32
+    np.float32
+    if os.environ.get("GTX_MX_IO_DTYPE", "float16").lower() in ("float32", "fp32", "32")
+    else np.float16
 )
 MX_IO_BYTES: int = np.finfo(MX_IO_DTYPE).bits // 8
 

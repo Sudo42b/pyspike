@@ -42,6 +42,18 @@ from .context.custom0.SN import sync as _sync         # noqa: F401,E402
 _OPERAND3_ADDR = GSPR['GSPR_GTX_OPERAND3'].address & 0x3FF   # 0x003
 _OPERAND5_ADDR = GSPR['GSPR_GTX_OPERAND5'].address & 0x3FF   # 0x005
 
+# Module-level handle to the most recently constructed GtxNpu — consumed by the
+# optional ``gtx_spm`` MMIO device (devices.py) to route host-CPU L1 SPM
+# accesses to the active (nest, spu) bank. Functional sim runs one NPU per
+# process; this is set in ``GtxNpu.__init__``. None until first construction.
+_ACTIVE_NPU: "GtxNpu | None" = None
+
+
+def get_active_npu() -> "GtxNpu | None":
+    """Return the active GtxNpu instance, or None before construction."""
+    return _ACTIVE_NPU
+
+
 @isa.register("gtx")
 class GtxNpu(isa.ROCC):
     """GTX NPU functional model — RoCC ``custom0``/``custom1`` dispatch."""
@@ -52,13 +64,17 @@ class GtxNpu(isa.ROCC):
     def __init__(self):
         super().__init__()
         self.mem = GtxMemory()
-        
+
         # Deferred S-loop L2->DDR store queue.
         self.deferred_ddr_stores: list = []
         # 현재 실행 context (C1/C2/C3/C4) — affects memory access behavior and dispatch.
         self.CONTEXT: CXT = CXT.C1  # Initial context (reset state)
         # Warp routing state (current_nest/current_spu); is_* flags derive from CONTEXT.
         self.warp = WarpState(self)
+        # Publish self as the active NPU so the optional ``gtx_spm`` debug
+        # device (devices.py) can resolve (nest, spu) → L1 bank.
+        global _ACTIVE_NPU
+        _ACTIVE_NPU = self
         # T/S-loop instruction buffers (eager for now — buffering disabled).
         self._tloop_buf = None
         self._sloop_buf = None

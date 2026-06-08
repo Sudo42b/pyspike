@@ -22,7 +22,7 @@ import numpy as np
 
 from riscv import dev
 
-from .config_params import DEFAULT_DDR_SIZE
+from .config_params import DEFAULT_DDR_SIZE, L1_SIZE_BYTES
 
 _PGSIZE = 0x1000
 
@@ -57,6 +57,70 @@ class GtxDdr(dev.MMIO):
         ddr = get_ddr()
         ddr.ensure(addr + len(data))
         ddr.write(addr, np.frombuffer(bytearray(data), dtype=np.uint8))
+
+
+# ============================================================================
+# gtx_spm — debug-only bus window over the per-(nest, spu) L1 scratchpad.
+#
+# Per D-05 the L1 SPM is NOT bus-registered in production HW (vendor
+# cpp_reference, gtx_npu_core.cc:111-112 — "Create L1 shadow buffer for
+# internal sync (NOT bus-registered). Per D-05: CPU cannot access L1 via
+# bus."). The full SystemC ISS *does* expose L1 on the bus, and golden
+# outputs for kernels that touch raw SPM addresses (notably LOG, which
+# patches negative→QNAN through ``(volatile uint16_t*)BANK_C/BANK_R``)
+# come from there.
+#
+# Without this device, pyspike faults on the host load → trap → mtvec=0
+# → spin (the LOG hang). With it, host CPU loads/stores in the L1
+# address range route to the active NPU's L1 bank at the current (nest,
+# spu); outside P/T-loops that defaults to (0, 0).
+#
+# Address mapping
+# ---------------
+# Spike rejects ``device_base == 0`` (sim.cc:277 assert), so we map the
+# device at PA = ``_SPM_BASE`` and shift the device-relative ``addr`` back
+# into the absolute L1 offset (= the value the kernel literally writes as
+# BANK_C/BANK_R). _SPM_BASE is page-aligned and small enough that the LOG
+# kernel's banks (0x30000 BANK_C, 0x50000 BANK_R) fall inside the window;
+# the bottom ``_SPM_BASE`` bytes of L1 are not host-visible (kernels do
+# not host-access that range).
+#
+# Opt-in via:  pyspike ... --device=gtx_spm,0x10000
+# (Spike defaults already occupy 0x1000–0x2000; 0x10000 is safely free.)
+# ============================================================================
+_SPM_BASE = 0x10000  # MUST match the --device=gtx_spm,<base> argument.
+
+
+@dev.register("gtx_spm", size=L1_SIZE_BYTES - _SPM_BASE)
+class GtxSpm(dev.MMIO):
+    """Bus window over the active NPU's L1 SPM bank (debug-only)."""
+
+    def _bank(self):
+        # Imported lazily to avoid a devices↔npu import cycle at module load.
+        from .npu import get_active_npu
+        npu = get_active_npu()
+        if npu is None:
+            return None
+        warp = npu.warp
+        nest = warp.current_nest if warp.is_ploop else 0
+        spu = warp.current_spu if warp.is_tloop else 0
+        return npu.mem.l1_byte(nest, spu)
+
+    def load(self, addr: int, size: int) -> bytes:
+        bank = self._bank()
+        l1_off = addr + _SPM_BASE
+        if bank is None or l1_off < 0 or l1_off + size > bank.size:
+            return b""
+        return bytes(bank[l1_off:l1_off + size])
+
+    def store(self, addr: int, data: bytes) -> None:
+        bank = self._bank()
+        l1_off = addr + _SPM_BASE
+        if bank is None or l1_off < 0 or l1_off + len(data) > bank.size:
+            return
+        bank[l1_off:l1_off + len(data)] = np.frombuffer(
+            bytearray(data), dtype=np.uint8
+        )
 
 
 @dev.register("sifive_exit", size=_PGSIZE)
